@@ -129,10 +129,17 @@ poetry run python tools/debug_control.py --game-dir "/path/to/BendGame/Binaries/
 | `ride-test` | Toggle a **Ride with** prompt 3 m ahead, to test the native interact prompt alone |
 | `dump-reflection` | Write every loaded class, property and function to `TheysGone-reflection.txt` |
 | `dump-objects` | Write a census of live objects to `TheysGone-objects.txt` |
+| `net-probe` | Write the engine's built-in networking state (net drivers, connections, controllers, roles, replicated actors and properties) to `TheysGone-net.txt` |
+| `net-listen` | Experimental, host: start the engine's built-in listen server (Steam P2P) on the live world; `[Research] ControllerClass=`, `PawnClass=`, `SpectatorJoin=` set what joining players get |
+| `net-connect` | Experimental, guest: join a built-in listen server at `[Research] ConnectUrl` (`steam.<host SteamID64>`) without reloading the map |
+| `net-possess` | Experimental, host: spawn a pawn (`[Research] GuestPawnClass`, default `BendDefaultPlayerPawn_C`) 3 m from the host and let the joined player's controller possess it |
+| `net-takeover` | Experimental, guest: make the replicated controller local so this PC drives the host-owned pawn; run again to switch back |
 | `trace-on` / `trace-off` | Record every distinct ProcessEvent call with sample parameters to `TheysGone-trace.txt` |
 
-`hit-enemy`, `story-*`, `reload-save`, `ride-test`, `dump-*` and `trace-*`
-work without `begin`. The research commands only read and log.
+`hit-enemy`, `story-*`, `reload-save`, `ride-test`, `dump-*`, `net-*` and `trace-*`
+work without `begin`. The research commands only read and log, except the
+experimental `net-*` commands, which drive the engine's own networking; see
+[REPLICATION-RESEARCH.md](REPLICATION-RESEARCH.md).
 
 Commands go through a file mailbox. The helper atomically writes
 `TheysGone-debug.ini` (`[Debug] Command=…, Request=<new number>`) next to

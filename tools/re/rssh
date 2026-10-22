@@ -1,0 +1,16 @@
+#!/usr/bin/expect -f
+# usage: rssh <ssh|scp> args...   (password read from repo sshpw file, never echoed)
+set timeout 600
+set fp [open [file join [file dirname [file dirname [file dirname [file normalize [info script]]]]] sshpw] r]
+set pw [string trim [read $fp]]
+close $fp
+set cmd [lindex $argv 0]
+set args [lrange $argv 1 end]
+spawn -noecho $cmd -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 {*}$args
+expect {
+  -re "(?i)password:" { send -- "$pw\r"; exp_continue }
+  -re "(?i)are you sure" { send "yes\r"; exp_continue }
+  eof
+}
+catch wait result
+exit [lindex $result 3]

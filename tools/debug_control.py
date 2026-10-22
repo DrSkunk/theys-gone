@@ -17,6 +17,11 @@ COMMANDS = (
     "story-probe",
     "story-diverge",
     "hit-enemy",
+    "net-probe",
+    "net-listen",
+    "net-connect",
+    "net-possess",
+    "net-takeover",
 )
 
 

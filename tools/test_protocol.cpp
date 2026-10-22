@@ -919,6 +919,11 @@ int main() {
     assert(coop::ParseDebugCommand("story-probe") == DebugCommand::storyProbe);
     assert(coop::ParseDebugCommand("story-diverge") == DebugCommand::storyDiverge);
     assert(coop::ParseDebugCommand("hit-enemy") == DebugCommand::hitEnemy);
+    assert(coop::ParseDebugCommand("net-probe") == DebugCommand::netProbe);
+    assert(coop::ParseDebugCommand("net-listen") == DebugCommand::netListen);
+    assert(coop::ParseDebugCommand("net-connect") == DebugCommand::netConnect);
+    assert(coop::ParseDebugCommand("net-possess") == DebugCommand::netPossess);
+    assert(coop::ParseDebugCommand("net-takeover") == DebugCommand::netTakeover);
     coop::DebugRequestGate gate;
     gate.Initialize(42);
     assert(!gate.Accept(0) && !gate.Accept(42));
