@@ -597,11 +597,15 @@ UObject* FindLocalController() {
         if (IsLive(current) && Prop(current, "Player") == g_localPlayer) return current;
     }
     UObject* best = nullptr;
+    // A joined player's controller on a listen server has its NetConnection as Player; only a LocalPlayer counts.
+    static UObject* localPlayerClass = FindClass("LocalPlayer");
     for (int32_t i = 0, n = ObjectCount(); i < n; ++i) {
         auto o = ObjectAt(i);
         if (!o || !IsA(o, C.playerController) || IsDefaultOrArchetype(o) || !IsLive(o)) continue;
         auto pawn = Prop(o, "Pawn");
-        if (!IsLive(pawn) || Prop(pawn, "Controller") != o || !IsLive(Prop(o, "Player"))) continue;
+        auto player = Prop(o, "Player");
+        if (!IsLive(pawn) || Prop(pawn, "Controller") != o || !IsLive(player)) continue;
+        if (localPlayerClass && !IsA(player, localPlayerClass)) continue;
         if (!best || o->internalIndex > best->internalIndex) best = o;
     }
     if (best) g_localPlayer = Prop(best, "Player");
@@ -2011,6 +2015,36 @@ void UpdateDebugTools(double now) {
     else if (command == DebugCommand::storyDiverge) {
         if (!DivergeStory()) success = DebugError("story-diverge needs a guest with the save sandbox active");
     }
+    else if (command == DebugCommand::netListen || command == DebugCommand::netConnect ||
+             command == DebugCommand::netPossess || command == DebugCommand::netTakeover) {
+        std::string summary;
+        auto ini = g_basePath + L".ini";
+        research::SetStreamingRpcDrops(GetPrivateProfileIntW(L"Research", L"DropStreamingStatus", 1, ini.c_str()) != 0,
+                                       GetPrivateProfileIntW(L"Research", L"DropLevelVisibility", 1, ini.c_str()) != 0);
+        if (command == DebugCommand::netPossess) {
+            wchar_t pawnClass[96]{};
+            GetPrivateProfileStringW(L"Research", L"GuestPawnClass", L"", pawnClass, 96, ini.c_str());
+            success = research::NetPossess(IsLive(g_pawn) ? g_pawn : nullptr, Narrow(std::wstring(pawnClass)), summary);
+        } else if (command == DebugCommand::netTakeover) {
+            success = research::NetTakeover(summary);
+        } else if (command == DebugCommand::netListen) {
+            wchar_t controller[96]{}, pawn[96]{};
+            GetPrivateProfileStringW(L"Research", L"ControllerClass", L"", controller, 96, (g_basePath + L".ini").c_str());
+            GetPrivateProfileStringW(L"Research", L"PawnClass", L"", pawn, 96, (g_basePath + L".ini").c_str());
+            bool spectators = GetPrivateProfileIntW(L"Research", L"SpectatorJoin", 0, (g_basePath + L".ini").c_str()) != 0;
+            success = research::NetListen(Narrow(std::wstring(controller)), Narrow(std::wstring(pawn)), spectators, summary);
+        }
+        else {
+            // Read at command time so the target can change without a restart: [Research] ConnectUrl=steam.<id>
+            wchar_t raw[128]{};
+            GetPrivateProfileStringW(L"Research", L"ConnectUrl", L"", raw, 128, (g_basePath + L".ini").c_str());
+            auto target = Narrow(std::wstring(raw));
+            if (target.empty()) success = DebugError("net-connect needs [Research] ConnectUrl in the INI");
+            else success = research::NetConnect(target, summary);
+        }
+        if (!summary.empty()) Log("research: %s: %s", text.c_str(), summary.c_str());
+        if (!success && !summary.empty()) DebugError(summary.c_str());
+    }
     else if (command == DebugCommand::hitEnemy) {
         if (!DebugHitEnemy()) success = DebugError("hit-enemy needs a guest with a live enemy replica");
     }
@@ -2020,12 +2054,15 @@ void UpdateDebugTools(double now) {
         g_rideTest = !g_rideTest;
         Log("ride prompt: test prompt %s", g_rideTest ? "on" : "off");
     } else if (command == DebugCommand::dumpReflection || command == DebugCommand::dumpObjects ||
-             command == DebugCommand::traceOn || command == DebugCommand::traceOff) {
+             command == DebugCommand::traceOn || command == DebugCommand::traceOff ||
+             command == DebugCommand::netProbe) {
         std::string summary = "trace running";
         if (command == DebugCommand::dumpReflection)
             success = research::DumpReflection(g_basePath + L"-reflection.txt", summary);
         else if (command == DebugCommand::dumpObjects)
             success = research::DumpObjects(g_basePath + L"-objects.txt", summary);
+        else if (command == DebugCommand::netProbe)
+            success = research::ProbeNetwork(g_basePath + L"-net.txt", IsLive(g_pawn) ? g_pawn : nullptr, summary);
         else if (command == DebugCommand::traceOn) research::TraceStart();
         else success = research::TraceStop(g_basePath + L"-trace.txt", summary);
         Log("research: %s: %s", text.c_str(), summary.c_str());
@@ -4655,6 +4692,7 @@ void HookedProcessEvent(UObject* obj, UObject* fn, void* parms) {
         g.processEvent(obj, fn, parms);
         return;
     }
+    if (research::DropProcessEvent(obj, fn)) return;
     if (!g_failed && !g_inTick && GetCurrentThreadId() == g_gameThread) {
         g_inTick = true;
         static int hudTick = 0;

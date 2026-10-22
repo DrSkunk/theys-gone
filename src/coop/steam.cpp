@@ -1,4 +1,5 @@
 #include "steam.hpp"
+#include "research.hpp"
 #include "steam_abi.hpp"
 #include "log.hpp"
 
@@ -238,7 +239,7 @@ void SteamPeer::Poll(double now) {
         nextMembers_ = now + 1;
         RefreshMembers();
     }
-    ReceiveAll();
+    if (!research::EngineOwnsP2P()) ReceiveAll();
 }
 
 void SteamPeer::HandleEvents() {
@@ -290,7 +291,10 @@ void SteamPeer::HandleEvents() {
             }
             break;
         case kP2PSessionRequest:
-            if (IsMember(e.a) && api.networking) VCall<bool>(api.networking, slot::kAcceptP2PSessionWithUser, e.a);
+            if ((IsMember(e.a) || research::AcceptAnyP2PSession()) && api.networking) {
+                VCall<bool>(api.networking, slot::kAcceptP2PSessionWithUser, e.a);
+                if (!IsMember(e.a)) Log("steam: accepted a P2P request from %llu for the research listen server", static_cast<unsigned long long>(e.a));
+            }
             else if (e.a != lastRejected_) {
                 Log("steam: ignored a P2P request from %llu (not in our lobby)", static_cast<unsigned long long>(e.a));
                 lastRejected_ = e.a;

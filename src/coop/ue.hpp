@@ -41,8 +41,10 @@ constexpr int StructSuper = 0x30;
 constexpr int StructChildren = 0x38;
 constexpr int FunctionFlags = 0x88;
 constexpr int FunctionParmsSize = 0x90;
+constexpr int FunctionNative = 0xb0; // UFunction::Func (native thunk pointer)
 constexpr int PropertyArrayDim = 0x30;
 constexpr int PropertyElementSize = 0x34;
+constexpr int PropertyFlags = 0x38; // uint64 EPropertyFlags; CPF_Net is bit 5
 }
 
 constexpr int32_t RF_ClassDefaultObject = 0x10;
