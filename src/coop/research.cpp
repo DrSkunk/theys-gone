@@ -14,6 +14,7 @@
 #include <map>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace coop::research {
@@ -2357,6 +2358,443 @@ bool TraceStop(const std::wstring& path, std::string& summary) {
     std::fclose(file);
     summary = std::to_string(rows.size()) + " unique calls traced";
     g_trace.clear();
+    return true;
+}
+
+// ---- Mission lab ---------------------------------------------------------------------------------------
+
+namespace {
+
+struct ObjectArray { UObject** data; int32_t count, capacity; };
+
+struct JobRow {
+    bool done = false, active = false;
+    uint8_t state = 0;
+    int32_t objective = -1; // CurrentJobObjectiveIndex: mid-mission progress
+    bool operator==(const JobRow&) const = default;
+};
+
+struct MissionSnapshot {
+    bool valid = false;
+    std::map<std::string, JobRow> rows; // "job:<name>" / "mission:<name>"
+    std::string tracked;
+    int episode = -1;
+};
+
+struct WatchKey {
+    UObject* cls;
+    UObject* fn;
+    bool operator==(const WatchKey&) const = default;
+};
+struct WatchHash {
+    size_t operator()(const WatchKey& k) const { return std::hash<void*>()(k.cls) ^ (std::hash<void*>()(k.fn) << 1); }
+};
+
+constexpr int kWatchCallsLogged = 25; // per class.function, then only counted
+constexpr double kWatchSampleInterval = 0.5;
+
+bool g_missionWatch = false;
+double g_missionWatchStart = 0, g_missionSampledAt = -1e9;
+MissionSnapshot g_missionLast;
+std::unordered_map<WatchKey, uint64_t, WatchHash> g_missionCalls;
+std::unordered_map<int32_t, bool> g_missionRelevant;
+
+bool IsMissionToken(int32_t nameIndex) {
+    auto [it, inserted] = g_missionRelevant.try_emplace(nameIndex, false);
+    if (!inserted) return it->second;
+    std::string lower = NameString(nameIndex);
+    std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    for (const char* token : {"job", "mission", "objective", "checkpoint", "quest", "story"})
+        if (lower.find(token) != std::string::npos) return it->second = true;
+    return false;
+}
+
+// Pure queries are polled by the game every frame and say nothing about transitions.
+bool IsQueryName(const std::string& name) {
+    for (const char* prefix : {"Get", "Is", "Can", "Has", "Should", "ReceiveTick", "Tick"})
+        if (name.starts_with(prefix)) return true;
+    return false;
+}
+
+std::string Parameters(UObject* fn, const void* parms) {
+    std::string text;
+    int count = 0;
+    // Blueprint functions list locals after the parameters; the caller's buffer only holds ParmsSize bytes.
+    int size = *reinterpret_cast<uint16_t*>(reinterpret_cast<uint8_t*>(fn) + off::FunctionParmsSize);
+    for (auto p = Children(fn); p && count < 16; p = Next(p), ++count) {
+        if (!IsLive(p) || !IsLive(p->cls)) break;
+        int offset = PropertyOffset(p);
+        if (offset < 0 || offset + ElementSize(p) > size) break;
+        if (Name(p) == "ReturnValue") continue;
+        if (!text.empty()) text += ", ";
+        text += Name(p) + "=" + (parms ? Value(p, static_cast<const uint8_t*>(parms)) : std::string("?"));
+        if (text.size() > 600) {
+            text += " ...";
+            break;
+        }
+    }
+    return text;
+}
+
+bool CallBoolWithObject(UObject* target, const char* function, const char* param, UObject* value, bool& out) {
+    Call call(target, function);
+    call.set(param, value);
+    if (!call.invoke()) return false;
+    out = call.get<bool>("ReturnValue");
+    return true;
+}
+
+MissionSnapshot ReadMissionSnapshot() {
+    MissionSnapshot snapshot;
+    auto jobs = FindInstance("BendJobManager");
+    auto mission = FindInstance("BendGameMission");
+    if (!IsLive(jobs)) return snapshot;
+    ObjectArray refs{};
+    if (!ue::GetProp(jobs, "JobRefsInOrder", refs) || refs.count < 0 || refs.count > 4096 || (refs.count && !refs.data))
+        return snapshot;
+    for (int32_t i = 0; i < refs.count; ++i) {
+        UObject* job = refs.data[i];
+        if (!IsLive(job)) continue;
+        JobRow row;
+        CallBoolWithObject(jobs, "GetIsJobComplete", "JobID", job, row.done);
+        CallBoolWithObject(jobs, "GetIsJobActive", "JobID", job, row.active);
+        ue::GetProp(job, "JobCurrentState", row.state);
+        ue::GetProp(job, "CurrentJobObjectiveIndex", row.objective);
+        snapshot.rows["job:" + Name(job)] = row;
+    }
+    UObject* tracked = nullptr;
+    if (ue::GetProp(jobs, "CurrentTrackedJob", tracked) && IsLive(tracked)) snapshot.tracked = Name(tracked);
+    if (IsLive(mission)) {
+        Call episode(mission, "GetCurrentEpisode");
+        if (episode.invoke()) snapshot.episode = episode.get<uint8_t>("ReturnValue");
+        Call datas(mission, "GetAllActiveOrUnlockedMissionDatas");
+        if (datas.invoke()) {
+            auto list = datas.get<ObjectArray>("ReturnValue");
+            for (int32_t i = 0; list.data && i < list.count && list.count < 4096; ++i) {
+                UObject* data = list.data[i];
+                if (!IsLive(data)) continue;
+                JobRow row;
+                row.active = true;
+                CallBoolWithObject(mission, "GetIsMissionCompleted", "MissionData", data, row.done);
+                snapshot.rows["mission:" + Name(data)] = row;
+            }
+        }
+    }
+    snapshot.valid = true;
+    return snapshot;
+}
+
+std::string RowText(const JobRow& row) {
+    char text[64];
+    std::snprintf(text, sizeof text, "done=%d active=%d state=%u objective=%d", row.done, row.active, row.state,
+                  row.objective);
+    return text;
+}
+
+int LogMissionDiff(const MissionSnapshot& before, const MissionSnapshot& after, const char* label, double at) {
+    int changes = 0;
+    for (auto& [name, row] : after.rows) {
+        auto old = before.rows.find(name);
+        if (old == before.rows.end()) {
+            Log("mission %s +%.2fs %s appeared (%s)", label, at, name.c_str(), RowText(row).c_str());
+            ++changes;
+        } else if (!(old->second == row)) {
+            Log("mission %s +%.2fs %s %s -> %s", label, at, name.c_str(), RowText(old->second).c_str(), RowText(row).c_str());
+            ++changes;
+        }
+    }
+    for (auto& [name, row] : before.rows)
+        if (!after.rows.contains(name)) {
+            Log("mission %s +%.2fs %s disappeared (was %s)", label, at, name.c_str(), RowText(row).c_str());
+            ++changes;
+        }
+    if (before.tracked != after.tracked) {
+        Log("mission %s +%.2fs tracked job '%s' -> '%s'", label, at, before.tracked.c_str(), after.tracked.c_str());
+        ++changes;
+    }
+    if (before.episode != after.episode) {
+        Log("mission %s +%.2fs episode %d -> %d", label, at, before.episode, after.episode);
+        ++changes;
+    }
+    return changes;
+}
+
+void DumpFunctions(FILE* file, UObject* cls, std::unordered_set<UObject*>& seen) {
+    for (auto c = cls; IsLive(c); c = Super(c)) {
+        if (!seen.insert(c).second) return;
+        auto name = Name(c);
+        if (name == "Object" || name == "Actor" || name == "ActorComponent" || name == "Info") return;
+        std::fprintf(file, "  class %s\n", FullName(c).c_str());
+        int budget = 0;
+        for (auto field = Children(c); field && budget < 4096; field = Next(field), ++budget) {
+            if (!IsLive(field) || !IsLive(field->cls)) break;
+            if (IsFunction(field)) std::fprintf(file, "    FN %s%s\n", Name(field).c_str(), Signature(field).c_str());
+        }
+    }
+}
+
+void DumpPropertyValues(FILE* file, UObject* obj) {
+    int budget = 0;
+    for (auto c = obj->cls; IsLive(c) && budget < 512; c = Super(c)) {
+        auto name = Name(c);
+        if (name == "Object" || name == "Actor") break;
+        for (auto field = Children(c); field && budget < 512; field = Next(field), ++budget) {
+            if (!IsLive(field) || !IsLive(field->cls) || IsFunction(field)) continue;
+            std::fprintf(file, "      %s %s = %s\n", Name(field->cls).c_str(), Name(field).c_str(),
+                         Value(field, reinterpret_cast<const uint8_t*>(obj)).c_str());
+        }
+    }
+}
+
+std::vector<std::string> Split(const std::string& text) {
+    std::vector<std::string> parts;
+    size_t at = 0;
+    while (at < text.size()) {
+        while (at < text.size() && text[at] == ' ') ++at;
+        size_t end = text.find(' ', at);
+        if (end == std::string::npos) end = text.size();
+        if (end > at) parts.push_back(text.substr(at, end - at));
+        at = end;
+    }
+    return parts;
+}
+
+UObject* FindNamedInstance(const std::string& name) {
+    int32_t index = FindNameIndex(name.c_str());
+    if (index < 0) return nullptr;
+    for (int32_t i = 0, n = ObjectCount(); i < n; ++i) {
+        auto obj = ObjectAt(i);
+        if (obj && obj->name.index == index && obj->name.number == 0 && IsLive(obj) && !IsDefaultOrArchetype(obj))
+            return obj;
+    }
+    return nullptr;
+}
+
+} // namespace
+
+void MissionWatch(bool on) {
+    g_missionWatch = on;
+    if (on) {
+        g_missionCalls.clear();
+        g_missionWatchStart = Seconds();
+        g_missionSampledAt = -1e9;
+        g_missionLast = ReadMissionSnapshot();
+        Log("mission watch: started, %d jobs/missions, tracked '%s', episode %d", static_cast<int>(g_missionLast.rows.size()),
+            g_missionLast.tracked.c_str(), g_missionLast.episode);
+        return;
+    }
+    std::vector<std::pair<std::string, uint64_t>> rows;
+    for (auto& [key, count] : g_missionCalls)
+        rows.emplace_back((IsLive(key.cls) ? Name(key.cls) : std::string("?")) + "." +
+                          (IsLive(key.fn) ? Name(key.fn) : std::string("?")), count);
+    std::sort(rows.begin(), rows.end());
+    Log("mission watch: stopped after %.1f s, %d distinct calls", Seconds() - g_missionWatchStart, static_cast<int>(rows.size()));
+    for (auto& [name, count] : rows) Log("mission watch: %8llu %s", static_cast<unsigned long long>(count), name.c_str());
+}
+
+bool MissionWatching() { return g_missionWatch; }
+
+void MissionWatchEvent(UObject* obj, UObject* fn, void* parms) {
+    if (!g_missionWatch || !IsLive(obj) || !IsLive(obj->cls) || !IsLive(fn)) return;
+    if (!IsMissionToken(obj->cls->name.index) && !IsMissionToken(fn->name.index)) return;
+    auto name = Name(fn);
+    if (IsQueryName(name)) return;
+    auto count = ++g_missionCalls[{obj->cls, fn}];
+    if (count > kWatchCallsLogged) return;
+    Log("mission call +%.2fs %s.%s on %s (%s)%s", Seconds() - g_missionWatchStart, Name(obj->cls).c_str(), name.c_str(),
+        Name(obj).c_str(), Parameters(fn, parms).c_str(), count == kWatchCallsLogged ? " [further calls counted only]" : "");
+}
+
+void MissionWatchTick(double) {
+    if (!g_missionWatch) return;
+    double now = Seconds();
+    if (now - g_missionSampledAt < kWatchSampleInterval) return;
+    g_missionSampledAt = now;
+    auto snapshot = ReadMissionSnapshot();
+    if (!snapshot.valid) return;
+    if (g_missionLast.valid) LogMissionDiff(g_missionLast, snapshot, "state", now - g_missionWatchStart);
+    g_missionLast = std::move(snapshot);
+}
+
+bool MissionState(const std::wstring& path, std::string& summary) {
+    auto jobs = FindInstance("BendJobManager");
+    auto mission = FindInstance("BendGameMission");
+    if (!IsLive(jobs)) {
+        summary = "no live BendJobManager; load into gameplay first";
+        return false;
+    }
+    FILE* file = _wfopen(path.c_str(), L"w");
+    if (!file) {
+        summary = "could not open the mission state file";
+        return false;
+    }
+    std::unordered_set<UObject*> seen;
+    std::fprintf(file, "# managers\n%s\n", FullName(jobs).c_str());
+    DumpFunctions(file, jobs->cls, seen);
+    if (IsLive(mission)) {
+        std::fprintf(file, "%s\n", FullName(mission).c_str());
+        DumpFunctions(file, mission->cls, seen);
+    }
+    auto snapshot = ReadMissionSnapshot();
+    int active = 0, done = 0;
+    std::fprintf(file, "\n# jobs and missions (tracked '%s', episode %d)\n", snapshot.tracked.c_str(), snapshot.episode);
+    for (auto& [name, row] : snapshot.rows) {
+        active += row.active;
+        done += row.done;
+        std::fprintf(file, "%s %s\n", RowText(row).c_str(), name.c_str());
+    }
+    ObjectArray refs{};
+    std::fprintf(file, "\n# active job objects\n");
+    if (ue::GetProp(jobs, "ActiveJobRefsInOrder", refs) && refs.data && refs.count > 0 && refs.count < 256) {
+        for (int32_t i = 0; i < refs.count; ++i) {
+            UObject* job = refs.data[i];
+            if (!IsLive(job)) continue;
+            std::fprintf(file, "  %s\n", FullName(job).c_str());
+            DumpPropertyValues(file, job);
+            DumpFunctions(file, job->cls, seen);
+        }
+    }
+    // Blueprint job scripts (IND_Jobscript_C and friends) carry the per-mission objective logic.
+    std::fprintf(file, "\n# live job/mission script objects\n");
+    int scripts = 0;
+    for (int32_t i = 0, n = ObjectCount(); i < n && scripts < 64; ++i) {
+        auto obj = ObjectAt(i);
+        if (!IsLive(obj) || !IsLive(obj->cls) || IsDefaultOrArchetype(obj)) continue;
+        auto cls = Name(obj->cls);
+        std::string lower = cls;
+        std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        if (lower.find("jobscript") == std::string::npos && lower.find("missionscript") == std::string::npos) continue;
+        ++scripts;
+        std::fprintf(file, "  %s\n", FullName(obj).c_str());
+        DumpFunctions(file, obj->cls, seen);
+    }
+    std::fclose(file);
+    char text[160];
+    std::snprintf(text, sizeof text, "%d jobs/missions (%d active, %d done), tracked '%s', %d script objects",
+                  static_cast<int>(snapshot.rows.size()), active, done, snapshot.tracked.c_str(), scripts);
+    summary = text;
+    return true;
+}
+
+bool MissionAct(const std::string& spec, bool allowed, std::string& summary) {
+    if (!allowed) {
+        summary = "mission-act needs [Research] MissionActions=1 in the INI (isolated test copies only)";
+        return false;
+    }
+    auto parts = Split(spec);
+    if (parts.empty()) {
+        summary = "mission-act needs Arg=<Function> [ObjectName|-] [Param=Value ...]";
+        return false;
+    }
+    UObject* target = nullptr;
+    UObject* fn = nullptr;
+    std::string function = parts[0];
+    auto dot = function.find('.');
+    std::vector<const char*> owners = {"BendJobManager", "BendGameMission"};
+    std::string ownerName;
+    if (dot != std::string::npos) {
+        ownerName = function.substr(0, dot);
+        function = function.substr(dot + 1);
+        owners = {ownerName.c_str()};
+    }
+    for (auto owner : owners) {
+        auto instance = FindInstance(owner);
+        if (!IsLive(instance)) continue;
+        if (auto found = FindFunction(instance->cls, function.c_str())) {
+            target = instance;
+            fn = found;
+            break;
+        }
+    }
+    if (!fn) {
+        summary = "function not found on BendJobManager/BendGameMission (or the named class): " + parts[0];
+        return false;
+    }
+    uint16_t size = *reinterpret_cast<uint16_t*>(reinterpret_cast<uint8_t*>(fn) + off::FunctionParmsSize);
+    std::vector<uint8_t> parms(std::max<size_t>(size, 1), 0);
+    bool objectFilled = parts.size() < 2 || parts[1] == "-";
+    std::unordered_map<std::string, std::string> named;
+    for (size_t i = 2; i < parts.size(); ++i) {
+        auto eq = parts[i].find('=');
+        if (eq == std::string::npos || !eq) {
+            summary = "expected Param=Value, got " + parts[i];
+            return false;
+        }
+        named[parts[i].substr(0, eq)] = parts[i].substr(eq + 1);
+    }
+    int count = 0;
+    for (auto p = Children(fn); p && count < 32; p = Next(p), ++count) {
+        if (!IsLive(p) || !IsLive(p->cls)) break;
+        auto kind = Name(p->cls), param = Name(p);
+        int offset = PropertyOffset(p), elementSize = ElementSize(p);
+        if (param == "ReturnValue" || offset < 0 || offset + elementSize > size) continue;
+        auto at = parms.data() + offset;
+        if (!objectFilled && kind == "ObjectProperty" && !named.contains(param)) {
+            auto object = FindNamedInstance(parts[1]);
+            if (!object) {
+                summary = "no live object named " + parts[1];
+                return false;
+            }
+            std::memcpy(at, &object, sizeof object);
+            objectFilled = true;
+            continue;
+        }
+        auto value = named.find(param);
+        if (value == named.end()) continue;
+        char* end = nullptr;
+        const char* text = value->second.c_str();
+        if (kind == "BoolProperty") *at = (value->second == "1" || value->second == "true") ? 1 : 0;
+        else if (kind == "ByteProperty" && elementSize == 1) *at = static_cast<uint8_t>(std::strtoul(text, &end, 10));
+        else if (kind == "IntProperty" && elementSize == 4) {
+            int32_t v = static_cast<int32_t>(std::strtol(text, &end, 10));
+            std::memcpy(at, &v, 4);
+        } else if (kind == "FloatProperty" && elementSize == 4) {
+            float v = std::strtof(text, &end);
+            std::memcpy(at, &v, 4);
+        } else if (kind == "NameProperty" && elementSize == sizeof(ue::FName)) {
+            ue::FName name{ue::FindNameIndex(text), 0};
+            if (name.index < 0) {
+                summary = "no FName '" + value->second + "' exists for " + param;
+                return false;
+            }
+            std::memcpy(at, &name, sizeof name);
+        } else if (kind == "ObjectProperty") {
+            auto object = FindNamedInstance(value->second);
+            if (!object) {
+                summary = "no live object named " + value->second;
+                return false;
+            }
+            std::memcpy(at, &object, sizeof object);
+        } else {
+            summary = "parameter " + param + " has unsupported type " + kind;
+            return false;
+        }
+        if (end && *end) {
+            summary = "invalid number for " + param + ": " + value->second;
+            return false;
+        }
+        named.erase(value);
+    }
+    if (!objectFilled) {
+        summary = "the function has no object parameter for " + parts[1];
+        return false;
+    }
+    if (!named.empty()) {
+        summary = "unknown parameter " + named.begin()->first;
+        return false;
+    }
+    auto before = ReadMissionSnapshot();
+    Log("mission act: %s.%s on %s (%s)", Name(target->cls).c_str(), function.c_str(), Name(target).c_str(),
+        Parameters(fn, parms.data()).c_str());
+    g.processEvent(target, fn, parms.data());
+    std::string result = "invoked";
+    if (auto ret = FindChild(fn, "ReturnValue"))
+        result = "returned " + Value(ret, parms.data());
+    auto after = ReadMissionSnapshot();
+    int changes = LogMissionDiff(before, after, "act", 0);
+    if (g_missionWatch) g_missionLast = after;
+    summary = function + " " + result + ", " + std::to_string(changes) + " immediate state changes";
+    Log("mission act: %s", summary.c_str());
     return true;
 }
 

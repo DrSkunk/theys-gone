@@ -2119,6 +2119,25 @@ void UpdateDebugTools(double now) {
     else if (command == DebugCommand::hitEnemy) {
         if (!DebugHitEnemy()) success = DebugError("hit-enemy needs a guest with a live enemy replica");
     }
+    else if (command == DebugCommand::missionWatchOn || command == DebugCommand::missionWatchOff) {
+        if (!IsLive(g_pawn)) success = DebugError("mission-watch needs a gameplay pawn");
+        else research::MissionWatch(command == DebugCommand::missionWatchOn);
+    }
+    else if (command == DebugCommand::missionState || command == DebugCommand::missionAct) {
+        std::string summary;
+        if (!IsLive(g_pawn)) {
+            success = DebugError("mission commands need a gameplay pawn");
+        } else if (command == DebugCommand::missionState) {
+            success = research::MissionState(g_basePath + L"-missions.txt", summary);
+        } else {
+            wchar_t arg[256]{};
+            GetPrivateProfileStringW(L"Debug", L"Arg", L"", arg, 256, path.c_str());
+            bool allowed = GetPrivateProfileIntW(L"Research", L"MissionActions", 0, (g_basePath + L".ini").c_str()) != 0;
+            success = research::MissionAct(Narrow(std::wstring(arg)), allowed, summary);
+        }
+        if (!summary.empty()) Log("research: %s: %s", text.c_str(), summary.c_str());
+        if (!success && !summary.empty()) DebugError(summary.c_str());
+    }
     else if (command == DebugCommand::reloadSave) {
         if (!ReloadNewestSave()) success = DebugError("No mission manager to reload with");
     } else if (command == DebugCommand::rideTest) {
@@ -4644,6 +4663,7 @@ void Tick(bool hudFrame) {
     }
     UpdateWorldSync(g_pawn, now);
     UpdateDebugTools(now);
+    if (g_cfg.debugTools) research::MissionWatchTick(now);
     UpdateDamageScope(now);
     if (g_pawn && now - g_lastScan < kTickInterval && now >= g_localSettledAt) FindLocalBike(g_pawn);
     UpdateBike(g_pawn, now);
@@ -4812,6 +4832,8 @@ void HookedProcessEvent(UObject* obj, UObject* fn, void* parms) {
     }
     if (g_ready && research::Tracing() && GetCurrentThreadId() == g_gameThread && !g_inTick)
         research::TraceEvent(obj, fn, parms);
+    if (g_ready && research::MissionWatching() && GetCurrentThreadId() == g_gameThread && !g_inTick)
+        research::MissionWatchEvent(obj, fn, parms);
     bool ownUi = g_ready && !g_inTick && GetCurrentThreadId() == g_gameThread && IsLive(obj) && IsLive(fn);
     if (ownUi) {
         g_inTick = true;

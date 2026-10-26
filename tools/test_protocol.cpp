@@ -975,6 +975,11 @@ int main() {
     assert(coop::ParseDebugCommand("net-nudge") == DebugCommand::netNudge);
     assert(coop::ParseDebugCommand("net-input") == DebugCommand::netInput);
     assert(coop::ParseDebugCommand("net-walk") == DebugCommand::netWalk);
+    assert(coop::ParseDebugCommand("mission-watch-on") == DebugCommand::missionWatchOn);
+    assert(coop::ParseDebugCommand("mission-watch-off") == DebugCommand::missionWatchOff);
+    assert(coop::ParseDebugCommand("mission-state") == DebugCommand::missionState);
+    assert(coop::ParseDebugCommand("mission-act") == DebugCommand::missionAct);
+    assert(coop::ParseDebugCommand("mission-act x") == DebugCommand::unknown);
     coop::DebugRequestGate gate;
     gate.Initialize(42);
     assert(!gate.Accept(0) && !gate.Accept(42));

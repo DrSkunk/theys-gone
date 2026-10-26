@@ -140,7 +140,13 @@ The eight-enemy pack replicated and cleaned up correctly; details and the
 inconclusive death screenshot check are in `REPLICATION-RESEARCH.md`.
 
 **Mission tracing:** read-only discovery found `IND` checkpoint/objective
-functions executing, but the story signature stayed unchanged. A nearby bike
+functions executing, but the story signature stayed unchanged. The 2026-10-26
+mission lab (`mission-*` commands) then drove a real objective transition
+live: `IND_Jobscript_C.MedBoxObtained` moved `IND-JobData` from objective 5 to
+6 and the HUD switched to "Take sterile bandages to Boozer". The chain runs
+inside Blueprint code, so ProcessEvent hooks see nothing; poll
+`CurrentJobObjectiveIndex` instead. `Debug*` job functions are no-ops in this
+build. Details are in `REPLICATION-RESEARCH.md`. A nearby bike
 interaction attempt and safe native-prompt probe were inconclusive at first.
 The safe `ride-test` prompt was confirmed in range: E logged both
 `interaction completed` and `test interaction completed`. In the later

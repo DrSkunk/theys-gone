@@ -73,6 +73,22 @@ class DebugControlTests(unittest.TestCase):
                 debug_control.send(self.directory, "status")
         self.assertEqual(debug_control.read_ini(self.directory / "TheysGone-debug.ini").getint("Debug", "Request"), 2)
 
+    def test_mission_act_argument(self):
+        for command, arg in (("mission-act", ""), ("status", "x"), ("mission-act", "a;b"),
+                             ("mission-act", "a\nb"), ("mission-act", "x" * 241), ("mission-act", "caf\u00e9")):
+            with self.assertRaises(ValueError):
+                debug_control.send(self.directory, command, arg=arg)
+        self.assertFalse((self.directory / "TheysGone-debug.lock").exists())
+        result = self.directory / "TheysGone-debug-result.ini"
+
+        def respond(_):
+            request = debug_control.read_ini(self.directory / "TheysGone-debug.ini")
+            self.assertEqual(request.get("Debug", "Arg"), "UnlockJobAtID IND_Job Flag=1")
+            result.write_text(f"[Result]\nState=ok\nRequest={request.getint('Debug', 'Request')}\n")
+        with patch.object(debug_control.time, "sleep", side_effect=respond):
+            self.assertEqual(debug_control.send(self.directory, "mission-act", arg="UnlockJobAtID IND_Job Flag=1"),
+                             (True, ""))
+
     def test_invalid_ack_is_not_success(self):
         result = self.directory / "TheysGone-debug-result.ini"
         def respond(_):

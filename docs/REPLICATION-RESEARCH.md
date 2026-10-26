@@ -2847,3 +2847,56 @@ the sandbox. Both INIs retain `MissionDiscovery=0`. Final logs are
 `run1/logs/guest-passenger-production-pass-20261025.log`; the successful
 interaction trace is
 `run1/logs/guest-production-passenger-overlap-input-20261025.txt`.
+
+## Live mission lab: observe and drive job transitions (2026-10-26)
+
+**Setup.** Host PC `cachy`, isolated game copy, live-save fixture (story
+signature `6071903c`, episode 2, tracked `IND-JobData` at objective 5,
+"Locate sterile bandages"). Saves were backed up to
+`SaveGames.host-before-20261026-missionlab` and restored afterwards, because the
+game autosaved the changed objective. `[Research] MissionActions=1` was set
+only in the isolated INI.
+
+**Live job surface.** `mission-state` found 203 jobs and missions, 3 active
+(`CA_AZ_01-JobData`, `IND-JobData`, `IZ_CrazyWillies-JobData`), none complete.
+The live managers are the Blueprints `BP_JobManager_C` (base
+`BendJobManager`) and `BP_MissionManager_C` (base `BendGameMission`); each job
+has a spawned script actor such as `IND_Jobscript_C_0`. The per-job
+`JobClassInfo` data asset holds `JobCurrentState`, `CurrentJobObjectiveIndex`,
+`StoredRowName` (`IND-ImNoDoctor`) and the objective lists.
+
+**Results.**
+
+| Action (`mission-act`) | Result |
+|---|---|
+| `TrackAJobOrMission IZ_CrazyWillies-JobData OverrideCurrentTracked=1` | Returned true; tracked job changed immediately; tracking back to `IND-JobData` also worked |
+| `DebugCompleteAllJobObjectives IZ_CrazyWillies-JobData` | Returned true, no state change |
+| `DebugCompleteAllJobObjectives IND-JobData` | Returned true, no state change: the `Debug*` job functions appear to be compiled out of this shipping build |
+| `IND_Jobscript_C.MedBoxObtained` | Objective 5 → 6 immediately, old objective removed from the HUD, new objective "Take sterile bandages to Boozer" with a 440 m waypoint, and the game autosaved |
+
+**Observation limits.** With `mission-watch-on` active through the whole
+transition, the ProcessEvent filter logged **zero** mission calls. The
+objective chain (`UpdateJobObjectiveStatus`, `UpdateJobObjectiveProgression`,
+HUD updates) runs as Blueprint-to-Blueprint calls inside the VM and never
+passes through `ProcessEvent`. Only events that native code raises, such as
+the checkpoint overlaps seen earlier, are visible there. The 0.5 s state poll
+of `CurrentJobObjectiveIndex`, `JobCurrentState` and completion did catch the
+change, so polling is the reliable host-side observer.
+
+**Implications for mission sync.**
+- Host side: poll job rows (done, active, state, objective index) and the
+  tracked job, and send changes as sequenced events, keeping the signature and
+  save resync as the fallback.
+- Guest side: the job scripts expose the generic, Blueprint-callable primitives
+  `UpdateJobObjectiveStatusAndProgression(Name ObjIdentifier, Byte ObjState)`,
+  `GoBackToJobObjectiveStage(Int)`, `CompleteTheJob` and `FailTheJob`, plus
+  `BP_JobManager_C.StartJobAtID`/`UnlockJobAtID`. Job-specific events such as
+  `MedBoxObtained` work but do not generalise.
+- Next experiment: read the objective IDs from `CurrentJobObjectiveList` and
+  test `UpdateJobObjectiveStatusAndProgression` (now that `mission-act`
+  accepts Name parameters) as the generic guest apply, then `CompleteTheJob`
+  for a whole job.
+
+**Tooling fixes found during the run.** `Parameters()` printed Blueprint
+locals that lie past `ParmsSize`, which read outside the caller's buffer; it
+now stops at the parameter block. `mission-act` gained Name parameters.
