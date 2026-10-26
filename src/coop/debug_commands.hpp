@@ -6,9 +6,10 @@
 namespace coop {
 
 enum class DebugCommand {
-    unknown, inspect, begin, end, status, godOn, godOff, spawnSingle, spawnPack,
-    cleanup, probePlayer, probeEnemy, timeShift, weatherNext, dumpReflection, dumpObjects,
-    traceOn, traceOff, rideTest, reloadSave, storyProbe, storyDiverge, hitEnemy, netProbe, netListen, netConnect, netPossess, netTakeover
+    unknown, inspect, begin, end, status, continueTitle, uiProbe, godOn, godOff, spawnSingle, spawnPack,
+    cleanup, probePlayer, probeEnemy, enemyHealthAllOn, killOwnedEnemy, timeShift, weatherNext, dumpReflection, dumpObjects,
+    traceOn, traceOff, rideTest, reloadSave, storyProbe, storyDiverge, hitEnemy, netProbe, netListen, netConnect, netPossess, netTakeover,
+    netDiag, netAuto, netNudge, netInput, netWalk
 };
 
 inline DebugCommand ParseDebugCommand(std::string_view text) {
@@ -16,6 +17,8 @@ inline DebugCommand ParseDebugCommand(std::string_view text) {
     if (text == "begin") return DebugCommand::begin;
     if (text == "end") return DebugCommand::end;
     if (text == "status") return DebugCommand::status;
+    if (text == "continue-title") return DebugCommand::continueTitle;
+    if (text == "ui-probe") return DebugCommand::uiProbe;
     if (text == "god-on") return DebugCommand::godOn;
     if (text == "god-off") return DebugCommand::godOff;
     if (text == "spawn-single") return DebugCommand::spawnSingle;
@@ -23,6 +26,8 @@ inline DebugCommand ParseDebugCommand(std::string_view text) {
     if (text == "cleanup") return DebugCommand::cleanup;
     if (text == "probe-player") return DebugCommand::probePlayer;
     if (text == "probe-enemy") return DebugCommand::probeEnemy;
+    if (text == "enemy-health-all-on") return DebugCommand::enemyHealthAllOn;
+    if (text == "kill-owned-enemy") return DebugCommand::killOwnedEnemy;
     if (text == "time-shift") return DebugCommand::timeShift;
     if (text == "weather-next") return DebugCommand::weatherNext;
     if (text == "dump-reflection") return DebugCommand::dumpReflection;
@@ -39,6 +44,11 @@ inline DebugCommand ParseDebugCommand(std::string_view text) {
     if (text == "net-connect") return DebugCommand::netConnect;
     if (text == "net-possess") return DebugCommand::netPossess;
     if (text == "net-takeover") return DebugCommand::netTakeover;
+    if (text == "net-diag") return DebugCommand::netDiag;
+    if (text == "net-auto") return DebugCommand::netAuto;
+    if (text == "net-nudge") return DebugCommand::netNudge;
+    if (text == "net-input") return DebugCommand::netInput;
+    if (text == "net-walk") return DebugCommand::netWalk;
     return DebugCommand::unknown;
 }
 

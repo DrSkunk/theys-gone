@@ -11,8 +11,10 @@ and play, see the [README](../README.md). To build and test, see
 
 ## Overview
 
-Days Gone runs on Bend Studio's fork of **Unreal Engine 4.10.1**. The mod is a
-Windows DLL (`TheysGone.asi`) that runs inside the game process.
+Days Gone runs on Bend Studio's Unreal Engine 4 fork. A Run H crash dump
+reports `4.11.1-0+UE4`; earlier project notes said 4.10.1 based on source
+pattern comparisons. The mod is a Windows DLL (`TheysGone.asi`) that runs
+inside the game process.
 
 ```text
 DaysGone.exe
@@ -45,7 +47,7 @@ through the engine's own reflection system.
 | Game | Days Gone, Steam app 1259420 |
 | Build | 19221447; PE timestamp `0x68754d46`, SizeOfImage `0x093f0000` |
 | Executable SHA-256 | `17c2fca01d566914147a6d4924d038cb1f5a822c2829e4c45862e2bf837730b3` |
-| Engine | Unreal Engine 4.10.1, Bend fork |
+| Engine | Bend fork; runtime metadata reports `4.11.1-0+UE4` |
 
 The plugin refuses to install if the timestamp, image size or hook-site bytes
 differ. After a game update the mod disables itself rather than patching the
@@ -473,7 +475,9 @@ The host scans the object array in time-sliced batches for live, hostile
 `BendAIPawn`s (freakers, animals, and AI whose controller `IsEnemy` with the
 player) within 80 m of either player, at most 16. It streams their skeletons
 and appearance. The joining player builds a posed, non-colliding replica for
-each one and removes it after 1.5 s of silence or when its health reaches 0.
+each one. Its alive/health state disables further hit requests at zero health;
+it does not immediately destroy the visual corpse. A replica is removed after
+the host stops sending its pose/appearance packets for 1.5 s.
 
 The joining player's own hostile AI is switched off: ambient generators,
 spawn areas and crowd generators are paused, and live hostile pawns are handed

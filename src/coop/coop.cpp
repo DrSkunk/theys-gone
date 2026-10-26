@@ -1868,7 +1868,8 @@ bool DebugSpawn(size_t count, double now) {
     return true;
 }
 
-bool DebugProbe(bool player) {
+bool DebugProbe(bool player, bool lethal = false) {
+    if (lethal && (player || !IsHost())) return DebugError("Lethal probes are for host-owned test enemies only");
     UObject* target = player ? g_pawn : nullptr;
     bool protectedPlayer = false;
     if (player) {
@@ -1882,19 +1883,59 @@ bool DebugProbe(bool player) {
         }
     }
     float before = 0, after = 0;
-    if (!IsLive(target) || !GetProp(target, "Health", before) || !std::isfinite(before) || before <= 25)
-        return DebugError("Damage probe requires a live target with more than 25 health");
+    if (!IsLive(target) || !GetProp(target, "Health", before) || !std::isfinite(before) ||
+        before <= (lethal ? 0 : 25))
+        return DebugError(lethal ? "Lethal probe requires a live owned test enemy" :
+                                  "Damage probe requires a live target with more than 25 health");
+    if (lethal) {
+        uint8_t role = 0;
+        if (!GetProp(target, "Role", role) || role != 3 || before > 100000)
+            return DebugError("Lethal probe requires an authoritative owned enemy with bounded health");
+    }
     Call damage(C.statics, "ApplyDamage");
-    if (!damage.set("DamagedActor", target).set("BaseDamage", 5.f).set("EventInstigator", g_controller)
-            .set("DamageCauser", g_pawn).set("DamageTypeClass", FindClass("DamageType")).invoke() ||
-        !GetProp(target, "Health", after) || !std::isfinite(after))
+    if (!damage.set("DamagedActor", target).set("BaseDamage", lethal ? std::max(100.f, before * 4) : 5.f)
+            .set("EventInstigator", g_controller).set("DamageCauser", g_pawn)
+            .set("DamageTypeClass", FindClass("DamageType")).invoke())
         return DebugError("Native damage probe failed");
-    Log("debug: damage probe target=%s before=%.3f after=%.3f returned=%.3f",
-        protectedPlayer ? "protected player" : player ? "damageable player" : "owned enemy",
-        before, after, damage.get<float>("ReturnValue"));
+    if (lethal && !IsLive(target)) {
+        Log("debug: lethal damage probe destroyed the owned enemy; before=%.3f", before);
+        return true;
+    }
+    if (!GetProp(target, "Health", after) || !std::isfinite(after))
+        return DebugError("Native damage probe outcome could not be measured");
+    Log("debug: %sdamage probe target=%s before=%.3f after=%.3f",
+        lethal ? "lethal " : "", protectedPlayer ? "protected player" : player ? "damageable player" : "owned enemy",
+        before, after);
+    if (lethal) {
+        Call alive(target, "IsAlive");
+        if (after > 0 || !alive.invoke() || alive.get<bool>("ReturnValue"))
+            return DebugError("Lethal probe did not confirm enemy death; inspect the runtime log");
+        return true;
+    }
     if (protectedPlayer ? after != before : after >= before)
         return DebugError("Damage probe did not produce the required health outcome; inspect the runtime log");
     return true;
+}
+
+bool DebugEnemyHealthAllOn() {
+    if (!IsHost()) return DebugError("Enable enemy health replication on the host only");
+    size_t enabled = 0;
+    for (const auto& enemy : g_debug.enemies) {
+        auto pawn = enemy.pawn.get();
+        if (!IsLive(pawn)) continue;
+        uint8_t role = 0;
+        if (!GetProp(pawn, "Role", role) || role != 3)
+            return DebugError("Owned enemy is not authoritative; no health flag was changed on it");
+        bool before = false, after = false;
+        if (!ue::GetBoolProp(pawn, "bReplicateHealthToAll", before))
+            return DebugError("Owned test enemy has no readable bReplicateHealthToAll property");
+        if (!ue::SetBoolProp(pawn, "bReplicateHealthToAll", true) ||
+            !ue::GetBoolProp(pawn, "bReplicateHealthToAll", after) || !after)
+            return DebugError("Could not enable bReplicateHealthToAll on an owned test enemy");
+        Log("debug: %s bReplicateHealthToAll %d -> %d", FullName(pawn).c_str(), before, after);
+        ++enabled;
+    }
+    return enabled ? true : DebugError("Spawn a live owned test enemy first");
 }
 
 // Host-only world tests: the client must follow through the regular world-state stream.
@@ -2011,22 +2052,52 @@ void UpdateDebugTools(double now) {
         if (IsLive(g_pawn)) success = DiscoverDebug(g_pawn);
         else success = DebugError("Debug inspection requires a gameplay pawn");
     } else if (command == DebugCommand::status) DebugStatus();
+    else if (command == DebugCommand::continueTitle) {
+        success = ui::ContinueTitle();
+        if (!success) DebugError("continue-title requires a visible title splash or a title menu with Continue first");
+    }
+    else if (command == DebugCommand::uiProbe) {
+        success = ui::ProbeRuntimeUi();
+        if (!success) DebugError("ui-probe found no matching title, main-menu, mission-manager, or UX-testing objects");
+    }
     else if (command == DebugCommand::storyProbe) ProbeStory();
     else if (command == DebugCommand::storyDiverge) {
         if (!DivergeStory()) success = DebugError("story-diverge needs a guest with the save sandbox active");
     }
     else if (command == DebugCommand::netListen || command == DebugCommand::netConnect ||
-             command == DebugCommand::netPossess || command == DebugCommand::netTakeover) {
+             command == DebugCommand::netPossess || command == DebugCommand::netTakeover ||
+             command == DebugCommand::netDiag || command == DebugCommand::netAuto || command == DebugCommand::netNudge ||
+             command == DebugCommand::netInput || command == DebugCommand::netWalk) {
         std::string summary;
         auto ini = g_basePath + L".ini";
         research::SetStreamingRpcDrops(GetPrivateProfileIntW(L"Research", L"DropStreamingStatus", 1, ini.c_str()) != 0,
                                        GetPrivateProfileIntW(L"Research", L"DropLevelVisibility", 1, ini.c_str()) != 0);
+        research::SetClientNavigation(GetPrivateProfileIntW(L"Research", L"ClientNavigation", 0, ini.c_str()) != 0);
+        research::SetPawnReplication(GetPrivateProfileIntW(L"Research", L"PawnReplication", 0, ini.c_str()) != 0);
+        research::SetBendHealthReplication(GetPrivateProfileIntW(L"Research", L"BendHealthReplication", 0, ini.c_str()) != 0);
+        research::SetClientPossess(GetPrivateProfileIntW(L"Research", L"ClientPossess", 0, ini.c_str()) != 0);
+        research::SetClientAuthoritativePosition(
+            GetPrivateProfileIntW(L"Research", L"ClientAuthoritativePosition", 0, ini.c_str()) != 0);
         if (command == DebugCommand::netPossess) {
             wchar_t pawnClass[96]{};
             GetPrivateProfileStringW(L"Research", L"GuestPawnClass", L"", pawnClass, 96, ini.c_str());
             success = research::NetPossess(IsLive(g_pawn) ? g_pawn : nullptr, Narrow(std::wstring(pawnClass)), summary);
         } else if (command == DebugCommand::netTakeover) {
             success = research::NetTakeover(summary);
+        } else if (command == DebugCommand::netDiag) {
+            success = research::NetDiag(summary);
+        } else if (command == DebugCommand::netAuto) {
+            success = research::NetAutonomous(summary);
+        } else if (command == DebugCommand::netNudge) {
+            success = research::NetNudge(summary);
+        } else if (command == DebugCommand::netInput) {
+            success = research::NetInput(summary);
+        } else if (command == DebugCommand::netWalk) {
+            wchar_t target[16]{};
+            GetPrivateProfileStringW(L"Research", L"WalkTarget", L"", target, 16, ini.c_str());
+            success = research::NetWalk(std::wstring(target) == L"remote",
+                                        GetPrivateProfileIntW(L"Research", L"WalkConsume", 0, ini.c_str()) != 0,
+                                        summary);
         } else if (command == DebugCommand::netListen) {
             wchar_t controller[96]{}, pawn[96]{};
             GetPrivateProfileStringW(L"Research", L"ControllerClass", L"", controller, 96, (g_basePath + L".ini").c_str());
@@ -2088,6 +2159,8 @@ void UpdateDebugTools(double now) {
             case DebugCommand::spawnPack: success = DebugSpawn(kDebugPackSize, now); break;
             case DebugCommand::probePlayer: success = DebugProbe(true); break;
             case DebugCommand::probeEnemy: success = DebugProbe(false); break;
+            case DebugCommand::enemyHealthAllOn: success = DebugEnemyHealthAllOn(); break;
+            case DebugCommand::killOwnedEnemy: success = DebugProbe(false, true); break;
             case DebugCommand::timeShift: success = DebugWorld(false); break;
             case DebugCommand::weatherNext: success = DebugWorld(true); break;
             default: success = DebugError("Debug command is unavailable in the current session"); break;
@@ -4549,6 +4622,11 @@ void Tick(bool hudFrame) {
     }
     if (g_cfg.hostSave && IsGuest() && !SaveGuardActive()) SaveGuardEnable();
     SaveTransferTick(TransferContext(now));
+    static bool adopted = false;
+    if (bool nowAdopted = SaveGuardAdopted(); nowAdopted != adopted) {
+        adopted = nowAdopted;
+        if (adopted) ui::TitleSavesChanged();
+    }
     LoadAdoptedSave(now);
     UpdateStory(now);
     static double teleportAt = -1;

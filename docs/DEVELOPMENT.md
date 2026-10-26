@@ -37,7 +37,7 @@ Python simulator and analysis tools. They don't replace testing in the game.
 |---|---|
 | [`src/coop/dllmain.cpp`](../src/coop/dllmain.cpp) | DLL entry, `InitializeASI` |
 | [`src/coop/coop.cpp`](../src/coop/coop.cpp) | Build check, hook, per-frame logic, all features |
-| [`src/coop/ue.hpp`](../src/coop/ue.hpp), [`ue.cpp`](../src/coop/ue.cpp) | UE 4.10 reflection layer |
+| [`src/coop/ue.hpp`](../src/coop/ue.hpp), [`ue.cpp`](../src/coop/ue.cpp) | Build-specific UE4 Bend reflection layer |
 | [`src/coop/protocol.hpp`](../src/coop/protocol.hpp) | State packet |
 | [`src/coop/pose.hpp`](../src/coop/pose.hpp), [`skeleton.cpp`](../src/coop/skeleton.cpp) | Pose compression, reading and writing skeletons |
 | [`src/coop/gear.hpp`](../src/coop/gear.hpp), [`enemy.hpp`](../src/coop/enemy.hpp) | Held-item and enemy datagrams |
@@ -117,7 +117,11 @@ poetry run python tools/debug_control.py --game-dir "/path/to/BendGame/Binaries/
 | `spawn-single` | Spawn one swarmer with its native AI, about 6 m ahead |
 | `spawn-pack` | Spawn eight independent swarmers (at most 16 owned at a time) |
 | `status` | Log player and enemy health, controllers and movement |
+| `continue-title` | In-game bot: run the visible title splash's native button animation, or invoke Continue only when it is the first visible title-menu row |
+| `ui-probe` | Log native startup/menu objects, visibility, option counts, first label, and cached versus freshly queried save availability; does not activate a menu action |
 | `probe-player` / `probe-enemy` | Apply 5 base damage and check the health change |
+| `enemy-health-all-on` | Host: enable `bReplicateHealthToAll` only on this session's owned test enemies |
+| `kill-owned-enemy` | Host: apply bounded lethal native damage to one authoritative, session-owned test enemy and verify death; never selects ambient enemies or players |
 | `time-shift` | Host: advance the time of day by 6 hours |
 | `weather-next` | Host: switch to the next weather state |
 | `cleanup` | Destroy only the enemies this session spawned |
@@ -131,15 +135,34 @@ poetry run python tools/debug_control.py --game-dir "/path/to/BendGame/Binaries/
 | `dump-objects` | Write a census of live objects to `TheysGone-objects.txt` |
 | `net-probe` | Write the engine's built-in networking state (net drivers, connections, controllers, roles, replicated actors and properties) to `TheysGone-net.txt` |
 | `net-listen` | Experimental, host: start the engine's built-in listen server (Steam P2P) on the live world; `[Research] ControllerClass=`, `PawnClass=`, `SpectatorJoin=` set what joining players get |
-| `net-connect` | Experimental, guest: join a built-in listen server at `[Research] ConnectUrl` (`steam.<host SteamID64>`) without reloading the map |
+| `net-connect` | Experimental, guest: join a built-in listen server at `[Research] ConnectUrl` (`steam.<host SteamID64>`) without reloading the map; `[Research] ClientNavigation=1` recreates the world's navigation system after the join |
 | `net-possess` | Experimental, host: spawn a pawn (`[Research] GuestPawnClass`, default `BendDefaultPlayerPawn_C`) 3 m from the host and let the joined player's controller possess it |
-| `net-takeover` | Experimental, guest: make the replicated controller local so this PC drives the host-owned pawn; run again to switch back |
-| `trace-on` / `trace-off` | Record every distinct ProcessEvent call with sample parameters to `TheysGone-trace.txt` |
+| `net-takeover` | Experimental, guest: make the replicated controller local so this PC drives the host-owned pawn; run again to switch back. It also rebuilds the input stack for the taken-over controller, skips the own controller's `ProcessPlayerInput`, adopts the own controller's Blueprint input components and moves the taken-over controller to player index 0 (Bend's camera and many Blueprints use player 0) |
+| `net-diag` | Experimental: log roles, ownership (`GetNetConnection`), input components, control rotation and tick state of every player controller and player pawn |
+| `net-auto` | Experimental, guest: toggle the taken-over pawn's local role between SimulatedProxy and AutonomousProxy |
+| `net-nudge` | Experimental, guest: call `AddYawInput(30)` on the local controller to test input without the viewport |
+| `net-input` | Experimental: first run wraps `PlayerController` InputKey/InputAxis, UpdateRotation, AddYawInput, ProcessPlayerInput, the player pawn look handlers and the camera's rotation input; later runs log and reset per-controller counts, rotations, the static input stack and camera manager state |
+| `net-walk` | Experimental: feed `AddMovementInput` to the local controller's pawn every frame for 3 s and log the distance moved plus movement telemetry (velocity, acceleration, desiredSpeed, root motion) every 0.5 s. With `[Research] WalkTarget=remote` the host walks the pawn of the remote guest's controller instead |
+| `trace-on` / `trace-off` | Record every distinct ProcessEvent call with sample parameters to `TheysGone-trace.txt` (`OnRep_*`, `ReceiveBeginPlay` and `ClientRestart` are counted per object) |
 
 `hit-enemy`, `story-*`, `reload-save`, `ride-test`, `dump-*`, `net-*` and `trace-*`
 work without `begin`. The research commands only read and log, except the
 experimental `net-*` commands, which drive the engine's own networking; see
 [REPLICATION-RESEARCH.md](REPLICATION-RESEARCH.md).
+
+The experimental `net-*` path reads these `[Research]` options from
+`TheysGone.ini` at startup (all off by default):
+
+| Option | Side | Effect |
+|---|---|---|
+| `ClientNavigation=1` | guest | Recreate the navigation system after `net-connect`, so Bend's door code does not crash |
+| `PawnReplication=1` | both | Restore the stock `ACharacter::GetLifetimeReplicatedProps` on Bend's character classes, which Bend replaced with an empty function. Without it, pawns replicate nothing after spawning |
+| `BendHealthReplication=1` | both | Requires `PawnReplication=1`: additionally register `BendPawn.Health` with no lifetime condition. Set identically before `net-listen`/`net-connect` and restart both games to change it. This tests property transport only; Bend's native `OnRep_Health` virtual implementation is empty |
+| `ClientPossess=1` | guest | Run Bend's `Possess` on the client during `net-takeover`, which creates the player navigation object (`CancelCurrentPlayerNavigation` crashes without it) |
+| `ClientAuthoritativePosition=1` | host | Accept the guest's position (`ClientAuthorativePosition`, `MAXPOSITIONERRORSQUARED=1e12`). Bend moves by animation root motion, which the server does not reproduce for a remote pawn |
+| `GuestPawnClass=` | host | Pawn class for `net-possess` |
+| `WalkTarget=remote` | host | `net-walk` drives the remote guest's pawn |
+| `WalkConsume=1` | any | `net-walk` consumes the movement input itself after each step |
 
 Commands go through a file mailbox. The helper atomically writes
 `TheysGone-debug.ini` (`[Debug] Command=…, Request=<new number>`) next to
@@ -154,6 +177,131 @@ cinematic, or after five minutes without a command. Packs are **not** native
 hordes. The game's horde functions are tied to saved horde progress, so they
 are deliberately not used. Blocking saves reduces risk but is not a sandbox:
 use a backed-up or disposable save.
+
+`kill-owned-enemy` reports an error if native damage does not actually kill
+its owned target. A grapple/melee death-blow guard can clamp Health to 1;
+for an isolated death-replication test, damage a fresh enemy before it
+engages a player rather than bypassing that guard. `BendHealthReplication`
+can deliver final Health and tear-off without restoring the guest's mesh,
+dying animation, or corpse cleanup; see runs N/O in
+[REPLICATION-RESEARCH.md](REPLICATION-RESEARCH.md).
+
+## Remote game-session controller
+
+[`tools/game_remote.py`](../tools/game_remote.py) is a small Linux/Windows helper for
+controlling an active game session and retrieving screenshots. It is separate
+from the mod and exposes only health, PNG capture, and a bounded allowlist of
+keyboard taps, relative mouse moves, mouse clicks, virtual gamepad taps/stick
+and trigger input, and waits. It has no shell, file, process or
+arbitrary-command endpoint. Each tap releases its input and each analog input
+returns to neutral even if an action fails.
+
+**Linux:** the gaming PC needs Python 3.11+, `ydotool`/`ydotoold`, and either `grim`
+(Wayland, including compatible gamescope sessions) or `scrot` (X11). The
+`ydotoold` service and `/dev/uinput` permissions must be configured for the
+same user/session that runs the helper. Virtual gamepad support additionally
+requires `python-evdev` and working `/dev/uinput` access; `/v1/health` reports
+whether it initialized. Screenshot capture may depend on the compositor
+allowing capture of the game display; verify it in the actual session before
+relying on it.
+
+For KDE Wayland, `--capture spectacle` uses the installed KDE screenshot
+utility without opening its UI. For an X11/XWayland game (including Proton
+under Deck Gaming Mode), `--capture ffmpeg-x11` uses FFmpeg's `x11grab`.
+It requires the game's `DISPLAY` and a readable `XAUTHORITY` from the same
+session. Paths inside a Steam container may not exist in the host namespace.
+XWayland capture sees X11 content, not native Wayland windows or Steam's
+compositor overlays; inspect the returned PNG before relying on it.
+On the tested Deck, it returned a black image even with the game running.
+Use `--capture gamescope` with `WAYLAND_DISPLAY=gamescope-0` for Gaming Mode
+instead: it uses the installed `gamescopectl screenshot` command and waits
+for a complete PNG, capturing the compositor's actual game output.
+
+**Windows:** Python 3.11+ is sufficient for keyboard/mouse input and PNG
+screenshots. The helper automatically selects native `SendInput` (physical
+scan codes and relative mouse events) and Windows PowerShell/System.Drawing
+capture; `ydotool`, `grim` and `scrot` are not needed. `--capture windows`
+selects this explicitly. Run it in the logged-in, unlocked gaming session,
+with the game focused and at the same elevation level. Windows can block
+input into a more privileged application. Prefer borderless/windowed mode
+if exclusive fullscreen produces black screenshots.
+
+Windows virtual Xbox 360 input is optional: install the Poetry extra with
+`poetry install --extras remote-windows`, provision its ViGEmBus driver, and
+pass `--windows-gamepad` when serving. ViGEmBus is a legacy, retired driver;
+it is not needed for keyboard/mouse control, and the helper never installs
+drivers itself. Enabling gamepad support without a working package/driver
+fails at startup rather than pretending the controller is connected.
+`/v1/health` reports the selected input/capture backends and gamepad status.
+Stick Y is down-positive on both platforms; Windows maps it to XInput's
+opposite convention.
+
+Create an auth token on each PC and a TLS certificate with that machine's LAN
+IP or DNS name in its subject alternative names. Keep the private key and
+token private; securely copy the token and public certificate to the
+controller machine, not the TLS private key. Certificates can be generated
+on a machine with OpenSSL and securely provisioned to the gaming PC:
+
+```sh
+python3 tools/game_remote.py create-token ~/.config/theys-gone-remote.token
+openssl req -x509 -newkey rsa:3072 -sha256 -days 30 -nodes \
+  -keyout remote.key -out remote.crt \
+  -subj "/CN=days-gone-test-pc" \
+  -addext "subjectAltName=IP:192.168.1.50,DNS:days-gone-test-pc"
+chmod 600 remote.key
+python3 tools/game_remote.py serve --host 0.0.0.0 --port 8765 \
+  --token-file ~/.config/theys-gone-remote.token \
+  --capture grim --tls-cert remote.crt --tls-key remote.key
+```
+
+Use `--capture scrot` for an X11 session. The server refuses non-loopback
+listeners without TLS and requires the token for every endpoint. The
+controller trusts the certificate explicitly:
+
+```sh
+python3 tools/game_remote.py control --url https://192.168.1.50:8765 \
+  --token-file ./pc.token --ca-cert ./remote.crt health
+python3 tools/game_remote.py control --url https://192.168.1.50:8765 \
+  --token-file ./pc.token --ca-cert ./remote.crt screenshot ./host.png
+python3 tools/game_remote.py control --url https://192.168.1.50:8765 \
+  --token-file ./pc.token --ca-cert ./remote.crt actions \
+  '[{"type":"key","key":"w","duration_ms":300},{"type":"mouse_move","dx":30,"dy":0}]'
+```
+
+On Windows, create the token and start the helper from PowerShell after
+provisioning the TLS files (the certificate must contain this PC's actual
+IP/DNS name):
+
+```powershell
+$token = "$env:LOCALAPPDATA\TheysGone-remote.token"
+py -3 tools/game_remote.py create-token $token
+$identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+icacls $token /inheritance:r /grant:r "$($identity):(F)"
+icacls .\remote.key /inheritance:r /grant:r "$($identity):(F)"
+py -3 tools/game_remote.py serve --host 0.0.0.0 --token-file $token --tls-cert .\remote.crt --tls-key .\remote.key
+```
+
+Use a private-network-only firewall rule if Windows prompts or blocks the
+port; do not disable the firewall. The client can run on Linux, Windows or
+macOS, independently of which OS the gaming PC runs.
+
+Gamepad actions use names such as `south`, `start`, or `lb`; stick coordinates
+range from -32768 to 32767 and automatically return to center after the
+requested duration:
+
+```sh
+python3 tools/game_remote.py control --url https://192.168.1.50:8765 \
+  --token-file ./pc.token --ca-cert ./remote.crt actions \
+  '[{"type":"gamepad_stick","stick":"left","x":0,"y":24000,"duration_ms":400},{"type":"gamepad_button","button":"south","duration_ms":100}]'
+```
+
+An omitted `--host` listens only on loopback, and plain HTTP is accepted only
+for loopback control. Keep the helper on a trusted private network, stop it
+when testing is over, and do not forward its port publicly. Test health,
+screenshot, a short movement tap, a camera turn and input release on each
+machine before using it for replication experiments. Its action contract is
+covered by `make test`; screenshots and input injection still require
+verification on the actual gaming compositor.
 
 ## Native CO-OP menus and discovery
 
@@ -508,6 +656,13 @@ then validates the PE structure. It reports reflection-string anchors and the
 functions that reference them. The results are leads for analysis, not proven
 engine addresses. The tool never attaches to a process or writes anything
 except its report.
+
+## Save files
+
+The save format research and the save editor (Python codec/CLI and browser
+editor) are maintained in the separate
+[days-gone-save-editor](https://github.com/drskunk/days-gone-save-editor)
+repository. The transfer code in `src/coop/` treats saves as opaque bytes.
 
 ## Releases
 

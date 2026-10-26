@@ -26,13 +26,19 @@ class DebugControlTests(unittest.TestCase):
 
     def test_acknowledgement_and_error(self):
         result = self.directory / "TheysGone-debug-result.ini"
-        for state in ("ok", "error"):
+        for command, state in (("continue-title", "ok"), ("continue-title", "error"),
+                               ("ui-probe", "ok"), ("ui-probe", "error"),
+                               ("enemy-health-all-on", "ok"), ("enemy-health-all-on", "error"),
+                               ("kill-owned-enemy", "ok"), ("kill-owned-enemy", "error")):
             def respond(_):
                 request = debug_control.read_ini(self.directory / "TheysGone-debug.ini")
                 number = request.getint("Debug", "Request")
                 result.write_text(f"[Result]\nState={state}\nMessage=measured\nRequest={number}\n")
             with patch.object(debug_control.time, "sleep", side_effect=respond):
-                self.assertEqual(debug_control.send(self.directory, "status"), (state == "ok", "measured"))
+                self.assertEqual(
+                    debug_control.send(self.directory, command),
+                    (state == "ok", "measured"),
+                )
         self.assertFalse((self.directory / "TheysGone-debug.lock").exists())
 
     def test_stale_ack_does_not_succeed_and_lock_is_cleaned(self):

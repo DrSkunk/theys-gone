@@ -12,6 +12,7 @@
 #include "../src/coop/save_policy.hpp"
 #include "../src/coop/savesync.hpp"
 #include "../src/coop/session.hpp"
+#include "../src/coop/research.hpp"
 
 #include <cassert>
 #include <cstring>
@@ -20,6 +21,7 @@
 #include <cstddef>
 #include <string>
 #include <vector>
+#include <cstdlib>
 
 coop::StatePacket MovingPacket(uint32_t milliseconds, float speed = 1000) {
     coop::StatePacket packet{};
@@ -884,7 +886,47 @@ void TestSession() {
     assert(lanDir.Hosts().size() == LanDirectory::kLimit);
 }
 
+void TestResearchLifetime() {
+    using namespace coop::research::detail;
+    LifetimeProperty storage[2]{{7, 0, 4, 1}, {}};
+    LifetimeProperties properties{storage, 1, 2};
+    assert(RegisterLifetimeProperty(properties, 7, nullptr) == LifetimeRegistration::present);
+    assert(properties.num == 1 && storage[0].condition == 4 && storage[0].notifyCondition == 1);
+    assert(RegisterLifetimeProperty(properties, 22, nullptr) == LifetimeRegistration::added);
+    assert(properties.num == 2 && properties.max == 2 && storage[1].index == 22);
+    assert(storage[1].padding == 0 && storage[1].condition == 0 && storage[1].notifyCondition == 0);
+    assert(RegisterLifetimeProperty(properties, 22, nullptr) == LifetimeRegistration::present);
+    assert(properties.num == 2);
+    auto fail = +[](void*, size_t, uint32_t) -> void* { return nullptr; };
+    assert(RegisterLifetimeProperty(properties, 23, fail) == LifetimeRegistration::allocationFailed);
+    assert(properties.data == storage && properties.num == 2 && properties.max == 2);
+
+    for (auto invalid : {LifetimeProperties{storage, -1, 2}, LifetimeProperties{storage, 3, 2},
+                         LifetimeProperties{storage, 0, -1}, LifetimeProperties{nullptr, 0, 1},
+                         LifetimeProperties{storage, 0, 4097}}) {
+        auto before = invalid;
+        assert(RegisterLifetimeProperty(invalid, 22, fail) == LifetimeRegistration::invalid);
+        assert(invalid.data == before.data && invalid.num == before.num && invalid.max == before.max);
+    }
+    std::vector<LifetimeProperty> full(4096, {1, 0, 0, 0});
+    LifetimeProperties capped{full.data(), 4096, 4096};
+    assert(RegisterLifetimeProperty(capped, 22, fail) == LifetimeRegistration::invalid);
+    assert(capped.num == 4096 && capped.max == 4096);
+
+    LifetimeProperties growing{};
+    auto reallocate = +[](void* data, size_t bytes, uint32_t alignment) -> void* {
+        assert(alignment == 0 && bytes % sizeof(LifetimeProperty) == 0);
+        return std::realloc(data, bytes);
+    };
+    assert(RegisterLifetimeProperty(growing, 22, reallocate) == LifetimeRegistration::added);
+    assert(growing.num == 1 && growing.max == 1 && growing.data[0].index == 22);
+    assert(RegisterLifetimeProperty(growing, 65535, reallocate) == LifetimeRegistration::added);
+    assert(growing.num == 2 && growing.max == 2 && growing.data[0].index == 22 && growing.data[1].index == 65535);
+    std::free(growing.data);
+}
+
 int main() {
+    TestResearchLifetime();
     TestSession();
     TestSavePolicy();
     TestSaveSync();
@@ -906,10 +948,14 @@ int main() {
     assert(coop::ParseDebugCommand("cleanup") == DebugCommand::cleanup);
     assert(coop::ParseDebugCommand("probe-player") == DebugCommand::probePlayer);
     assert(coop::ParseDebugCommand("probe-enemy") == DebugCommand::probeEnemy);
+    assert(coop::ParseDebugCommand("enemy-health-all-on") == DebugCommand::enemyHealthAllOn);
+    assert(coop::ParseDebugCommand("kill-owned-enemy") == DebugCommand::killOwnedEnemy);
     assert(coop::ParseDebugCommand("time-shift") == DebugCommand::timeShift);
     assert(coop::ParseDebugCommand("weather-next") == DebugCommand::weatherNext);
     assert(coop::ParseDebugCommand("inspect") == DebugCommand::inspect);
     assert(coop::ParseDebugCommand("status") == DebugCommand::status);
+    assert(coop::ParseDebugCommand("continue-title") == DebugCommand::continueTitle);
+    assert(coop::ParseDebugCommand("ui-probe") == DebugCommand::uiProbe);
     assert(coop::ParseDebugCommand("dump-reflection") == DebugCommand::dumpReflection);
     assert(coop::ParseDebugCommand("dump-objects") == DebugCommand::dumpObjects);
     assert(coop::ParseDebugCommand("trace-on") == DebugCommand::traceOn);
@@ -924,6 +970,11 @@ int main() {
     assert(coop::ParseDebugCommand("net-connect") == DebugCommand::netConnect);
     assert(coop::ParseDebugCommand("net-possess") == DebugCommand::netPossess);
     assert(coop::ParseDebugCommand("net-takeover") == DebugCommand::netTakeover);
+    assert(coop::ParseDebugCommand("net-diag") == DebugCommand::netDiag);
+    assert(coop::ParseDebugCommand("net-auto") == DebugCommand::netAuto);
+    assert(coop::ParseDebugCommand("net-nudge") == DebugCommand::netNudge);
+    assert(coop::ParseDebugCommand("net-input") == DebugCommand::netInput);
+    assert(coop::ParseDebugCommand("net-walk") == DebugCommand::netWalk);
     coop::DebugRequestGate gate;
     gate.Initialize(42);
     assert(!gate.Accept(0) && !gate.Accept(42));
