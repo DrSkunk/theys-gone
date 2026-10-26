@@ -619,7 +619,17 @@ void TestStory() {
     assert(!coop::DecodeStory(reinterpret_cast<const char*>(&bad), sizeof bad, decoded));
     assert(coop::StorySequenceIsNewer(8, 7));
     assert(!coop::StorySequenceIsNewer(7, 8));
+    assert(!coop::StorySequenceIsNewer(8, 8));
     assert(coop::StorySequenceIsNewer(1, UINT32_MAX)); // wraparound
+    assert(!coop::StorySequenceIsNewer(0x80000000u, 0)); // half-range is ambiguous
+    auto newer = packet;
+    newer.sequence = 9;
+    assert(coop::StoryPacketIsNewer(newer, packet));
+    assert(!coop::StoryPacketIsNewer(packet, packet)); // duplicate
+    auto restarted = packet;
+    restarted.session = 78;
+    restarted.sequence = 1;
+    assert(coop::StoryPacketIsNewer(restarted, packet)); // new host session resets its sequence
 
     // The guest reloads only for host progress it does not already have, once per host progress.
     assert(!coop::StoryNeedsResync(decoded, sa, 0));          // host saved what we play

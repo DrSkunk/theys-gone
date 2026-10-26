@@ -95,6 +95,10 @@ inline bool StorySequenceIsNewer(uint32_t candidate, uint32_t previous) {
     return distance != 0 && distance < 0x80000000u;
 }
 
+inline bool StoryPacketIsNewer(const StoryPacket& candidate, const StoryPacket& previous) {
+    return candidate.session != previous.session || StorySequenceIsNewer(candidate.sequence, previous.sequence);
+}
+
 // Guest decision: reload the host's save when its saved progress differs from ours, at most once per
 // distinct host progress (so a signature that can never match does not reload on every autosave).
 inline bool StoryNeedsResync(const StoryPacket& host, const StorySignature& mine, uint32_t lastResyncedSignature) {
