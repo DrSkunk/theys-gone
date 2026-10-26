@@ -578,7 +578,7 @@ void TestEnemyHit() {
 }
 
 void TestStory() {
-    static_assert(sizeof(coop::StoryPacket) == 28, "story wire size");
+    static_assert(sizeof(coop::StoryPacket) == 32, "story wire size");
     coop::StoryHasher a, b, c;
     a.Add("Mission_A", true);
     a.Add("Mission_B", false);
@@ -593,12 +593,17 @@ void TestStory() {
     d.Add("Mission_A", true);
     d.Add("Mission_B", false);
     assert(d.Finish(3).hash != sa.hash); // the episode counts too
+    coop::StoryHasher e, f;
+    e.Add("Job_A", false, 0x82, 5);
+    f.Add("Job_A", false, 0x82, 6);
+    assert(e.Finish(2).hash != f.Finish(2).hash); // objective progress participates in story identity
 
-    auto packet = coop::EncodeStory(77, sc, sa.hash, 4);
+    auto packet = coop::EncodeStory(77, sc, sa.hash, 4, 8);
     coop::StoryPacket decoded;
     assert(coop::DecodeStory(reinterpret_cast<const char*>(&packet), sizeof packet, decoded));
     assert(decoded.session == 77 && decoded.savedSignature == sa.hash && decoded.liveSignature == sc.hash);
-    assert(decoded.saveSerial == 4 && decoded.completed == 2 && decoded.unlocked == 2 && decoded.episode == 2);
+    assert(decoded.saveSerial == 4 && decoded.completed == 2 && decoded.unlocked == 2 && decoded.episode == 2 &&
+           decoded.sequence == 8);
     assert(!coop::DecodeStory(reinterpret_cast<const char*>(&packet), sizeof packet - 1, decoded));
     auto bad = packet;
     bad.session = 0;
@@ -606,12 +611,21 @@ void TestStory() {
     bad = packet;
     bad.completed = 3;
     assert(!coop::DecodeStory(reinterpret_cast<const char*>(&bad), sizeof bad, decoded));
+    bad = packet;
+    bad.version = 1;
+    assert(!coop::DecodeStory(reinterpret_cast<const char*>(&bad), sizeof bad, decoded));
+    bad = packet;
+    bad.sequence = 0;
+    assert(!coop::DecodeStory(reinterpret_cast<const char*>(&bad), sizeof bad, decoded));
+    assert(coop::StorySequenceIsNewer(8, 7));
+    assert(!coop::StorySequenceIsNewer(7, 8));
+    assert(coop::StorySequenceIsNewer(1, UINT32_MAX)); // wraparound
 
     // The guest reloads only for host progress it does not already have, once per host progress.
     assert(!coop::StoryNeedsResync(decoded, sa, 0));          // host saved what we play
-    auto unsaved = coop::EncodeStory(77, sc, 0, 0);
+    auto unsaved = coop::EncodeStory(77, sc, 0, 0, 9);
     assert(!coop::StoryNeedsResync(unsaved, sc, 0));          // host has not saved this session
-    auto ahead = coop::EncodeStory(77, sc, sc.hash, 5);
+    auto ahead = coop::EncodeStory(77, sc, sc.hash, 5, 10);
     assert(coop::StoryNeedsResync(ahead, sa, 0));
     assert(!coop::StoryNeedsResync(ahead, sa, sc.hash));      // already reloaded for it
     assert(!coop::StoryNeedsResync(ahead, coop::StorySignature{}, 0)); // our progress unknown

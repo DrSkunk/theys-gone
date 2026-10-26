@@ -133,7 +133,8 @@ path passed these checks:
 
 Still open:
 - The visual fidelity of enemy death on the guest.
-- Live mission start/complete sync.
+- Paired validation of save-backed objective sync and direct mission
+  start/complete replication.
 - Interactions and pickups.
 
 The eight-enemy pack replicated and cleaned up correctly; details and the
@@ -146,7 +147,13 @@ live: `IND_Jobscript_C.MedBoxObtained` moved `IND-JobData` from objective 5 to
 6 and the HUD switched to "Take sterile bandages to Boozer". The chain runs
 inside Blueprint code, so ProcessEvent hooks see nothing; poll
 `CurrentJobObjectiveIndex` instead. `Debug*` job functions are no-ops in this
-build. Details are in `REPLICATION-RESEARCH.md`. A nearby bike
+build. `CompleteTheJob` did work on the isolated fixture and changed IND to
+complete, moving tracking to the next job. The story signature now includes
+job objective indices, and version-2 story packets reject stale sequence
+numbers; guest apply still uses the tested save-resync fallback. A host-only
+test confirmed the objective-aware signature changes and is captured on save;
+paired objective-resync validation is next. Details are in
+`REPLICATION-RESEARCH.md`. A nearby bike
 interaction attempt and safe native-prompt probe were inconclusive at first.
 The safe `ride-test` prompt was confirmed in range: E logged both
 `interaction completed` and `test interaction completed`. In the later
