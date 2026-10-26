@@ -319,6 +319,19 @@ bool GetBoolProp(UObject* obj, const char* name, bool& out, uint8_t* maskOut) {
     return true;
 }
 
+bool SetBoolProp(UObject* obj, const char* name, bool value) {
+    if (!IsLive(obj)) return false;
+    auto property = FindChild(obj->cls, name);
+    if (!property) return false;
+    auto fields = reinterpret_cast<const uint8_t*>(property) + 0x78;
+    if (!ReadableMemory(fields, 4)) return false;
+    uint8_t fieldSize = fields[0], byteOffset = fields[1], byteMask = fields[2];
+    if (!fieldSize || fieldSize > 8 || byteOffset >= fieldSize || !byteMask || (byteMask & (byteMask - 1))) return false;
+    auto at = reinterpret_cast<uint8_t*>(obj) + PropertyOffset(property) + byteOffset;
+    *at = value ? (*at | byteMask) : (*at & ~byteMask);
+    return true;
+}
+
 bool DetectPropertyOffsetField(std::string& diag) {
     auto statics = FindClass("GameplayStatics");
     auto fn = statics ? FindFunction(statics, "GetPlayerPawn") : nullptr;

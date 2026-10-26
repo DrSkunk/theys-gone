@@ -21,7 +21,22 @@ files = [
     {file = "capstone-5.0.9.tar.gz", hash = "sha256:0429af292ddc604d3c9344696807e281d5e728db029f00e6a4ea9e3bff1aac9e"},
 ]
 
+[[package]]
+name = "vgamepad"
+version = "0.1.0"
+description = "Virtual XBox360 and DualShock4 gamepads in python"
+optional = true
+python-versions = "*"
+groups = ["main"]
+markers = "sys_platform == \"win32\" and extra == \"remote-windows\""
+files = [
+    {file = "vgamepad-0.1.0.tar.gz", hash = "sha256:57f6bd01aec0c172947517fb782d150ef9b285f7f4d524c317374fa5c24a89de"},
+]
+
+[extras]
+remote-windows = ["vgamepad"]
+
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.11,<4"
-content-hash = "06dc22bbe1ea1fa97a4f8de7d052f5433d351d0336872d7098a5dead1c2d07dc"
+content-hash = "8d6528d11d7c9c20fb7cbd11f0af69589288f10386ca9488d3634ade1a064dc1"

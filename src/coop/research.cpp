@@ -34,7 +34,7 @@ int ElementSize(UObject* property) {
     return *reinterpret_cast<int32_t*>(reinterpret_cast<uint8_t*>(property) + off::PropertyElementSize);
 }
 
-constexpr uint64_t kCpfNet = 0x20;        // CPF_Net: the property replicates
+constexpr uint64_t kCpfNet = 0x20;        // CPF_Net: the property is marked for replication
 constexpr uint64_t kCpfRepNotify = 0x100000000ull; // CPF_RepNotify
 
 uint64_t PropertyFlags(UObject* property) {
@@ -131,18 +131,21 @@ struct TraceEntry {
 struct TraceKey {
     UObject* cls;
     UObject* fn;
+    // Set only for lifecycle/RepNotify functions, so those are counted per object instead of per class.
+    UObject* obj = nullptr;
     bool operator==(const TraceKey&) const = default;
 };
 
 struct TraceHash {
     size_t operator()(const TraceKey& k) const {
-        return std::hash<void*>()(k.cls) ^ (std::hash<void*>()(k.fn) << 1);
+        return std::hash<void*>()(k.cls) ^ (std::hash<void*>()(k.fn) << 1) ^ (std::hash<void*>()(k.obj) << 2);
     }
 };
 
 bool g_tracing = false;
 double g_traceStart = 0;
 std::unordered_map<TraceKey, TraceEntry, TraceHash> g_trace;
+std::unordered_map<UObject*, bool> g_tracePerObject;
 
 double Seconds() {
     LARGE_INTEGER frequency, counter;
@@ -248,6 +251,15 @@ std::string FloatProp(UObject* obj, const char* name) {
 
 std::string ObjectProp(UObject* obj, const char* name) {
     UObject* v = nullptr;
+    if (!IsLive(obj)) return "?";
+    // Actor.Owner and similar are TWeakObjectPtr (ObjectIndex, SerialNumber), not raw pointers.
+    if (auto prop = FindChild(obj->cls, name); prop && Name(prop->cls) == "WeakObjectProperty") {
+        uint64_t weak = 0;
+        if (!ue::GetProp(obj, name, weak)) return "?";
+        if (!weak) return "null";
+        v = ue::ResolveWeak(weak);
+        return v ? FullName(v) : "<stale>";
+    }
     if (!ue::GetProp(obj, name, v)) return "?";
     if (!v) return "null";
     return IsLive(v) ? FullName(v) : "<stale>";
@@ -269,6 +281,19 @@ void ActorReport(FILE* file, const char* label, UObject* actor) {
                  ObjectProp(actor, "Owner").c_str());
 }
 
+UObject* WorldSettingsForWorld(UObject* world) {
+    UObject* level = nullptr;
+    auto settingsClass = FindClass("WorldSettings");
+    if (!IsLive(world) || !settingsClass || !ue::GetProp(world, "PersistentLevel", level) || !IsLive(level))
+        return nullptr;
+    for (int32_t i = 0, n = ObjectCount(); i < n; ++i) {
+        auto obj = ObjectAt(i);
+        if (IsLive(obj) && IsLive(obj->cls) && obj->outer == level && IsA(obj, settingsClass))
+            return obj;
+    }
+    return nullptr;
+}
+
 } // namespace
 
 bool ProbeNetwork(const std::wstring& path, UObject* localPawn, std::string& summary) {
@@ -285,6 +310,7 @@ bool ProbeNetwork(const std::wstring& path, UObject* localPawn, std::string& sum
     auto playerStateClass = FindClass("PlayerState");
     auto controllerClass = FindClass("PlayerController");
     auto netDriverClass = FindClass("NetDriver");
+    auto swarmerPawnClass = FindClass("SwarmerPawn_C");
 
     std::fprintf(file, "# built-in networking probe\n");
     std::fprintf(file, "classes: NetDriver=%p IpNetDriver=%p SteamNetDriver=%p DemoNetDriver=%p OnlineBeaconHost=%p "
@@ -304,14 +330,16 @@ bool ProbeNetwork(const std::wstring& path, UObject* localPawn, std::string& sum
         }
     }
 
-    int worlds = 0, engines = 0, replicatedActors = 0, totalActors = 0, netDrivers = 0;
+    int worlds = 0, engines = 0, replicatedActors = 0, totalActors = 0, netDrivers = 0, swarmerActors = 0;
     std::map<std::string, int> replicatedByClass, netPropsByPackage, netClassesByPackage, proxiesByClass;
     UObject *gameMode = nullptr, *gameState = nullptr, *playerState = nullptr, *controller = nullptr;
+    // A hybrid guest has its own authoritative GameState and the host's replicated one; report both.
+    std::vector<UObject*> gameStates;
     for (int32_t i = 0, n = ObjectCount(); i < n; ++i) {
         auto obj = ObjectAt(i);
         if (!IsLive(obj) || !IsLive(obj->cls)) continue;
         if (IsClassObject(obj)) {
-            // Count replicated properties declared per class, grouped by package.
+            // Count properties marked CPF_Net per class, grouped by package.
             int netProps = 0;
             int budget = 0;
             for (auto field = Children(obj); field && budget < 8192; field = Next(field), ++budget) {
@@ -327,16 +355,24 @@ bool ProbeNetwork(const std::wstring& path, UObject* localPawn, std::string& sum
                 ++netClassesByPackage[package];
                 if (!full.starts_with("/Script/Engine") && !full.starts_with("/Script/GameplayAbilities") &&
                     !full.starts_with("/Script/GameplayDebugger"))
-                    std::fprintf(file, "NETCLASS %s replicated-properties=%d\n", full.c_str(), netProps);
+                    std::fprintf(file, "NETCLASS %s cpf-net-properties=%d\n", full.c_str(), netProps);
             }
             continue;
         }
         if (IsDefaultOrArchetype(obj)) continue;
         if (worldClass && IsA(obj, worldClass)) {
             ++worlds;
-            std::fprintf(file, "WORLD %s NetDriver=%s DemoNetDriver=%s NetworkManager=%s\n", FullName(obj).c_str(),
-                         ObjectProp(obj, "NetDriver").c_str(), ObjectProp(obj, "DemoNetDriver").c_str(),
-                         ObjectProp(obj, "NetworkManager").c_str());
+            UObject* navigation = nullptr;
+            ue::GetProp(obj, "NavigationSystem", navigation);
+            std::fprintf(file, "WORLD %s NetDriver=%s DemoNetDriver=%s NetworkManager=%s NavigationSystem=%s GameState=%s\n",
+                         FullName(obj).c_str(), ObjectProp(obj, "NetDriver").c_str(),
+                         ObjectProp(obj, "DemoNetDriver").c_str(), ObjectProp(obj, "NetworkManager").c_str(),
+                         ObjectProp(obj, "NavigationSystem").c_str(), ObjectProp(obj, "GameState").c_str());
+            if (IsLive(navigation))
+                std::fprintf(file, "NAVSYSTEM %s class=%s bAllowClientSideNavigation=%s MainNavData=%s\n",
+                             FullName(navigation).c_str(), Name(navigation->cls).c_str(),
+                             BoolProp(navigation, "bAllowClientSideNavigation").c_str(),
+                             ObjectProp(navigation, "MainNavData").c_str());
         } else if (engineClass && IsA(obj, engineClass)) {
             ++engines;
             struct { void* data; int32_t num; int32_t max; } definitions{};
@@ -370,12 +406,49 @@ bool ProbeNetwork(const std::wstring& path, UObject* localPawn, std::string& sum
             }
             uint8_t role = 3;
             if (ue::GetProp(obj, "Role", role) && role != 3) ++proxiesByClass[Name(obj->cls) + " role=" + std::to_string(role)];
+            if (swarmerPawnClass && IsA(obj, swarmerPawnClass)) {
+                ++swarmerActors;
+                ActorReport(file, "SWARMER", obj);
+                Call location(obj, "K2_GetActorLocation");
+                if (location.invoke()) {
+                    auto at = location.get<FVector>("ReturnValue");
+                    std::fprintf(file, "  Health=%s bReplicateHealthToAll=%s Controller=%s Location=(%.1f %.1f %.1f)\n",
+                                 FloatProp(obj, "Health").c_str(), BoolProp(obj, "bReplicateHealthToAll").c_str(),
+                                 ObjectProp(obj, "Controller").c_str(), at.x, at.y, at.z);
+                } else {
+                    std::fprintf(file, "  Health=%s bReplicateHealthToAll=%s Controller=%s Location=unavailable\n",
+                                 FloatProp(obj, "Health").c_str(), BoolProp(obj, "bReplicateHealthToAll").c_str(),
+                                 ObjectProp(obj, "Controller").c_str());
+                }
+                UObject* mesh = nullptr;
+                ue::GetProp(obj, "Mesh", mesh);
+                Call alive(obj, "IsAlive");
+                bool measuredAlive = alive.invoke();
+                std::fprintf(file, "  IsAlive=%s bIsDying=%s bTearOff=%s bHidden=%s Mesh=%s SkeletalMesh=%s AnimInstance=%s\n",
+                             measuredAlive ? (alive.get<bool>("ReturnValue") ? "true" : "false") : "?",
+                             BoolProp(obj, "bIsDying").c_str(), BoolProp(obj, "bTearOff").c_str(),
+                             BoolProp(obj, "bHidden").c_str(), ObjectProp(obj, "Mesh").c_str(),
+                             ObjectProp(mesh, "SkeletalMesh").c_str(), ObjectProp(mesh, "AnimScriptInstance").c_str());
+            }
+            if (playerStateClass && IsA(obj, playerStateClass)) {
+                auto playerId = FindChild(playerStateClass, "PlayerId");
+                auto playerName = FindChild(playerStateClass, "PlayerName");
+                std::fprintf(file, "PLAYERSTATE_OBJECT %s Role=%s PlayerId=%s PlayerName=%s "
+                             "bIsSpectator=%s bIsInactive=%s Owner=%s\n",
+                             FullName(obj).c_str(), ByteProp(obj, "Role").c_str(),
+                             playerId ? Value(playerId, reinterpret_cast<const uint8_t*>(obj)).c_str() : "?",
+                             playerName ? Value(playerName, reinterpret_cast<const uint8_t*>(obj)).c_str() : "?",
+                             BoolProp(obj, "bIsSpectator").c_str(), BoolProp(obj, "bIsInactive").c_str(),
+                             ObjectProp(obj, "Owner").c_str());
+            }
+            if (gameStateClass && IsA(obj, gameStateClass)) gameStates.push_back(obj);
             if (gameModeClass && !gameMode && IsA(obj, gameModeClass)) gameMode = obj;
             else if (gameStateClass && !gameState && IsA(obj, gameStateClass)) gameState = obj;
             else if (playerStateClass && !playerState && IsA(obj, playerStateClass)) playerState = obj;
             else if (controllerClass && !controller && IsA(obj, controllerClass)) controller = obj;
         }
     }
+    std::fprintf(file, "SWARMER_ACTORS count=%d\n", swarmerActors);
     ActorReport(file, "GAMEMODE", gameMode);
     if (IsLive(gameMode))
         std::fprintf(file, "  bUseSeamlessTravel=%s GameSession=%s GameState=%s NumTravellingPlayers=%s\n",
@@ -395,6 +468,23 @@ bool ProbeNetwork(const std::wstring& path, UObject* localPawn, std::string& sum
                      IsLive(session) ? ByteProp(session, "MaxSplitscreensPerConnection").c_str() : "?");
     }
     ActorReport(file, "GAMESTATE", gameState);
+    for (auto state : gameStates) {
+        if (!IsLive(state)) continue;
+        std::fprintf(file, "GAMESTATE_OBJECT %s Role=%s\n", FullName(state).c_str(), ByteProp(state, "Role").c_str());
+        struct { void* data; int32_t num, max; } playerArray{};
+        if (ue::GetProp(state, "PlayerArray", playerArray) && playerArray.num >= 0 && playerArray.num <= 64 &&
+            (!playerArray.num || (playerArray.data && ReadableMemory(playerArray.data, playerArray.num * sizeof(UObject*))))) {
+            std::fprintf(file, "GAMESTATE_PLAYERARRAY %s count=%d\n", Name(state).c_str(), playerArray.num);
+            for (int32_t i = 0; i < playerArray.num; ++i) {
+                UObject* entry = nullptr;
+                std::memcpy(&entry, static_cast<uint8_t*>(playerArray.data) + i * sizeof entry, sizeof entry);
+                std::fprintf(file, "PLAYERARRAY %s[%d] %s\n", Name(state).c_str(), i,
+                             IsLive(entry) ? FullName(entry).c_str() : entry ? "<stale>" : "null");
+            }
+        } else {
+            std::fprintf(file, "GAMESTATE_PLAYERARRAY %s unavailable\n", Name(state).c_str());
+        }
+    }
     ActorReport(file, "PLAYERSTATE", playerState);
     ActorReport(file, "CONTROLLER", controller);
     if (IsLive(controller))
@@ -410,11 +500,25 @@ bool ProbeNetwork(const std::wstring& path, UObject* localPawn, std::string& sum
         auto obj = ObjectAt(i);
         if (!IsLive(obj) || !IsLive(obj->cls) || IsDefaultOrArchetype(obj)) continue;
         if (controllerClass && IsA(obj, controllerClass)) {
-            std::fprintf(file, "PC %s Role=%s RemoteRole=%s bReplicates=%s NetConnection=%s Pawn=%s PlayerState=%s StateName=%s\n",
+            UObject* pawn = nullptr;
+            ue::GetProp(obj, "Pawn", pawn);
+            auto pawnProp = [&](const char* name) {
+                return IsLive(pawn) ? ObjectProp(pawn, name) : std::string("null");
+            };
+            auto pawnByte = [&](const char* name) {
+                return IsLive(pawn) ? ByteProp(pawn, name) : std::string("null");
+            };
+            std::fprintf(file, "PC %s Role=%s RemoteRole=%s bReplicates=%s NetConnection=%s Player=%s Pawn=%s "
+                         "PlayerState=%s MyBendPawn=%s StateName=%s PawnRole=%s PawnRemoteRole=%s PawnOwner=%s "
+                         "PawnController=%s PawnPlayerState=%s RideVehicleComponent=%s\n",
                          FullName(obj).c_str(), ByteProp(obj, "Role").c_str(), ByteProp(obj, "RemoteRole").c_str(),
                          BoolProp(obj, "bReplicates").c_str(), ObjectProp(obj, "NetConnection").c_str(),
-                         ObjectProp(obj, "Pawn").c_str(), ObjectProp(obj, "PlayerState").c_str(),
-                         [&] { FName v{}; return ue::GetProp(obj, "StateName", v) ? NameString(v.index) : std::string("?"); }().c_str());
+                         ObjectProp(obj, "Player").c_str(), ObjectProp(obj, "Pawn").c_str(),
+                         ObjectProp(obj, "PlayerState").c_str(), ObjectProp(obj, "MyBendPawn").c_str(),
+                         [&] { FName v{}; return ue::GetProp(obj, "StateName", v) ? NameString(v.index) : std::string("?"); }().c_str(),
+                         pawnByte("Role").c_str(), pawnByte("RemoteRole").c_str(), pawnProp("Owner").c_str(),
+                         pawnProp("Controller").c_str(), pawnProp("PlayerState").c_str(),
+                         pawnProp("RideVehicleComponent").c_str());
         } else if (connectionClass && IsA(obj, connectionClass)) {
             struct { void* data; int32_t num, max; } channels{};
             ue::GetProp(obj, "OpenChannels", channels);
@@ -580,13 +684,161 @@ bool g_engineOwnsP2P = false;
 bool EngineOwnsP2P() { return g_engineOwnsP2P; }
 
 bool g_dropHostStatus = true, g_dropGuestVisibility = true;
+bool g_clientNavigation = false;
+
+void SetClientNavigation(bool enabled) { g_clientNavigation = enabled; }
+
+bool g_pawnReplication = false;
+bool g_clientPossess = false;
+bool g_bendHealthReplication = false;
+bool g_characterReplicationInstalled = false;
+
+void SetPawnReplication(bool enabled) { g_pawnReplication = enabled; }
+void SetClientPossess(bool enabled) { g_clientPossess = enabled; }
+
+void SetBendHealthReplication(bool enabled) {
+    if (g_characterReplicationInstalled && enabled != g_bendHealthReplication) {
+        Log("research: BendHealthReplication cannot change after pawn replication is installed; restart required");
+        return;
+    }
+    g_bendHealthReplication = enabled;
+}
+
+// Bend locomotion is animation root motion. The server does not reproduce it for a remote player's pawn, so it
+// rejects the guest's moves and corrects the guest back. UE4's AGameNetworkManager::ClientAuthorativePosition
+// (read from the class default object in ServerMoveHandleClientError) makes the server accept the client's
+// position instead. Applies to the default object and any live instance; idempotent.
+void SetClientAuthoritativePosition(bool enabled) {
+    static bool logged = false;
+    if (!enabled) return;
+    auto cls = FindClass("GameNetworkManager");
+    if (!cls) return;
+    // The client-authoritative branch only runs when ServerCheckClientError passes, which fails once the
+    // error exceeds MAXPOSITIONERRORSQUARED (3 uu^2 by default), so raise that bound as well.
+    constexpr float kMaxErrorSquared = 1.0e12f;
+    auto maxError = ue::FindChild(cls, "MAXPOSITIONERRORSQUARED");
+    int maxErrorOffset = maxError ? ue::PropertyOffset(maxError) : -1;
+    int set = 0;
+    float oldMaxError = -1.0f;
+    for (int i = 0; i < ObjectCount(); ++i) {
+        auto obj = ObjectAt(i);
+        if (!IsLive(obj) || !IsLive(obj->cls) || !IsA(obj, cls)) continue;
+        bool changed = false;
+        bool current = false;
+        if (ue::GetBoolProp(obj, "ClientAuthorativePosition", current) && !current &&
+            ue::SetBoolProp(obj, "ClientAuthorativePosition", true))
+            changed = true;
+        if (maxErrorOffset > 0) {
+            auto value = reinterpret_cast<float*>(reinterpret_cast<uint8_t*>(obj) + maxErrorOffset);
+            if (*value < kMaxErrorSquared) {
+                oldMaxError = *value;
+                *value = kMaxErrorSquared;
+                changed = true;
+            }
+        }
+        if (changed) ++set;
+    }
+    if (set || !logged)
+        Log("research: GameNetworkManager.ClientAuthorativePosition set on %d objects (MAXPOSITIONERRORSQUARED "
+            "@%d %.1f -> %.0f)", set, maxErrorOffset, oldMaxError, kMaxErrorSquared);
+    logged = true;
+}
+
+using detail::LifetimeProperty;
+using detail::LifetimeProperties;
+
+void CharacterLifetimeProperties(UObject* obj, LifetimeProperties* properties) {
+    using Register = void (*)(UObject*, LifetimeProperties*);
+    reinterpret_cast<Register>(g.imageBase + 0x275b770)(obj, properties);
+    if (properties->num < 0 || properties->num > properties->max || properties->max > 4096 ||
+        (properties->num && !ReadableMemory(properties->data, properties->num * sizeof(LifetimeProperty)))) {
+        Log("research: lifetime: invalid property array for %s", FullName(obj->cls).c_str());
+        return;
+    }
+    auto health = ue::FindChild(obj->cls, "Health");
+    if (!IsLive(health) || !(PropertyFlags(health) & kCpfNet) || Name(health->cls) != "FloatProperty" ||
+        ElementSize(health) != sizeof(float) ||
+        *reinterpret_cast<int32_t*>(reinterpret_cast<uint8_t*>(health) + off::PropertyArrayDim) != 1) {
+        Log("research: lifetime: %s stock-count=%d has no supported CPF_Net float Health",
+            FullName(obj->cls).c_str(), properties->num);
+        return;
+    }
+    // Stock ACharacter registration reads UProperty::RepIndex at +0x40 and emits 12-byte entries.
+    uint16_t index = 0;
+    std::memcpy(&index, reinterpret_cast<uint8_t*>(health) + 0x40, sizeof index);
+    int stockCount = properties->num;
+    bool registered = false;
+    for (int i = 0; i < properties->num; ++i) {
+        const auto& entry = properties->data[i];
+        registered |= entry.index == index;
+    }
+    bool added = false;
+    if (g_bendHealthReplication) {
+        auto result = detail::RegisterLifetimeProperty(*properties, index,
+            reinterpret_cast<detail::Reallocate>(g.imageBase + 0x19740c0));
+        if (result == detail::LifetimeRegistration::invalid || result == detail::LifetimeRegistration::allocationFailed) {
+            Log("research: lifetime: Health registration FAILED for %s (result=%d)",
+                FullName(obj->cls).c_str(), static_cast<int>(result));
+            return;
+        }
+        added = result == detail::LifetimeRegistration::added;
+    }
+    static std::vector<UObject*> reported;
+    if (std::find(reported.begin(), reported.end(), obj->cls) != reported.end()) return;
+    reported.push_back(obj->cls);
+    std::string entries;
+    for (int i = 0; i < properties->num; ++i)
+        entries += (i ? "," : "") + std::to_string(properties->data[i].index) + ":" +
+                   std::to_string(properties->data[i].condition);
+    Log("research: lifetime: %s stock-count=%d Health@%d RepIndex=%u stock-registered=%d added=%d total=%d "
+        "entries(index:condition)=[%s]", FullName(obj->cls).c_str(), stockCount, PropertyOffset(health),
+        index, registered, added, properties->num, entries.c_str());
+}
+
+// Bend's character classes override UObject::GetLifetimeReplicatedProps (vtable +0x198) with an empty
+// function (0x1b2340 is a folded `ret`), so FRepLayout gets no lifetime properties and their actor channels
+// carry nothing after the spawn: no Role/RemoteRole, Owner, ReplicatedMovement, Controller or PlayerState.
+// Point those slots back at the stock ACharacter version (0x275b770, which chains APawn and AActor). Both
+// sides must do this before their net driver builds the class rep layouts, or the layouts will not match.
+int RestoreCharacterReplication() {
+    static int patched = -1;
+    if (patched >= 0) return patched;
+    constexpr int kSlot = 0x198 / 8;
+    auto empty = reinterpret_cast<void*>(g.imageBase + 0x1b2340);
+    auto registration = reinterpret_cast<void*>(&CharacterLifetimeProperties);
+    auto characterClass = FindClass("Character");
+    if (!characterClass) return -1;
+    std::vector<void**> seen;
+    patched = 0;
+    for (int i = 0; i < ObjectCount(); ++i) {
+        auto obj = ObjectAt(i);
+        if (!IsLive(obj) || !IsLive(obj->cls) || !IsA(obj, characterClass)) continue;
+        auto vtable = obj->vtable;
+        if (std::find(seen.begin(), seen.end(), vtable) != seen.end()) continue;
+        seen.push_back(vtable);
+        if (vtable[kSlot] != empty) continue;
+        DWORD old;
+        if (!VirtualProtect(vtable + kSlot, sizeof(void*), PAGE_READWRITE, &old)) continue;
+        vtable[kSlot] = registration;
+        VirtualProtect(vtable + kSlot, sizeof(void*), old, &old);
+        ++patched;
+        Log("research: pawn replication: restored GetLifetimeReplicatedProps for %s (vtable exe+0x%llx)",
+            Name(obj->cls).c_str(), static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(vtable) - g.imageBase));
+    }
+    g_characterReplicationInstalled = true;
+    Log("research: pawn replication: %d character vtables patched, %d seen", patched, static_cast<int>(seen.size()));
+    return patched;
+}
 
 void SetStreamingRpcDrops(bool hostStatus, bool guestVisibility) {
     g_dropHostStatus = hostStatus;
     g_dropGuestVisibility = guestVisibility;
 }
 
+void WalkStep(UObject* obj, UObject* fn);
+
 bool DropProcessEvent(UObject* obj, UObject* fn) {
+    WalkStep(obj, fn);
     if (!g_engineOwnsP2P || !fn) return false;
     static int names[3] = {FindNameIndex("ClientUpdateLevelStreamingStatus"), FindNameIndex("ServerUpdateLevelVisibility"),
                            FindNameIndex("ClientFlushLevelStreaming")};
@@ -634,6 +886,7 @@ bool NetListen(const std::string& controllerClass, const std::string& pawnClass,
         return false;
     }
     Log("research: %s", patched.c_str());
+    if (g_pawnReplication) RestoreCharacterReplication();
     g_engineOwnsP2P = true;
     g_acceptAnyP2P = true;
     // Experiment: joining players get engine-default controller and pawn classes, so the Bend blueprint
@@ -744,6 +997,42 @@ constexpr int kContextWorld = 0x290;
 using LoadMapFn = bool (*)(void*, uint8_t*, FURLRaw*, UObject*, FStringRaw*);
 LoadMapFn g_loadMapOriginal = nullptr;
 
+// UNavigationSystem::InitializeForWorld(UWorld*, FNavigationSystemRunMode) on build 19221447. LoadMap calls it
+// with GameMode (1) after MovePendingLevel and InitializeActorsForPlay. When World.NavigationSystem is null it
+// runs CreateNavigationSystem (RVA 0x26313f0), which returns null on NM_Client unless the configured class's
+// default object has bAllowClientSideNavigation; a stock client therefore has no navigation system.
+constexpr uintptr_t kInitializeNavigationForWorldRva = 0x263ed10;
+constexpr uint8_t kInitializeNavigationForWorldPrologue[] = {0x48, 0x85, 0xc9, 0x74, 0x5b, 0x48, 0x89, 0x5c, 0x24, 0x08,
+                                                             0x57, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0xd9, 0x0f, 0xb6,
+                                                             0xfa, 0x48, 0x8b, 0x89, 0x80, 0x04, 0x00, 0x00};
+constexpr uint8_t kNavigationRunModeGame = 1;
+
+void RecreateClientNavigation(UObject* world, UObject* navigationClass) {
+    auto initialize = CheckedCode(kInitializeNavigationForWorldRva, kInitializeNavigationForWorldPrologue,
+                                  sizeof kInitializeNavigationForWorldPrologue);
+    auto defaults = IsLive(navigationClass) ? FindDefaultObject(Name(navigationClass).c_str()) : nullptr;
+    if (!initialize || !IsLive(defaults)) {
+        Log("research: client navigation skipped: %s", initialize ? "no navigation-system default object"
+                                                                  : "InitializeForWorld prologue mismatch");
+        return;
+    }
+    bool allowed = false;
+    ue::GetBoolProp(defaults, "bAllowClientSideNavigation", allowed);
+    if (!allowed && !ue::SetBoolProp(defaults, "bAllowClientSideNavigation", true)) {
+        Log("research: client navigation skipped: cannot set %s.bAllowClientSideNavigation", Name(navigationClass).c_str());
+        return;
+    }
+    Log("research: client navigation: %s.bAllowClientSideNavigation %s; running InitializeForWorld(GameMode)",
+        Name(navigationClass).c_str(), allowed ? "was already true" : "set to true");
+    using InitializeForWorldFn = void (*)(UObject*, uint8_t);
+    reinterpret_cast<InitializeForWorldFn>(const_cast<uint8_t*>(initialize))(world, kNavigationRunModeGame);
+    UObject* navigation = nullptr;
+    ue::GetProp(world, "NavigationSystem", navigation);
+    Log("research: client navigation: World.NavigationSystem=%s class=%s MainNavData=%s",
+        IsLive(navigation) ? FullName(navigation).c_str() : "null",
+        IsLive(navigation) ? Name(navigation->cls).c_str() : "-", ObjectProp(navigation, "MainNavData").c_str());
+}
+
 bool HookedLoadMap(void* engine, uint8_t* context, FURLRaw* url, UObject* pending, FStringRaw* error) {
     if (!pending) {
         Log("research: LoadMap without a pending game; passing through");
@@ -760,9 +1049,43 @@ bool HookedLoadMap(void* engine, uint8_t* context, FURLRaw* url, UObject* pendin
         Log("research: LoadMap intercept aborted; passing through");
         return g_loadMapOriginal(engine, context, url, pending, error);
     }
-    using MovePendingLevelFn = void (*)(void*, uint8_t*);
+    auto logJoinState = [&](const char* stage) {
+        auto currentWorld = *reinterpret_cast<UObject**>(context + kContextWorld);
+        auto currentPending = *reinterpret_cast<UObject**>(context + kContextPendingNetGame);
+        auto level = IsLive(currentWorld) ? ObjectProp(currentWorld, "PersistentLevel") : std::string("?");
+        auto settings = WorldSettingsForWorld(currentWorld);
+        bool navigationEnabled = false;
+        auto navigationEnabledText =
+            IsLive(settings) && ue::GetBoolProp(settings, "bEnableNavigationSystem", navigationEnabled)
+                ? (navigationEnabled ? "true" : "false")
+                : "?";
+        Log("research: LoadMap %s: world=%s persistent-level=%s net-driver=%s navigation=%s "
+            "world-settings=%s bEnableNavigationSystem=%s pending=%s pending-driver=%s context-pending=%s",
+            stage, IsLive(currentWorld) ? FullName(currentWorld).c_str() : "null", level.c_str(),
+            ObjectProp(currentWorld, "NetDriver").c_str(), ObjectProp(currentWorld, "NavigationSystem").c_str(),
+            IsLive(settings) ? FullName(settings).c_str() : "none", navigationEnabledText,
+            IsLive(pending) ? FullName(pending).c_str() : "null", ObjectProp(pending, "NetDriver").c_str(),
+            currentPending == pending ? "same" : "different");
+    };
     auto vtable = *reinterpret_cast<void***>(engine);
-    reinterpret_cast<MovePendingLevelFn>(vtable[kEngineMovePendingLevelSlot])(engine, context);
+    auto movePendingLevel = vtable[kEngineMovePendingLevelSlot];
+    auto moveAddress = reinterpret_cast<uintptr_t>(movePendingLevel);
+    auto moveRva = moveAddress > g.imageBase && moveAddress < g.imageBase + 0x10000000
+                       ? moveAddress - g.imageBase
+                       : 0;
+    Log("research: MovePendingLevel target=%p RVA=0x%llx", movePendingLevel,
+        static_cast<unsigned long long>(moveRva));
+    logJoinState("before MovePendingLevel");
+    UObject* navigationBefore = nullptr;
+    ue::GetProp(world, "NavigationSystem", navigationBefore);
+    auto navigationClass = IsLive(navigationBefore) ? navigationBefore->cls : nullptr;
+    using MovePendingLevelFn = void (*)(void*, uint8_t*);
+    reinterpret_cast<MovePendingLevelFn>(movePendingLevel)(engine, context);
+    logJoinState("after MovePendingLevel");
+    if (g_clientNavigation) {
+        RecreateClientNavigation(world, navigationClass);
+        logJoinState("after client navigation");
+    }
     // InitConnect registered the pending game as the driver's FNetworkNotify (its interface sits at +0x28,
     // like UWorld's). Repoint it at the world so later control messages reach UWorld::NotifyControlMessage.
     auto pendingNotify = reinterpret_cast<uintptr_t>(pending) + kWorldNetworkNotifyOffset;
@@ -838,19 +1161,38 @@ void SetObjectProp(UObject* obj, const char* name, UObject* value) {
         std::memcpy(reinterpret_cast<uint8_t*>(obj) + PropertyOffset(prop), &value, sizeof value);
 }
 
+// The joined controller, watched while a trace runs so PlayerState/Pawn changes get a timestamp.
+UObject* g_watchedController = nullptr;
+UObject* g_watchedPlayerState = nullptr;
+UObject* g_watchedPawn = nullptr;
+unsigned g_watchedPawnRole = 0;
+
 void HookedHandleClientPlayer(UObject* connection, UObject* pc, UObject* netConnection) {
     auto local = FindInstance("LocalPlayer");
     UObject* keep = nullptr;
     if (IsLive(local)) ue::GetProp(local, "PlayerController", keep);
     if (!IsLive(keep) || keep == pc) keep = nullptr;
+    Log("research: HandleClientPlayer before: PC=%s Player=%s PlayerState=%s Pawn=%s local-controller=%s",
+        IsLive(pc) ? FullName(pc).c_str() : "?", ObjectProp(pc, "Player").c_str(),
+        ObjectProp(pc, "PlayerState").c_str(), ObjectProp(pc, "Pawn").c_str(),
+        IsLive(keep) ? FullName(keep).c_str() : "none");
     if (keep) SetObjectProp(local, "PlayerController", nullptr);
     g_handleClientPlayerOriginal(connection, pc, netConnection);
     if (keep) {
         SetObjectProp(local, "PlayerController", keep);
         SetObjectProp(keep, "Player", local);
     }
-    Log("research: HandleClientPlayer: replicated %s attached to the connection; local player kept %s",
-        IsLive(pc) ? FullName(pc).c_str() : "?", keep ? FullName(keep).c_str() : "nothing");
+    Log("research: HandleClientPlayer after: PC=%s Player=%s PlayerState=%s Pawn=%s local-player kept %s",
+        IsLive(pc) ? FullName(pc).c_str() : "?", ObjectProp(pc, "Player").c_str(),
+        ObjectProp(pc, "PlayerState").c_str(), ObjectProp(pc, "Pawn").c_str(),
+        keep ? FullName(keep).c_str() : "nothing");
+    if (IsLive(pc)) {
+        g_watchedController = pc;
+        g_watchedPlayerState = nullptr;
+        g_watchedPawn = nullptr;
+        ue::GetProp(pc, "PlayerState", g_watchedPlayerState);
+        ue::GetProp(pc, "Pawn", g_watchedPawn);
+    }
 }
 
 bool InstallHandleClientPlayerHook(std::string& summary) {
@@ -899,6 +1241,7 @@ UObject* RemoteController(uint8_t role) {
 }
 
 UObject* g_takeoverOwnController = nullptr;
+UObject* NetConnectionOf(UObject* actor);
 
 } // namespace
 
@@ -953,9 +1296,149 @@ bool NetPossess(UObject* hostPawn, const std::string& pawnClass, std::string& su
     bool possessed = Call(pc, "Possess").set("InPawn", pawn).invoke();
     UObject* after = nullptr;
     ue::GetProp(pc, "Pawn", after);
+    Log("research: net-possess: pawn RemoteRole=%s Controller=%s GetNetConnection=%s controller NetConnection=%s",
+        ByteProp(pawn, "RemoteRole").c_str(), ObjectProp(pawn, "Controller").c_str(),
+        IsLive(NetConnectionOf(pawn)) ? FullName(NetConnectionOf(pawn)).c_str() : "null",
+        ObjectProp(pc, "NetConnection").c_str());
     summary = std::string("Possess ") + (possessed ? "ran" : "failed") + "; " + FullName(pc) + ".Pawn=" +
               (IsLive(after) ? FullName(after) : std::string("null"));
     return possessed && after == pawn;
+}
+
+// APlayerController::BuildInputStack (vtable +0xcc8, 0x2a98560): after a takeover the old local pawn's
+// InputComponent can stay on the stack and consume look input, so the taken-over controller drops components
+// owned by any pawn other than its own.
+using BuildInputStackFn = void (*)(UObject*, void*);
+BuildInputStackFn g_buildInputStackOriginal = nullptr;
+UObject* g_inputStackOwner = nullptr;
+
+void HookedBuildInputStack(UObject* pc, void* array) {
+    g_buildInputStackOriginal(pc, array);
+    static int calls = 0;
+    if (calls++ < 8) Log("research: BuildInputStack #%d on %s", calls, IsLive(pc) ? Name(pc).c_str() : "?");
+    if (pc != g_inputStackOwner) return;
+    struct WeakPtr {
+        int32_t index, serial;
+    };
+    struct StackArray {
+        WeakPtr* data;
+        int32_t num, max;
+    };
+    auto stack = static_cast<StackArray*>(array);
+    UObject* pawn = nullptr;
+    ue::GetProp(pc, "Pawn", pawn);
+    static auto pawnClass = FindClass("Pawn");
+    int32_t kept = 0;
+    for (int32_t i = 0; i < stack->num; ++i) {
+        auto component = ObjectAt(stack->data[i].index);
+        auto owner = IsLive(component) ? component->outer : nullptr;
+        if (IsLive(owner) && pawnClass && IsA(owner, pawnClass) && owner != pawn) {
+            static int logged = 0;
+            if (logged++ < 4) Log("research: input stack dropped %s", FullName(component).c_str());
+            continue;
+        }
+        stack->data[kept++] = stack->data[i];
+    }
+    stack->num = kept;
+    // Blueprint actors push their InputComponents onto GetPlayerController(0), which is still the guest's own
+    // controller; the taken-over controller adopts that CurrentInputStack (+0x5c8 data, +0x5d0 count). In Bend
+    // each entry points at a handle whose first qword is component+0x30; the stock FWeakObjectPtr constructor
+    // (0x1aceb20) turns the component into the stack's weak pointer.
+    if (IsLive(g_takeoverOwnController) && g_takeoverOwnController != pc) {
+        using MakeWeakFn = void (*)(WeakPtr*, UObject*);
+        auto makeWeak = reinterpret_cast<MakeWeakFn>(g.imageBase + 0x1aceb20);
+        auto base = reinterpret_cast<uint8_t*>(g_takeoverOwnController);
+        auto handles = *reinterpret_cast<uint8_t***>(base + 0x5c8);
+        auto count = *reinterpret_cast<int32_t*>(base + 0x5d0);
+        if (count < 0 || count > 64 || !ReadableMemory(handles, count * sizeof(void*))) count = 0;
+        for (int32_t i = 0; i < count; ++i) {
+            auto inner = ReadableMemory(handles[i], sizeof(void*)) ? *reinterpret_cast<uint8_t**>(handles[i]) : nullptr;
+            auto component = inner ? reinterpret_cast<UObject*>(inner - 0x30) : nullptr;
+            if (!IsLive(component)) continue;
+            if (stack->num >= stack->max) {
+                static int full = 0;
+                if (full++ < 4) Log("research: input stack full (max %d); %s not adopted", stack->max, FullName(component).c_str());
+                continue;
+            }
+            WeakPtr weak{-1, 0};
+            makeWeak(&weak, component);
+            stack->data[stack->num++] = weak;
+            static int adopted = 0;
+            if (adopted++ < 8) Log("research: input stack adopted %s", FullName(component).c_str());
+        }
+    }
+}
+
+// Both local controllers run ProcessPlayerInput every frame against one shared, cached input stack, so the
+// guest's own controller rebuilt it with its old pawn's bindings. While a takeover is active it is skipped.
+namespace {
+void InstallProcessInputHook(UObject* pc);
+}
+
+static void MarkInputStackDirty(UObject* pc) {
+    auto dirty = reinterpret_cast<uint8_t*>(pc) + 0x5d8;
+    Log("research: input stack dirty byte on %s was %u; set to 1", Name(pc).c_str(), *dirty);
+    *dirty = 1;
+}
+
+// UWorld::PlayerControllerList (+0x560, TArray<TWeakObjectPtr<APlayerController>>) decides
+// GetPlayerController(0) and Bend's GetPlayerCharacter(0) (0x5ad4b0). Bend's UpdateRotation (via 0x5b6040)
+// picks the mouse look path only when player 0's pawn has look input, and Blueprint actors bind input to
+// player 0, so the controller the local player drives must be first.
+static void PromoteController(UObject* pc) {
+    auto world = FindGameWorld();
+    if (!IsLive(world) || !IsLive(pc)) return;
+    struct WeakPtr {
+        int32_t index, serial;
+    };
+    struct List {
+        WeakPtr* data;
+        int32_t num, max;
+    };
+    auto list = reinterpret_cast<List*>(reinterpret_cast<uint8_t*>(world) + 0x560);
+    if (list->num <= 0 || list->num > 16 || !ReadableMemory(list->data, list->num * sizeof(WeakPtr))) return;
+    for (int32_t i = 0; i < list->num; ++i)
+        if (list->data[i].index == pc->internalIndex) {
+            if (i == 0) return;
+            auto entry = list->data[i];
+            for (int32_t j = i; j > 0; --j) list->data[j] = list->data[j - 1];
+            list->data[0] = entry;
+            Log("research: %s moved from %d to the front of the world's PlayerControllerList (%d entries)",
+                Name(pc).c_str(), i, list->num);
+            return;
+        }
+    Log("research: %s is not in the world's PlayerControllerList", Name(pc).c_str());
+}
+
+static void FixTakeoverInput(UObject* pc, UObject* pawn) {
+    constexpr int kBuildInputStackSlot = 0xcc8 / 8;
+    if (!g_buildInputStackOriginal &&
+        reinterpret_cast<uintptr_t>(pc->vtable[kBuildInputStackSlot]) == g.imageBase + 0x2a98560) {
+        g_buildInputStackOriginal = reinterpret_cast<BuildInputStackFn>(pc->vtable[kBuildInputStackSlot]);
+        DWORD old;
+        if (VirtualProtect(pc->vtable + kBuildInputStackSlot, sizeof(void*), PAGE_READWRITE, &old)) {
+            pc->vtable[kBuildInputStackSlot] = reinterpret_cast<void*>(&HookedBuildInputStack);
+            VirtualProtect(pc->vtable + kBuildInputStackSlot, sizeof(void*), old, &old);
+        }
+    }
+    g_inputStackOwner = pc;
+    // APawn::bInputEnabled (+0x350 bit 4) gates the pawn's InputComponent in BuildInputStack.
+    auto bits = reinterpret_cast<uint32_t*>(reinterpret_cast<uint8_t*>(pawn) + 0x350);
+    Log("research: net-takeover: %s bInputEnabled=%u; BuildInputStack %s", Name(pawn).c_str(), (*bits >> 4) & 1,
+        g_buildInputStackOriginal ? "filtered" : "not hooked (unexpected slot)");
+    *bits |= 1u << 4;
+    // InputYawScale/InputPitchScale (+0x53c/+0x540) carry the player's look scaling; the replicated controller
+    // only has class defaults.
+    if (IsLive(g_takeoverOwnController)) {
+        auto from = reinterpret_cast<const float*>(reinterpret_cast<uint8_t*>(g_takeoverOwnController) + 0x53c);
+        auto to = reinterpret_cast<float*>(reinterpret_cast<uint8_t*>(pc) + 0x53c);
+        Log("research: net-takeover: input yaw/pitch scale %.3f/%.3f -> %.3f/%.3f", to[0], to[1], from[0], from[1]);
+        to[0] = from[0];
+        to[1] = from[1];
+    }
+    InstallProcessInputHook(pc);
+    MarkInputStackDirty(pc);
+    PromoteController(pc);
 }
 
 bool NetTakeover(std::string& summary) {
@@ -981,6 +1464,9 @@ bool NetTakeover(std::string& summary) {
         if (IsLive(current)) SetObjectProp(current, "Player", nullptr);
         SetObjectProp(local, "PlayerController", nullptr);
         bool ok = setPlayer(g_takeoverOwnController);
+        g_inputStackOwner = nullptr;
+        MarkInputStackDirty(g_takeoverOwnController);
+        PromoteController(g_takeoverOwnController);
         summary = std::string("returned the local player to ") + FullName(g_takeoverOwnController) + (ok ? "" : " (SetPlayer failed)");
         g_takeoverOwnController = nullptr;
         return ok;
@@ -1011,10 +1497,749 @@ bool NetTakeover(std::string& summary) {
     Log("research: net-takeover: %s is now the local controller", FullName(pc).c_str());
     bool restarted = Call(pc, "ClientRestart").set("NewPawn", pawn).invoke();
     bool viewed = Call(pc, "SetViewTargetWithBlend").set("NewViewTarget", pawn).set("BlendTime", 0.f).invoke();
+    if (g_clientPossess) {
+        // ABendPlayerController::Possess (vtable +0x700, 0x799ea0) calls the authority-only engine Possess, which
+        // only logs on a client, and then does Bend's local setup: pawn delegate bindings and the native player
+        // navigation object at +0x2078 that CancelCurrentPlayerNavigation dereferences. A replicated controller
+        // never runs it, because the engine only possesses on the server.
+        constexpr int kPossessSlot = 0x700 / 8;
+        auto navigation = [&] { return *reinterpret_cast<void**>(reinterpret_cast<uint8_t*>(pc) + 0x2078); };
+        void* before = navigation();
+        auto fn = reinterpret_cast<uintptr_t>(pc->vtable[kPossessSlot]);
+        if (fn == g.imageBase + 0x799ea0) {
+            reinterpret_cast<void (*)(UObject*, UObject*)>(fn)(pc, pawn);
+            Log("research: net-takeover: Bend Possess ran on the client; navigation object %p -> %p", before, navigation());
+        } else {
+            Log("research: net-takeover: Possess slot is exe+0x%llx, not Bend's; skipped",
+                static_cast<unsigned long long>(fn - g.imageBase));
+        }
+    }
+    // APlayerController::ProcessPlayerInput (0x2aa84e0) keeps the input stack in one static array and only
+    // rebuilds it (BuildInputStack, +0xcc8) while the ticking controller's dirty byte +0x5d8 is set. A replicated
+    // controller never has it set, so it would keep feeding look input to the old local pawn's InputComponent.
+    FixTakeoverInput(pc, pawn);
     summary = "local player now drives " + FullName(pawn) + " through " + FullName(pc) + " (ClientRestart " +
               (restarted ? "ran" : "failed") + ", view target " + (viewed ? "set" : "not set") + "); own controller kept as " +
               (g_takeoverOwnController ? FullName(g_takeoverOwnController) : std::string("none"));
     return true;
+}
+
+namespace {
+
+std::string Describe(UObject* v) { return v ? (IsLive(v) ? FullName(v) : std::string("<stale>")) : std::string("null"); }
+
+// AActor::GetNetConnection is vtable slot 149 (+0x4a8) on this build: APawn (0x2a55380) forwards to its
+// Controller, APlayerController (0x2aa2780) returns NetConnection while Player is set. UActorChannel::
+// ReplicateActor (0x2831ee0) compares it with the channel's connection to decide bNetOwner.
+UObject* NetConnectionOf(UObject* actor) {
+    constexpr int kGetNetConnectionSlot = 0x4a8 / 8;
+    if (!IsLive(actor)) return nullptr;
+    auto fn = reinterpret_cast<uintptr_t>(actor->vtable[kGetNetConnectionSlot]);
+    if (fn <= g.imageBase || fn >= g.imageBase + 0x10000000) return nullptr;
+    return reinterpret_cast<UObject* (*)(UObject*)>(fn)(actor);
+}
+
+std::string CallBool(UObject* obj, const char* function) {
+    Call c(obj, function);
+    return c.ok() && c.invoke() ? (c.get<bool>("ReturnValue") ? "true" : "false") : "?";
+}
+
+void SetByteProp(UObject* obj, const char* name, uint8_t value) {
+    if (auto prop = IsLive(obj) ? FindChild(obj->cls, name) : nullptr)
+        reinterpret_cast<uint8_t*>(obj)[PropertyOffset(prop)] = value;
+}
+
+std::string TickBytes(UObject* actor) {
+    // PrimaryActorTick is at +40 (80 bytes); bytes 8..23 hold the tick groups, flag bits and tick state.
+    auto tick = reinterpret_cast<const uint8_t*>(actor) + 40;
+    std::string text;
+    char hex[4];
+    for (int i = 8; i < 24; ++i) {
+        std::snprintf(hex, sizeof hex, "%02x", tick[i]);
+        text += hex;
+    }
+    return text;
+}
+
+void DiagPawn(UObject* pawn) {
+    FVector at{};
+    if (Call where(pawn, "K2_GetActorLocation"); where.invoke()) at = where.get<FVector>("ReturnValue");
+    uint64_t weakOwner = 0;
+    ue::GetProp(pawn, "Owner", weakOwner);
+    UObject* movement = nullptr;
+    ue::GetProp(pawn, "CharacterMovement", movement);
+    Log("research: diag PAWN %s Role=%s RemoteRole=%s Controller=%s PlayerState=%s GetNetConnection=%s "
+        "IsLocallyControlled=%s InputComponent=%s Owner=%s ownerWeak=%016llx at=(%.0f %.0f %.0f) "
+        "MovementMode=%s tick=%s",
+        FullName(pawn).c_str(), ByteProp(pawn, "Role").c_str(), ByteProp(pawn, "RemoteRole").c_str(),
+        ObjectProp(pawn, "Controller").c_str(), ObjectProp(pawn, "PlayerState").c_str(),
+        Describe(NetConnectionOf(pawn)).c_str(), CallBool(pawn, "IsLocallyControlled").c_str(),
+        ObjectProp(pawn, "InputComponent").c_str(), ObjectProp(pawn, "Owner").c_str(),
+        static_cast<unsigned long long>(weakOwner), at.x, at.y, at.z,
+        IsLive(movement) ? ByteProp(movement, "MovementMode").c_str() : "?", TickBytes(pawn).c_str());
+}
+
+UObject* LocalController() {
+    auto local = FindInstance("LocalPlayer");
+    UObject* pc = nullptr;
+    if (IsLive(local)) ue::GetProp(local, "PlayerController", pc);
+    return IsLive(pc) ? pc : nullptr;
+}
+
+UObject* g_forcedAutonomousPawn = nullptr;
+
+} // namespace
+
+bool NetDiag(std::string& summary) {
+    auto localPc = LocalController();
+    Log("research: diag LocalPlayer.PlayerController=%s", Describe(localPc).c_str());
+    if (auto statics = FindDefaultObject("GameplayStatics"); statics && localPc) {
+        Call first(statics, "GetPlayerController");
+        first.set("WorldContextObject", localPc).set<int32_t>("PlayerIndex", 0);
+        if (first.ok() && first.invoke())
+            Log("research: diag GetPlayerController(0)=%s", Describe(first.get<UObject*>("ReturnValue")).c_str());
+    }
+    int controllers = 0, pawns = 0;
+    auto pcClass = FindClass("PlayerController");
+    auto pawnClass = FindClass("BendDefaultPlayerPawn_C");
+    for (int i = 0; i < ObjectCount(); ++i) {
+        auto obj = ObjectAt(i);
+        if (!IsLive(obj) || !IsLive(obj->cls) || IsDefaultOrArchetype(obj)) continue;
+        if (pcClass && IsA(obj, pcClass)) {
+            ++controllers;
+            FRotator rot{};
+            ue::GetProp(obj, "ControlRotation", rot);
+            Log("research: diag PC %s Role=%s RemoteRole=%s Player=%s NetConnection=%s GetNetConnection=%s "
+                "IsLocalController=%s Pawn=%s AcknowledgedPawn=%s PlayerInput=%s InputComponent=%s "
+                "PlayerCameraManager=%s ControlRotation=(%.1f %.1f %.1f) tick=%s",
+                FullName(obj).c_str(), ByteProp(obj, "Role").c_str(), ByteProp(obj, "RemoteRole").c_str(),
+                ObjectProp(obj, "Player").c_str(), ObjectProp(obj, "NetConnection").c_str(),
+                Describe(NetConnectionOf(obj)).c_str(), CallBool(obj, "IsLocalController").c_str(),
+                ObjectProp(obj, "Pawn").c_str(), ObjectProp(obj, "AcknowledgedPawn").c_str(),
+                ObjectProp(obj, "PlayerInput").c_str(), ObjectProp(obj, "InputComponent").c_str(),
+                ObjectProp(obj, "PlayerCameraManager").c_str(), rot.pitch, rot.yaw, rot.roll, TickBytes(obj).c_str());
+        } else if (pawnClass && IsA(obj, pawnClass)) {
+            ++pawns;
+            DiagPawn(obj);
+        }
+    }
+    summary = std::to_string(controllers) + " player controllers and " + std::to_string(pawns) +
+              " player pawns logged";
+    return true;
+}
+
+bool NetAutonomous(std::string& summary) {
+    auto pc = LocalController();
+    UObject* pawn = nullptr;
+    if (pc) ue::GetProp(pc, "Pawn", pawn);
+    if (!IsLive(pawn)) {
+        summary = "the local controller has no pawn";
+        return false;
+    }
+    uint8_t role = 0;
+    ue::GetProp(pawn, "Role", role);
+    if (pawn == g_forcedAutonomousPawn && role == 2) {
+        SetByteProp(pawn, "Role", 1);
+        g_forcedAutonomousPawn = nullptr;
+        summary = FullName(pawn) + " Role 2 -> 1 (restored)";
+        return true;
+    }
+    if (role != 1) {
+        summary = FullName(pawn) + " Role is " + std::to_string(role) + ", not SimulatedProxy; nothing changed";
+        return false;
+    }
+    SetByteProp(pawn, "Role", 2);
+    g_forcedAutonomousPawn = pawn;
+    summary = FullName(pawn) + " Role 1 -> 2 (forced AutonomousProxy on this PC only)";
+    return true;
+}
+
+bool NetNudge(std::string& summary) {
+    auto pc = LocalController();
+    if (!pc) {
+        summary = "no local controller";
+        return false;
+    }
+    FRotator before{};
+    ue::GetProp(pc, "ControlRotation", before);
+    bool yaw = Call(pc, "AddYawInput").set("Val", 30.f).invoke();
+    char text[160];
+    std::snprintf(text, sizeof text, "AddYawInput(30) %s on %s; ControlRotation yaw before %.1f (run net-diag to compare)",
+                  yaw ? "ran" : "failed", Name(pc).c_str(), before.yaw);
+    summary = text;
+    return yaw;
+}
+
+namespace {
+
+// APlayerController::InputKey (vtable +0xc50, 0x2aa4620; Bend first offers the key to a global interceptor)
+// and InputAxis (+0xc60, 0x2aa4550) on build 19221447. Both controller classes share the slot, so the
+// wrappers count per controller object to show which one the viewport feeds.
+constexpr int kInputKeySlot = 0xc50 / 8, kInputAxisSlot = 0xc60 / 8;
+constexpr uintptr_t kInputKeyRva = 0x2aa4620, kInputAxisRva = 0x2aa4550;
+using InputKeyFn = bool (*)(UObject*, const int32_t*, int32_t, float, bool);
+using InputAxisFn = bool (*)(UObject*, const int32_t*, float, float, int32_t, bool);
+InputKeyFn g_inputKeyOriginal = nullptr;
+InputAxisFn g_inputAxisOriginal = nullptr;
+void** g_inputVtable = nullptr;
+
+struct InputCount {
+    UObject* pc = nullptr;
+    uint64_t keys = 0, axes = 0, rotations = 0, processes = 0, dirtyAtProcess = 0;
+    double addYaw = 0, rotationInputYaw = 0, rotationDelta = 0;
+    std::string firstKeys;
+};
+
+// APlayerController::UpdateRotation (PC vtable +0xaf8; Bend override 0x7a5f90): the camera manager turns
+// RotationInput (PC +0x530) into a view rotation (PC +0x1fe4) that becomes ControlRotation.
+constexpr int kUpdateRotationSlot = 0xaf8 / 8;
+constexpr uintptr_t kUpdateRotationRva = 0x7a5f90;
+using UpdateRotationFn = void (*)(UObject*, float);
+UpdateRotationFn g_updateRotationOriginal = nullptr;
+InputCount g_inputCounts[6];
+
+// BendPlayer pawn look handlers (vtable +0xbb8 = 0x77c640, +0xbc0 = 0x77c6f0): both forward the axis value to
+// Controller->AddYawInput (pawn +0x380). Counting them per pawn shows whether the guest's look input reaches its pawn.
+constexpr int kLookSlots[2] = {0xbb8 / 8, 0xbc0 / 8};
+constexpr uintptr_t kLookRvas[2] = {0x77c640, 0x77c6f0};
+using LookFn = void (*)(UObject*, float);
+LookFn g_lookOriginal[2] = {};
+struct LookCount {
+    UObject* pawn = nullptr;
+    uint64_t calls[2] = {}, nonzero[2] = {};
+    double sum[2] = {};
+};
+LookCount g_lookCounts[6];
+
+LookCount* LookCountFor(UObject* pawn) {
+    for (auto& c : g_lookCounts)
+        if (c.pawn == pawn) return &c;
+    for (auto& c : g_lookCounts)
+        if (!c.pawn) {
+            c.pawn = pawn;
+            return &c;
+        }
+    return nullptr;
+}
+
+std::string ExeStack();
+
+template <int Index> void HookedLook(UObject* pawn, float value) {
+    if (auto c = LookCountFor(pawn)) {
+        if (c->calls[Index]++ == 0)
+            Log("research: first look%d on %s value=%.3f stack:%s", Index, IsLive(pawn) ? Name(pawn).c_str() : "?", value,
+                ExeStack().c_str());
+        if (value != 0.f) ++c->nonzero[Index];
+        c->sum[Index] += value;
+    }
+    g_lookOriginal[Index](pawn, value);
+}
+
+// Bend camera instance AddRotationInput (vtable +0x248), fed by the camera manager's UpdateRotation (0x45d610)
+// with the sensitivity-scaled RotationInput packed as an FVector2D.
+bool PatchSlot(void** vtable, int slot, void* replacement);
+constexpr int kCameraInputSlot = 0x248 / 8;
+using CameraInputFn = bool (*)(void*, uint64_t);
+CameraInputFn g_cameraInputOriginal = nullptr;
+struct CameraInputCount {
+    void* camera = nullptr;
+    uint64_t calls = 0;
+    double sum[2] = {};
+};
+CameraInputCount g_cameraInputs[6];
+
+bool HookedCameraInput(void* camera, uint64_t packed) {
+    float v[2];
+    std::memcpy(v, &packed, sizeof v);
+    for (auto& c : g_cameraInputs)
+        if (c.camera == camera || !c.camera) {
+            c.camera = camera;
+            ++c.calls;
+            c.sum[0] += v[0];
+            c.sum[1] += v[1];
+            break;
+        }
+    return g_cameraInputOriginal(camera, packed);
+}
+
+void HookCameraInput(UObject* pc) {
+    UObject* manager = nullptr;
+    ue::GetProp(pc, "PlayerCameraManager", manager);
+    if (!IsLive(manager)) return;
+    auto cm = reinterpret_cast<uint8_t*>(manager);
+    auto stack = *reinterpret_cast<UObject***>(cm + 0x35d0);
+    if (*reinterpret_cast<int32_t*>(cm + 0x35d8) < 1 || !ReadableMemory(stack, sizeof(void*)) || !IsLive(stack[0])) return;
+    auto camera = stack[0];
+    auto slot = camera->vtable[kCameraInputSlot];
+    if (slot == reinterpret_cast<void*>(&HookedCameraInput)) return;
+    if (g_cameraInputOriginal && slot != reinterpret_cast<void*>(g_cameraInputOriginal)) {
+        Log("research: camera %s has a different AddRotationInput; not hooked", Name(camera->cls).c_str());
+        return;
+    }
+    g_cameraInputOriginal = reinterpret_cast<CameraInputFn>(slot);
+    PatchSlot(camera->vtable, kCameraInputSlot, reinterpret_cast<void*>(&HookedCameraInput));
+    auto rva = [&](int offset) {
+        return static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(camera->vtable[offset / 8]) - g.imageBase);
+    };
+    Log("research: camera vtable exe+0x%llx slots 0x2d8=exe+0x%llx 0x308=exe+0x%llx 0x320=exe+0x%llx",
+        static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(camera->vtable) - g.imageBase), rva(0x2d8),
+        rva(0x308), rva(0x320));
+    Log("research: hooked AddRotationInput on %s (exe+0x%llx)", Name(camera->cls).c_str(),
+        static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(slot) - g.imageBase));
+}
+
+InputCount* InputCountFor(UObject* pc) {
+    for (auto& c : g_inputCounts)
+        if (c.pc == pc) return &c;
+    for (auto& c : g_inputCounts)
+        if (!c.pc) {
+            c.pc = pc;
+            return &c;
+        }
+    return nullptr;
+}
+
+std::string ExeStack() {
+    void* frames[24]{};
+    USHORT count = RtlCaptureStackBackTrace(1, 24, frames, nullptr);
+    std::string text;
+    char item[32];
+    for (USHORT f = 0; f < count; ++f) {
+        auto at = reinterpret_cast<uintptr_t>(frames[f]);
+        if (at > g.imageBase && at < g.imageBase + 0x10000000) {
+            std::snprintf(item, sizeof item, " exe+0x%llx", static_cast<unsigned long long>(at - g.imageBase));
+            text += item;
+        }
+    }
+    return text;
+}
+
+bool HookedInputKey(UObject* pc, const int32_t* key, int32_t event, float amount, bool gamepad) {
+    if (auto c = InputCountFor(pc)) {
+        if (c->keys == 0)
+            Log("research: input first key on %s: %s event=%d gamepad=%d stack:%s", IsLive(pc) ? Name(pc).c_str() : "?",
+                NameString(key[0]).c_str(), event, gamepad ? 1 : 0, ExeStack().c_str());
+        if (++c->keys <= 12 && event == 0) c->firstKeys += " " + NameString(key[0]);
+    }
+    return g_inputKeyOriginal(pc, key, event, amount, gamepad);
+}
+
+bool HookedInputAxis(UObject* pc, const int32_t* key, float delta, float deltaTime, int32_t samples, bool gamepad) {
+    if (auto c = InputCountFor(pc)) {
+        if (c->axes == 0)
+            Log("research: input first axis on %s: %s delta=%.3f gamepad=%d stack:%s", IsLive(pc) ? Name(pc).c_str() : "?",
+                NameString(key[0]).c_str(), delta, gamepad ? 1 : 0, ExeStack().c_str());
+        if (delta != 0.f) ++c->axes;
+    }
+    return g_inputAxisOriginal(pc, key, delta, deltaTime, samples, gamepad);
+}
+
+void HookedUpdateRotation(UObject* pc, float deltaTime) {
+    if (auto c = InputCountFor(pc)) {
+        ++c->rotations;
+        c->rotationInputYaw += reinterpret_cast<const float*>(reinterpret_cast<const uint8_t*>(pc) + 0x530)[1];
+        c->rotationDelta += deltaTime;
+    }
+    g_updateRotationOriginal(pc, deltaTime);
+}
+
+// APlayerController::AddYawInput (PC vtable +0xbb0, 0x2a96270).
+constexpr int kAddYawSlot = 0xbb0 / 8;
+constexpr uintptr_t kAddYawRva = 0x2a96270;
+using AddYawFn = void (*)(UObject*, float);
+AddYawFn g_addYawOriginal = nullptr;
+
+void HookedAddYaw(UObject* pc, float value) {
+    if (auto c = InputCountFor(pc)) c->addYaw += value;
+    g_addYawOriginal(pc, value);
+}
+
+// ABendPlayerController::ProcessPlayerInput (PC vtable +0xcc0, 0x79b1c0), called from TickPlayerInput.
+constexpr int kProcessInputSlot = 0xcc0 / 8;
+constexpr uintptr_t kProcessInputRva = 0x79b1c0;
+using ProcessInputFn = void (*)(UObject*, float, bool);
+ProcessInputFn g_processInputOriginal = nullptr;
+
+void HookedProcessInput(UObject* pc, float deltaTime, bool paused) {
+    if (auto c = InputCountFor(pc)) {
+        ++c->processes;
+        if (reinterpret_cast<const uint8_t*>(pc)[0x5d8]) ++c->dirtyAtProcess;
+    }
+    if (g_inputStackOwner && pc == g_takeoverOwnController) return;
+    g_processInputOriginal(pc, deltaTime, paused);
+}
+
+bool PatchSlot(void** vtable, int slot, void* replacement) {
+    DWORD old;
+    if (!VirtualProtect(vtable + slot, sizeof(void*), PAGE_READWRITE, &old)) return false;
+    vtable[slot] = replacement;
+    VirtualProtect(vtable + slot, sizeof(void*), old, &old);
+    return true;
+}
+
+void InstallProcessInputHook(UObject* pc) {
+    if (g_processInputOriginal) return;
+    if (reinterpret_cast<uintptr_t>(pc->vtable[kProcessInputSlot]) != g.imageBase + kProcessInputRva) {
+        Log("research: ProcessPlayerInput slot unexpected; own controller keeps processing input");
+        return;
+    }
+    g_processInputOriginal = reinterpret_cast<ProcessInputFn>(pc->vtable[kProcessInputSlot]);
+    PatchSlot(pc->vtable, kProcessInputSlot, reinterpret_cast<void*>(&HookedProcessInput));
+}
+
+// net-walk: feed AddMovementInput to the local controller's pawn from its own ReceiveTick for a few seconds.
+UObject* g_walkPawn = nullptr;
+double g_walkUntil = 0;
+uint64_t g_walkSteps = 0;
+FVector g_walkFrom{};
+double g_walkNextReport = 0;
+bool g_walkConsume = false;
+
+// UPawnMovementComponent::ConsumeInputVector (CMC vtable +0x530; Bend 0x474c60). Bend's CMC TickComponent only
+// reads LastControlInputVector (pawn +0x39c), so whoever calls this slot decides whether a pawn's input is used.
+constexpr int kConsumeSlot = 0x530 / 8;
+using ConsumeFn = FVector* (*)(UObject*, FVector*);
+ConsumeFn g_consumeOriginal = nullptr;
+void** g_consumeVtable = nullptr;
+struct ConsumeCount {
+    UObject* movement = nullptr;
+    uint64_t calls = 0;
+};
+ConsumeCount g_consumeCounts[8];
+
+ConsumeCount* ConsumeCountFor(UObject* movement) {
+    for (auto& c : g_consumeCounts)
+        if (c.movement == movement) return &c;
+    for (auto& c : g_consumeCounts)
+        if (!c.movement) {
+            c.movement = movement;
+            return &c;
+        }
+    return nullptr;
+}
+
+FVector* HookedConsume(UObject* movement, FVector* out) {
+    if (auto c = ConsumeCountFor(movement); c && c->calls++ == 0)
+        Log("research: first ConsumeInputVector on %s stack:%s", IsLive(movement) ? Describe(movement).c_str() : "?",
+            ExeStack().c_str());
+    return g_consumeOriginal(movement, out);
+}
+
+uint64_t ConsumeCalls(UObject* movement) {
+    for (auto& c : g_consumeCounts)
+        if (c.movement == movement) return c.calls;
+    return 0;
+}
+
+void WrapConsume(UObject* movement) {
+    if (g_consumeVtable || !IsLive(movement)) return;
+    auto vtable = movement->vtable;
+    g_consumeOriginal = reinterpret_cast<ConsumeFn>(vtable[kConsumeSlot]);
+    if (PatchSlot(vtable, kConsumeSlot, reinterpret_cast<void*>(&HookedConsume))) {
+        g_consumeVtable = vtable;
+        Log("research: ConsumeInputVector wrapped on %s (original exe+0x%llx)", Name(movement->cls).c_str(),
+            static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(g_consumeOriginal) - g.imageBase));
+    }
+}
+
+// Movement telemetry for net-walk: Days Gone drives ground locomotion through desiredSpeed and anim root motion,
+// so these fields show which stage drops the input on a net client.
+void WalkReport(UObject* pawn, const char* stage) {
+    FVector at{}, velocity{}, acceleration{};
+    if (Call where(pawn, "K2_GetActorLocation"); where.invoke()) at = where.get<FVector>("ReturnValue");
+    UObject* movement = nullptr;
+    ue::GetProp(pawn, "CharacterMovement", movement);
+    float desired = -1, smoothed = -1, maxWalk = -1;
+    std::string mode = "?";
+    if (IsLive(movement)) {
+        ue::GetProp(movement, "Velocity", velocity);
+        ue::GetProp(movement, "Acceleration", acceleration);
+        ue::GetProp(movement, "desiredSpeed", desired);
+        ue::GetProp(movement, "DesiredSpeedSmoothed", smoothed);
+        ue::GetProp(movement, "MaxWalkSpeed", maxWalk);
+        mode = ByteProp(movement, "MovementMode");
+    }
+    UObject* mesh = nullptr;
+    UObject* anim = nullptr;
+    ue::GetProp(pawn, "Mesh", mesh);
+    if (IsLive(mesh)) ue::GetProp(mesh, "AnimScriptInstance", anim);
+    auto last = reinterpret_cast<const FVector*>(reinterpret_cast<const uint8_t*>(pawn) + 0x39c);
+    Log("research: net-walk %s %s at=(%.0f %.0f %.0f) vel=(%.0f %.0f %.0f) accel=(%.0f %.0f %.0f) desiredSpeed=%.1f "
+        "smoothed=%.1f maxWalk=%.0f mode=%s rootMotionMode=%s playingRootMotion=%s netRootMotionMontage=%s "
+        "meshUpdateFlag=%s consumeCalls=%llu lastInput=(%.2f %.2f %.2f) anim=%s",
+        stage, Name(pawn).c_str(), at.x, at.y, at.z, velocity.x, velocity.y, velocity.z, acceleration.x,
+        acceleration.y, acceleration.z, desired, smoothed, maxWalk, mode.c_str(),
+        IsLive(anim) ? ByteProp(anim, "RootMotionMode").c_str() : "?", CallBool(pawn, "IsPlayingRootMotion").c_str(),
+        CallBool(pawn, "IsPlayingNetworkedRootMotionMontage").c_str(),
+        IsLive(mesh) ? ByteProp(mesh, "MeshComponentUpdateFlag").c_str() : "?",
+        static_cast<unsigned long long>(ConsumeCalls(movement)), last->x, last->y, last->z, Describe(anim).c_str());
+}
+
+} // namespace
+
+bool NetInput(std::string& summary) {
+    if (!g_inputVtable) {
+        auto pc = LocalController();
+        if (!pc) {
+            summary = "no local controller";
+            return false;
+        }
+        auto vtable = pc->vtable;
+        auto key = reinterpret_cast<uintptr_t>(vtable[kInputKeySlot]);
+        auto axis = reinterpret_cast<uintptr_t>(vtable[kInputAxisSlot]);
+        if (key != g.imageBase + kInputKeyRva || axis != g.imageBase + kInputAxisRva) {
+            char text[160];
+            std::snprintf(text, sizeof text, "unexpected input slots (key exe+0x%llx, axis exe+0x%llx); nothing patched",
+                          static_cast<unsigned long long>(key - g.imageBase),
+                          static_cast<unsigned long long>(axis - g.imageBase));
+            summary = text;
+            return false;
+        }
+        g_inputKeyOriginal = reinterpret_cast<InputKeyFn>(key);
+        g_inputAxisOriginal = reinterpret_cast<InputAxisFn>(axis);
+        if (!PatchSlot(vtable, kInputKeySlot, reinterpret_cast<void*>(&HookedInputKey)) ||
+            !PatchSlot(vtable, kInputAxisSlot, reinterpret_cast<void*>(&HookedInputAxis))) {
+            summary = "VirtualProtect on the controller vtable failed";
+            return false;
+        }
+        if (reinterpret_cast<uintptr_t>(vtable[kAddYawSlot]) == g.imageBase + kAddYawRva) {
+            g_addYawOriginal = reinterpret_cast<AddYawFn>(vtable[kAddYawSlot]);
+            PatchSlot(vtable, kAddYawSlot, reinterpret_cast<void*>(&HookedAddYaw));
+        }
+        if (reinterpret_cast<uintptr_t>(vtable[kUpdateRotationSlot]) == g.imageBase + kUpdateRotationRva) {
+            g_updateRotationOriginal = reinterpret_cast<UpdateRotationFn>(vtable[kUpdateRotationSlot]);
+            PatchSlot(vtable, kUpdateRotationSlot, reinterpret_cast<void*>(&HookedUpdateRotation));
+        }
+        if (reinterpret_cast<uintptr_t>(vtable[kProcessInputSlot]) == g.imageBase + kProcessInputRva) {
+            g_processInputOriginal = reinterpret_cast<ProcessInputFn>(vtable[kProcessInputSlot]);
+            PatchSlot(vtable, kProcessInputSlot, reinterpret_cast<void*>(&HookedProcessInput));
+        }
+        UObject* pawn = nullptr;
+        ue::GetProp(pc, "Pawn", pawn);
+        if (IsLive(pawn)) {
+            void* hooks[2] = {reinterpret_cast<void*>(&HookedLook<0>), reinterpret_cast<void*>(&HookedLook<1>)};
+            for (int i = 0; i < 2; ++i)
+                if (reinterpret_cast<uintptr_t>(pawn->vtable[kLookSlots[i]]) == g.imageBase + kLookRvas[i]) {
+                    g_lookOriginal[i] = reinterpret_cast<LookFn>(pawn->vtable[kLookSlots[i]]);
+                    PatchSlot(pawn->vtable, kLookSlots[i], hooks[i]);
+                }
+        }
+        for (auto& c : g_inputCounts)
+            if (IsLive(c.pc)) HookCameraInput(c.pc);
+        HookCameraInput(pc);
+        g_inputVtable = vtable;
+        summary = "InputKey/InputAxis wrapped on " + Name(pc->cls) + "; send input, then run net-input again";
+        return true;
+    }
+    int listed = 0;
+    for (auto& c : g_inputCounts) {
+        if (!c.pc) continue;
+        ++listed;
+        FRotator control{};
+        if (IsLive(c.pc)) ue::GetProp(c.pc, "ControlRotation", control);
+        auto bytes = reinterpret_cast<const uint8_t*>(c.pc);
+        auto view = reinterpret_cast<const float*>(bytes + 0x1fe4);
+        auto input = reinterpret_cast<const float*>(bytes + 0x530);
+        FRotator camera{};
+        UObject* manager = nullptr;
+        if (IsLive(c.pc)) ue::GetProp(c.pc, "PlayerCameraManager", manager);
+        if (IsLive(manager))
+            if (Call get(manager, "GetCameraRotation"); get.invoke()) camera = get.get<FRotator>("ReturnValue");
+        Log("research: input %s keys=%llu axes(nonzero)=%llu updateRotation=%llu control=(%.1f %.1f %.1f) "
+            "camera=(%.1f %.1f %.1f) view+0x1fe4=(%.1f %.1f %.1f) rotationInput+0x530=(%.2f %.2f %.2f) "
+            "processPlayerInput=%llu (dirty at entry %llu) inputYawScale=%.3f inputPitchScale=%.3f addYaw=%.3f "
+            "rotationInputYaw=%.3f rotationDelta=%.3f first presses:%s",
+            Describe(c.pc).c_str(), static_cast<unsigned long long>(c.keys), static_cast<unsigned long long>(c.axes),
+            static_cast<unsigned long long>(c.rotations), control.pitch, control.yaw, control.roll, camera.pitch,
+            camera.yaw, camera.roll, view[0], view[1], view[2], input[0], input[1], input[2],
+            static_cast<unsigned long long>(c.processes), static_cast<unsigned long long>(c.dirtyAtProcess),
+            *reinterpret_cast<const float*>(bytes + 0x53c), *reinterpret_cast<const float*>(bytes + 0x540), c.addYaw,
+            c.rotationInputYaw, c.rotationDelta, c.firstKeys.c_str());
+        c.addYaw = c.rotationInputYaw = c.rotationDelta = 0;
+        c.keys = c.axes = c.rotations = c.processes = c.dirtyAtProcess = 0;
+        c.firstKeys.clear();
+        // BendCamManager state used by UpdateRotation (0x45d610): camera stack (+0x35d0/+0x35d8), the fixed
+        // cameras at +0x3768..+0x3780 (active when +0x34 bit 0), and the flags at +0x35b0.
+        if (IsLive(manager)) {
+            auto cm = reinterpret_cast<const uint8_t*>(manager);
+            auto name = [](const void* p) {
+                auto o = static_cast<UObject*>(const_cast<void*>(p));
+                return IsLive(o) ? Name(o->cls) : std::string(p ? "?" : "null");
+            };
+            std::string cams;
+            auto stack = *reinterpret_cast<void* const*>(cm + 0x35d0);
+            auto count = *reinterpret_cast<const int32_t*>(cm + 0x35d8);
+            for (int32_t i = 0; i < count && i < 6 && ReadableMemory(stack, (i + 1) * sizeof(void*)); ++i)
+                cams += " " + name(static_cast<void* const*>(stack)[i]) + "@" +
+                        std::to_string(reinterpret_cast<uintptr_t>(static_cast<void* const*>(stack)[i]));
+            std::string fixed;
+            for (int off = 0x3768; off <= 0x3780; off += 8) {
+                auto cam = *reinterpret_cast<const uint8_t* const*>(cm + off);
+                fixed += " " + name(cam);
+                if (cam && ReadableMemory(cam + 0x34, 1)) fixed += (cam[0x34] & 1) ? "(on)" : "(off)";
+            }
+            Log("research: camera %s of %s flags+0x35b0=0x%02x stack(%d):%s fixed:%s",
+                Name(manager->cls).c_str(), Name(c.pc).c_str(), cm[0x35b0], count, cams.c_str(), fixed.c_str());
+        }
+    }
+    for (auto& c : g_lookCounts) {
+        if (!c.pawn) continue;
+        auto bits = *reinterpret_cast<const uint32_t*>(reinterpret_cast<const uint8_t*>(c.pawn) + 0x350);
+        Log("research: look %s look0 calls=%llu nonzero=%llu sum=%.3f look1 calls=%llu nonzero=%llu sum=%.3f "
+            "bInputEnabled(+0x350 bit4)=%u",
+            Describe(c.pawn).c_str(), static_cast<unsigned long long>(c.calls[0]),
+            static_cast<unsigned long long>(c.nonzero[0]), c.sum[0], static_cast<unsigned long long>(c.calls[1]),
+            static_cast<unsigned long long>(c.nonzero[1]), c.sum[1], (bits >> 4) & 1);
+        c.calls[0] = c.calls[1] = c.nonzero[0] = c.nonzero[1] = 0;
+        c.sum[0] = c.sum[1] = 0;
+    }
+    for (auto& c : g_cameraInputs) {
+        if (!c.camera) continue;
+        Log("research: camera input %llu calls=%llu sum=(%.3f %.3f)", static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(c.camera)), static_cast<unsigned long long>(c.calls),
+            c.sum[0], c.sum[1]);
+        c.calls = 0;
+        c.sum[0] = c.sum[1] = 0;
+    }
+    // ProcessPlayerInput's static input stack (TArray<TWeakObjectPtr<UInputComponent>> at 0x4d36680), bottom first.
+    struct WeakPtr {
+        int32_t index, serial;
+    };
+    struct StackArray {
+        WeakPtr* data;
+        int32_t num, max;
+    };
+    auto stack = reinterpret_cast<const StackArray*>(g.imageBase + 0x4d36680);
+    Log("research: input stack has %d entries", stack->num);
+    for (int32_t i = 0; i < stack->num && i < 16; ++i) {
+        auto component = ObjectAt(stack->data[i].index);
+        Log("research: input stack[%d] %s outer=%s", i, Describe(component).c_str(),
+            IsLive(component) ? Describe(component->outer).c_str() : "?");
+    }
+    for (auto& c : g_inputCounts) {
+        if (!IsLive(c.pc)) continue;
+        auto bytes = reinterpret_cast<const uint8_t*>(c.pc);
+        Log("research: input %s dirty(+0x5d8)=%u currentInputStack(+0x5d0)=%d", Name(c.pc).c_str(), bytes[0x5d8],
+            *reinterpret_cast<const int32_t*>(bytes + 0x5d0));
+    }
+    summary = std::to_string(listed) + " controllers received input since the last net-input (counters reset)";
+    return true;
+}
+
+bool NetWalk(bool remote, bool consume, std::string& summary) {
+    auto pc = LocalController();
+    if (remote) {
+        // Host side: walk the pawn of a controller that belongs to a remote connection.
+        UObject* found = nullptr;
+        auto pcClass = FindClass("PlayerController");
+        for (int32_t i = 0, n = ObjectCount(); pcClass && !found && i < n; ++i) {
+            auto obj = ObjectAt(i);
+            if (IsLive(obj) && IsLive(obj->cls) && !IsDefaultOrArchetype(obj) && IsA(obj, pcClass) && obj != pc &&
+                IsLive(NetConnectionOf(obj)))
+                found = obj;
+        }
+        pc = found;
+    }
+    UObject* pawn = nullptr;
+    if (pc) ue::GetProp(pc, "Pawn", pawn);
+    if (!IsLive(pawn)) {
+        summary = remote ? "no remote controller with a pawn" : "the local controller has no pawn";
+        return false;
+    }
+    UObject* walkMovement = nullptr;
+    ue::GetProp(pawn, "CharacterMovement", walkMovement);
+    WrapConsume(walkMovement);
+    g_walkConsume = consume;
+    WalkReport(pawn, "start");
+    g_walkNextReport = Seconds() + 0.5;
+    g_walkFrom = {};
+    Call where(pawn, "K2_GetActorLocation");
+    if (where.invoke()) g_walkFrom = where.get<FVector>("ReturnValue");
+    g_walkPawn = pawn;
+    g_walkSteps = 0;
+    g_walkUntil = Seconds() + 3.0;
+    char text[200];
+    std::snprintf(text, sizeof text, "walking %s forward for 3 s from (%.0f %.0f %.0f); progress is logged",
+                  Name(pawn).c_str(), g_walkFrom.x, g_walkFrom.y, g_walkFrom.z);
+    summary = text;
+    return true;
+}
+
+void WalkStep(UObject* obj, UObject* fn) {
+    // One-shot caller stacks for the client movement RPCs locate Bend's CMC tick path (ReplicateMoveToServer).
+    // Gated on the engine net session so the name lookups never run during early startup.
+    if (g_engineOwnsP2P && fn) {
+        static int serverMove = FindNameIndex("ServerMove");
+        static int serverMoveDual = FindNameIndex("ServerMoveDual");
+        static bool loggedMove = false, loggedDual = false;
+        bool isMove = serverMove > 0 && fn->name.index == serverMove;
+        bool isDual = serverMoveDual > 0 && fn->name.index == serverMoveDual;
+        if ((isMove && !loggedMove) || (isDual && !loggedDual)) {
+            (isMove ? loggedMove : loggedDual) = true;
+            Log("research: first %s on %s (vtable exe+0x%llx) stack:%s", Name(fn).c_str(), Describe(obj).c_str(),
+                static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(obj->vtable) - g.imageBase),
+                ExeStack().c_str());
+        }
+    }
+    if (!g_walkPawn || obj != g_walkPawn) return;
+    static int receiveTick = FindNameIndex("ReceiveTick");
+    if (!fn || fn->name.index != receiveTick) return;
+    if (!IsLive(g_walkPawn)) {
+        g_walkPawn = nullptr;
+        return;
+    }
+    if (Seconds() >= g_walkUntil) {
+        FVector to{};
+        Call where(g_walkPawn, "K2_GetActorLocation");
+        if (where.invoke()) to = where.get<FVector>("ReturnValue");
+        Log("research: net-walk: %llu steps on %s; location (%.0f %.0f %.0f) -> (%.0f %.0f %.0f) Role=%s",
+            static_cast<unsigned long long>(g_walkSteps), Name(g_walkPawn).c_str(), g_walkFrom.x, g_walkFrom.y,
+            g_walkFrom.z, to.x, to.y, to.z, ByteProp(g_walkPawn, "Role").c_str());
+        WalkReport(g_walkPawn, "end");
+        g_walkPawn = nullptr;
+        return;
+    }
+    if (Seconds() >= g_walkNextReport) {
+        g_walkNextReport = Seconds() + 0.5;
+        WalkReport(g_walkPawn, "step");
+    }
+    Call forward(g_walkPawn, "GetActorForwardVector");
+    if (!forward.invoke()) return;
+    // APawn::ControlInputVector sits at +0x390 on this build (APawn::AddMovementInput 0x2a52020).
+    auto control = reinterpret_cast<const FVector*>(reinterpret_cast<const uint8_t*>(g_walkPawn) + 0x390);
+    FVector before = *control;
+    if (Call(g_walkPawn, "AddMovementInput")
+            .set("WorldDirection", forward.get<FVector>("ReturnValue"))
+            .set("ScaleValue", 1.f)
+            .set("bForce", true)
+            .invoke())
+        ++g_walkSteps;
+    // WalkConsume=1: run APawn::ConsumeMovementInputVector ourselves so Bend's CMC tick sees LastControlInputVector.
+    if (g_walkConsume) Call(g_walkPawn, "ConsumeMovementInputVector").invoke();
+    if (g_walkSteps == 1 || g_walkSteps == 40) {
+        UObject* movement = nullptr;
+        UObject* fromCall = nullptr;
+        ue::GetProp(g_walkPawn, "CharacterMovement", movement);
+        if (Call get(g_walkPawn, "GetMovementComponent"); get.invoke()) fromCall = get.get<UObject*>("ReturnValue");
+        UObject* pawnOwner = nullptr;
+        UObject* characterOwner = nullptr;
+        UObject* updated = nullptr;
+        uintptr_t addInput = 0, tickComponent = 0;
+        if (IsLive(movement)) {
+            ue::GetProp(movement, "PawnOwner", pawnOwner);
+            ue::GetProp(movement, "CharacterOwner", characterOwner);
+            ue::GetProp(movement, "UpdatedComponent", updated);
+            addInput = reinterpret_cast<uintptr_t>(movement->vtable[0x528 / 8]) - g.imageBase;
+            tickComponent = reinterpret_cast<uintptr_t>(movement->vtable[0x1e8 / 8]) - g.imageBase;
+        }
+        Log("research: net-walk step %llu %s ControlInputVector (%.2f %.2f %.2f) -> (%.2f %.2f %.2f) "
+            "GetMovementComponent=%s CharacterMovement=%s PawnOwner=%s CharacterOwner=%s UpdatedComponent=%s "
+            "AddInputVector=exe+0x%llx slot61=exe+0x%llx IsMoveInputIgnored=%s",
+            static_cast<unsigned long long>(g_walkSteps), Name(g_walkPawn).c_str(), before.x, before.y, before.z,
+            control->x, control->y, control->z, Describe(fromCall).c_str(), Describe(movement).c_str(),
+            Describe(pawnOwner).c_str(), Describe(characterOwner).c_str(), Describe(updated).c_str(),
+            static_cast<unsigned long long>(addInput), static_cast<unsigned long long>(tickComponent),
+            CallBool(g_walkPawn, "IsMoveInputIgnored").c_str());
+    }
 }
 
 bool NetConnect(const std::string& host, std::string& summary) {
@@ -1026,6 +2251,7 @@ bool NetConnect(const std::string& host, std::string& summary) {
     Log("research: %s", patched.c_str());
     if (!InstallLoadMapHook(summary)) return false;
     if (!InstallHandleClientPlayerHook(summary)) return false;
+    if (g_pawnReplication) RestoreCharacterReplication();
     g_engineOwnsP2P = true;
     std::wstring command = L"open ";
     for (auto c : host) {
@@ -1047,11 +2273,51 @@ void TraceStart() {
 
 bool Tracing() { return g_tracing; }
 
+void WatchJoinedController() {
+    if (!g_watchedController) return;
+    if (!IsLive(g_watchedController)) {
+        Log("research: watch +%.3fs joined controller is gone", Seconds() - g_traceStart);
+        g_watchedController = nullptr;
+        return;
+    }
+    UObject* playerState = nullptr;
+    UObject* pawn = nullptr;
+    ue::GetProp(g_watchedController, "PlayerState", playerState);
+    ue::GetProp(g_watchedController, "Pawn", pawn);
+    auto describe = [](UObject* v) { return v ? (IsLive(v) ? FullName(v) : std::string("<stale>")) : std::string("null"); };
+    if (playerState != g_watchedPlayerState)
+        Log("research: watch +%.3fs %s.PlayerState %s -> %s", Seconds() - g_traceStart, Name(g_watchedController).c_str(),
+            describe(g_watchedPlayerState).c_str(), describe(playerState).c_str());
+    if (pawn != g_watchedPawn)
+        Log("research: watch +%.3fs %s.Pawn %s -> %s Role=%s RemoteRole=%s", Seconds() - g_traceStart,
+            Name(g_watchedController).c_str(), describe(g_watchedPawn).c_str(), describe(pawn).c_str(),
+            IsLive(pawn) ? ByteProp(pawn, "Role").c_str() : "-", IsLive(pawn) ? ByteProp(pawn, "RemoteRole").c_str() : "-");
+    uint8_t role = 0;
+    if (IsLive(pawn) && ue::GetProp(pawn, "Role", role) && pawn == g_watchedPawn && role != g_watchedPawnRole)
+        Log("research: watch +%.3fs %s.Role %u -> %u", Seconds() - g_traceStart, Name(pawn).c_str(), g_watchedPawnRole, role);
+    g_watchedPawnRole = role;
+    g_watchedPlayerState = playerState;
+    g_watchedPawn = pawn;
+}
+
 void TraceEvent(UObject* obj, UObject* fn, void* parms) {
     if (!g_tracing || !obj || !fn) return;
+    WatchJoinedController();
     if (g_trace.size() >= 200000) return;
-    auto& entry = g_trace[{obj->cls, fn}];
-    if (entry.count++ == 0) entry.object = IsLive(obj) ? FullName(obj) : "<stale>";
+    auto [perObject, inserted] = g_tracePerObject.try_emplace(fn, false);
+    if (inserted && IsLive(fn)) {
+        auto name = Name(fn);
+        perObject->second = name.starts_with("OnRep_") || name == "ReceiveBeginPlay" || name == "ClientRestart";
+    }
+    auto& entry = g_trace[{obj->cls, fn, perObject->second ? obj : nullptr}];
+    if (entry.count++ == 0) {
+        entry.object = IsLive(obj) ? FullName(obj) : "<stale>";
+        static UObject* playerStateClass = FindClass("PlayerState");
+        static UObject* controllerClass = FindClass("Controller");
+        if (perObject->second && IsLive(obj) &&
+            ((playerStateClass && IsA(obj, playerStateClass)) || (controllerClass && IsA(obj, controllerClass))))
+            Log("research: trace +%.3fs first %s on %s", Seconds() - g_traceStart, Name(fn).c_str(), Name(obj).c_str());
+    }
     if (entry.samples.size() >= 3 || !parms || !IsLive(fn)) return;
     std::string sample;
     int count = 0;
@@ -1081,8 +2347,8 @@ bool TraceStop(const std::wstring& path, std::string& summary) {
         rows.emplace_back(std::move(name), &entry);
     }
     std::sort(rows.begin(), rows.end(), [](auto& a, auto& b) { return a.first < b.first; });
-    std::fprintf(file, "# %.1f s, %d unique class.function pairs\n", Seconds() - g_traceStart,
-                 static_cast<int>(rows.size()));
+    std::fprintf(file, "# %.1f s, %d unique class.function pairs (OnRep_*, ReceiveBeginPlay, ClientRestart: per object)\n",
+                 Seconds() - g_traceStart, static_cast<int>(rows.size()));
     for (auto& [name, entry] : rows) {
         std::fprintf(file, "%8llu %s  on %s\n", static_cast<unsigned long long>(entry->count), name.c_str(),
                      entry->object.c_str());

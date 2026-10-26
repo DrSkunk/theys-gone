@@ -327,6 +327,10 @@ Building, testing, the simulated partner, debug tools and the release process
 are covered in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md). Contributions are
 welcome; see [CONTRIBUTING.md](CONTRIBUTING.md).
 
+The save file research and the save editor (CLI and browser) live in the
+separate [days-gone-save-editor](https://github.com/drskunk/days-gone-save-editor)
+repository.
+
 ## Legal
 
 Days Gone is © Sony Interactive Entertainment, developed by Bend Studio. This

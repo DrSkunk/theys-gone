@@ -9,8 +9,8 @@ import tempfile
 import time
 
 COMMANDS = (
-    "inspect", "begin", "end", "status", "god-on", "god-off", "spawn-single",
-    "spawn-pack", "cleanup", "probe-player", "probe-enemy", "time-shift",
+    "inspect", "begin", "end", "status", "continue-title", "ui-probe", "god-on", "god-off", "spawn-single",
+    "spawn-pack", "cleanup", "probe-player", "probe-enemy", "enemy-health-all-on", "kill-owned-enemy", "time-shift",
     "weather-next", "dump-reflection", "dump-objects", "trace-on", "trace-off",
     "ride-test",
     "reload-save",
@@ -22,6 +22,11 @@ COMMANDS = (
     "net-connect",
     "net-possess",
     "net-takeover",
+    "net-diag",
+    "net-auto",
+    "net-nudge",
+    "net-input",
+    "net-walk",
 )
 
 
