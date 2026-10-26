@@ -4332,9 +4332,8 @@ bool CinematicActive() {
 }
 
 // Story progress: every job the job manager knows (story and side jobs, in the game's order) with its
-// completion, activity and state, plus active or unlocked story missions and the episode. Job states
-// change when a job starts, ends or is unlocked, not at each objective, so mid-mission checkpoints of the
-// host do not reload the guest.
+// completion, activity, state and objective index, plus active or unlocked story missions and the episode.
+// Persisted objective transitions participate in the existing host-save resync path.
 StorySignature ReadStory() {
     struct Array { UObject** data; int32_t count, capacity; };
     auto jobs = FindLive("BendJobManager");
@@ -4350,9 +4349,12 @@ StorySignature ReadStory() {
         done.set("JobID", job);
         active.set("JobID", job);
         uint8_t state = 0;
+        int32_t objective = -1;
         GetProp(job, "JobCurrentState", state);
+        GetProp(job, "CurrentJobObjectiveIndex", objective);
         bool isActive = active.invoke() && active.get<bool>("ReturnValue");
-        hasher.Add(Name(job), done.invoke() && done.get<bool>("ReturnValue"), static_cast<uint8_t>(state | (isActive ? 0x80 : 0)));
+        hasher.Add(Name(job), done.invoke() && done.get<bool>("ReturnValue"),
+                   static_cast<uint8_t>(state | (isActive ? 0x80 : 0)), objective);
     }
     Call episode(mission, "GetCurrentEpisode"), datas(mission, "GetAllActiveOrUnlockedMissionDatas");
     if (!episode.invoke()) return {};
@@ -4449,7 +4451,7 @@ bool DivergeStory() {
 struct StoryState {
     StorySignature mine;
     double sampledAt = -1e9, sentAt = -1e9, mismatchSince = -1;
-    uint32_t savedSignature = 0, saveSerial = 0, lastResynced = 0, loggedHost = 0;
+    uint32_t savedSignature = 0, saveSerial = 0, sequence = 0, lastResynced = 0, loggedHost = 0;
     bool savePending = false, haveHost = false;
     StoryPacket host{};
 } g_story;
@@ -4457,6 +4459,9 @@ struct StoryState {
 void ReceiveStory(const char* data, int len) {
     StoryPacket packet;
     if (!DecodeStory(data, len, packet) || packet.session != g_peer.session || !g_peer.session) return;
+    if (g_story.haveHost && packet.session == g_story.host.session &&
+        !StorySequenceIsNewer(packet.sequence, g_story.host.sequence))
+        return;
     g_story.host = packet;
     g_story.haveHost = true;
 }
@@ -4492,7 +4497,8 @@ void UpdateStory(double now) {
         SampleStory(now);
         if (!g_story.mine.valid) return;
         g_story.sentAt = now;
-        auto packet = EncodeStory(g_session, g_story.mine, g_story.savedSignature, g_story.saveSerial);
+        if (++g_story.sequence == 0) ++g_story.sequence;
+        auto packet = EncodeStory(g_session, g_story.mine, g_story.savedSignature, g_story.saveSerial, g_story.sequence);
         g_net->SendRaw(&packet, sizeof packet);
         return;
     }

@@ -515,12 +515,16 @@ over the Steam transport. The host shares its last save on disk.
 
 ### Story sync (`DMST`)
 
-Each side samples a signature of `BendJobManager`'s jobs and missions (which
-are complete, which are known) every 3 s ([`story.hpp`](../src/coop/story.hpp)).
-The host sends its live signature, the signature at its last save and a save
-serial every second. When a guest's signature differs from the host's saved
-one for 6 s, and the host has saved this session, the guest requests the
-host's save again and reloads onto it. Verified live with `story-diverge`.
+Each side samples a signature of `BendJobManager`'s jobs and missions every
+3 s, including each job's objective index
+([`story.hpp`](../src/coop/story.hpp)). The host sends its live signature, the
+signature at its last save, a save serial and a monotonically sequenced packet
+every second; the guest ignores duplicate or stale packets. When a guest's
+signature differs from the host's saved one for 6 s, and the host has saved
+this session, the guest requests the host's save again and reloads onto it.
+This syncs persisted objective transitions through the save-resync fallback;
+direct idempotent objective application is not implemented yet. Verified live
+with `story-diverge`; paired objective-resync validation is pending.
 
 ## Shared enemies
 

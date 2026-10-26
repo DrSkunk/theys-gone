@@ -2873,6 +2873,15 @@ has a spawned script actor such as `IND_Jobscript_C_0`. The per-job
 | `DebugCompleteAllJobObjectives IZ_CrazyWillies-JobData` | Returned true, no state change |
 | `DebugCompleteAllJobObjectives IND-JobData` | Returned true, no state change: the `Debug*` job functions appear to be compiled out of this shipping build |
 | `IND_Jobscript_C.MedBoxObtained` | Objective 5 → 6 immediately, old objective removed from the HUD, new objective "Take sterile bandages to Boozer" with a 440 m waypoint, and the game autosaved |
+| `IND_Jobscript_C.UpdateJobObjectiveStatusAndProgression(ObjIdentifier=MedBoxObtained, ObjState=3)` | No state change; `MedBoxObtained` is an event name, not a confirmed objective identifier, so this does not show whether the generic updater works |
+| `IND_Jobscript_C.CompleteTheJob` | Returned true; IND changed from active/incomplete/state 2 to inactive/complete/state 4, and tracking moved to `CA_AZ_01-JobData` |
+
+After adding objective indices to the story hash, the host-only live check
+reported signature `efeda779` at IND objective 5. Calling
+`MedBoxObtained` advanced it to objective 6, triggered a save, and changed the
+reported signature to `94993472`. This verifies host-side detection and
+persisted-signature capture; the guest's save-resync reaction still needs a
+paired test.
 
 **Observation limits.** With `mission-watch-on` active through the whole
 transition, the ProcessEvent filter logged **zero** mission calls. The
@@ -2884,18 +2893,23 @@ of `CurrentJobObjectiveIndex`, `JobCurrentState` and completion did catch the
 change, so polling is the reliable host-side observer.
 
 **Implications for mission sync.**
-- Host side: poll job rows (done, active, state, objective index) and the
-  tracked job, and send changes as sequenced events, keeping the signature and
-  save resync as the fallback.
+- Host side: `ReadStory` now includes each job's objective index in the
+  signature. The host's periodic `DMST` packet is version 2 and sequenced; the
+  guest rejects duplicate/stale sequence numbers. When a transition is saved,
+  the existing six-second reconciliation detects the objective-aware saved
+  signature and reloads the host save. This is save-backed synchronization,
+  not immediate direct application; paired objective-resync validation remains
+  necessary.
 - Guest side: the job scripts expose the generic, Blueprint-callable primitives
   `UpdateJobObjectiveStatusAndProgression(Name ObjIdentifier, Byte ObjState)`,
   `GoBackToJobObjectiveStage(Int)`, `CompleteTheJob` and `FailTheJob`, plus
-  `BP_JobManager_C.StartJobAtID`/`UnlockJobAtID`. Job-specific events such as
-  `MedBoxObtained` work but do not generalise.
-- Next experiment: read the objective IDs from `CurrentJobObjectiveList` and
-  test `UpdateJobObjectiveStatusAndProgression` (now that `mission-act`
-  accepts Name parameters) as the generic guest apply, then `CompleteTheJob`
-  for a whole job.
+  `BP_JobManager_C.StartJobAtID`/`UnlockJobAtID`. `CompleteTheJob` is verified
+  for a full job transition. The generic objective updater still needs testing
+  with a real objective ID and valid state; `CurrentJobObjectiveList` IDs
+  remain undiscovered.
+- Next: pair-test the objective-aware save resync; then identify objective IDs
+  and test generic guest application before replacing save reloads with
+  sequenced, idempotent game-thread state application.
 
 **Tooling fixes found during the run.** `Parameters()` printed Blueprint
 locals that lie past `ParmsSize`, which read outside the caller's buffer; it
