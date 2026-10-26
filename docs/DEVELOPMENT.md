@@ -144,11 +144,19 @@ poetry run python tools/debug_control.py --game-dir "/path/to/BendGame/Binaries/
 | `net-input` | Experimental: first run wraps `PlayerController` InputKey/InputAxis, UpdateRotation, AddYawInput, ProcessPlayerInput, the player pawn look handlers and the camera's rotation input; later runs log and reset per-controller counts, rotations, the static input stack and camera manager state |
 | `net-walk` | Experimental: feed `AddMovementInput` to the local controller's pawn every frame for 3 s and log the distance moved plus movement telemetry (velocity, acceleration, desiredSpeed, root motion) every 0.5 s. With `[Research] WalkTarget=remote` the host walks the pawn of the remote guest's controller instead |
 | `trace-on` / `trace-off` | Record every distinct ProcessEvent call with sample parameters to `TheysGone-trace.txt` (`OnRep_*`, `ReceiveBeginPlay` and `ClientRestart` are counted per object) |
+| `mission-watch-on` / `mission-watch-off` | Mission lab: log mission/job ProcessEvent calls with parameter values, poll job state (done, active, state, objective index, tracked job, episode) every 0.5 s and log each change; `off` prints per-function call counts |
+| `mission-state` | Mission lab: write every job and mission row, the tracked job, the episode and the active job objects with their properties and functions to `TheysGone-missions.txt` |
+| `mission-act` | Mission lab, **changes the story**: call one mission function from `--arg "<Function>\|<Class>.<Function> [ObjectName\|-] [Param=Value ...]"` and log the return value and the immediate state change. Requires `[Research] MissionActions=1`; back up saves first, because the game may autosave the result |
 
-`hit-enemy`, `story-*`, `reload-save`, `ride-test`, `dump-*`, `net-*` and `trace-*`
-work without `begin`. The research commands only read and log, except the
-experimental `net-*` commands, which drive the engine's own networking; see
-[REPLICATION-RESEARCH.md](REPLICATION-RESEARCH.md).
+`hit-enemy`, `story-*`, `reload-save`, `ride-test`, `dump-*`, `net-*`, `trace-*`
+and `mission-*` work without `begin`. The research commands only read and log, except
+`mission-act` and the experimental `net-*` commands, which drive the engine's own
+networking; see [REPLICATION-RESEARCH.md](REPLICATION-RESEARCH.md).
+
+`mission-act` looks the function up on the live `BendJobManager`, then
+`BendGameMission`, unless a class is named (`IND_Jobscript_C.MedBoxObtained`).
+`ObjectName` fills the first object parameter by exact object name (for example
+`IND-JobData`). Named parameters may be Bool, Byte, Int, Float, Name or Object.
 
 The experimental `net-*` path reads these `[Research]` options from
 `TheysGone.ini` at startup (all off by default):

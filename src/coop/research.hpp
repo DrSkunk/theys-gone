@@ -106,4 +106,18 @@ bool Tracing();
 // Called from the ProcessEvent hook on the game thread.
 void TraceEvent(ue::UObject* obj, ue::UObject* fn, void* parms);
 
+// Mission lab. The ProcessEvent hook only sees events and native-to-script calls, not Blueprint-internal
+// calls, so the watch also samples every job's completion/activity/state twice a second and logs diffs.
+void MissionWatch(bool on);
+bool MissionWatching();
+void MissionWatchEvent(ue::UObject* obj, ue::UObject* fn, void* parms); // ProcessEvent hook, before the call
+void MissionWatchTick(double now);
+// Writes the job/mission managers' functions, every job's state, the active jobs' properties and the live
+// job-script objects to path.
+bool MissionState(const std::wstring& path, std::string& summary);
+// Invokes one function of BendJobManager/BendGameMission (or "<Class>.<Function>" on a live instance of that
+// class): spec = "<Function> [ObjectName|-] [Param=Value ...]". The first object parameter takes ObjectName;
+// Bool/Byte/Int/Float/Object parameters can be named. Logs the return value and the immediate state diff.
+bool MissionAct(const std::string& spec, bool allowed, std::string& summary);
+
 } // namespace coop::research

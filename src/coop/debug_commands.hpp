@@ -9,7 +9,7 @@ enum class DebugCommand {
     unknown, inspect, begin, end, status, continueTitle, uiProbe, godOn, godOff, spawnSingle, spawnPack,
     cleanup, probePlayer, probeEnemy, enemyHealthAllOn, killOwnedEnemy, timeShift, weatherNext, dumpReflection, dumpObjects,
     traceOn, traceOff, rideTest, reloadSave, storyProbe, storyDiverge, hitEnemy, netProbe, netListen, netConnect, netPossess, netTakeover,
-    netDiag, netAuto, netNudge, netInput, netWalk
+    netDiag, netAuto, netNudge, netInput, netWalk, missionWatchOn, missionWatchOff, missionState, missionAct
 };
 
 inline DebugCommand ParseDebugCommand(std::string_view text) {
@@ -49,6 +49,10 @@ inline DebugCommand ParseDebugCommand(std::string_view text) {
     if (text == "net-nudge") return DebugCommand::netNudge;
     if (text == "net-input") return DebugCommand::netInput;
     if (text == "net-walk") return DebugCommand::netWalk;
+    if (text == "mission-watch-on") return DebugCommand::missionWatchOn;
+    if (text == "mission-watch-off") return DebugCommand::missionWatchOff;
+    if (text == "mission-state") return DebugCommand::missionState;
+    if (text == "mission-act") return DebugCommand::missionAct;
     return DebugCommand::unknown;
 }
 
