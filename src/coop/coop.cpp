@@ -4459,9 +4459,7 @@ struct StoryState {
 void ReceiveStory(const char* data, int len) {
     StoryPacket packet;
     if (!DecodeStory(data, len, packet) || packet.session != g_peer.session || !g_peer.session) return;
-    if (g_story.haveHost && packet.session == g_story.host.session &&
-        !StorySequenceIsNewer(packet.sequence, g_story.host.sequence))
-        return;
+    if (g_story.haveHost && !StoryPacketIsNewer(packet, g_story.host)) return;
     g_story.host = packet;
     g_story.haveHost = true;
 }
