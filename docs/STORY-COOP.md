@@ -215,8 +215,12 @@ camp rally).
 2. **Passenger seat conflicts (P).** Lisa (`LOL2`, `RBC`) and Sarah (`WNG`,
    `TSR`, `RFS1`/`RFS2`/`RFS4`, `CLO2`) ride on Deacon's bike, and in `OBR`
    Deacon rides on Boozer's. While a story NPC uses the host's pillion, the
-   guest must not be offered *Ride with*; disable `AllowPassenger` on the host
-   during P missions. Other ride-alongs use the companion's own bike
+   guest must not be offered *Ride with*. **Implemented:** a driver whose
+   running mission has the pillion flag stops offering the seat
+   ([`mission_policy.hpp`](../src/coop/mission_policy.hpp)); checked on one PC
+   with `OBR`, not yet in a paired session. `BIP`, `MBF1`, `CLO5` and `IYK`
+   are flagged from cutscene bikes and the walkthrough, not from objective
+   text. Other ride-alongs use the companion's own bike
    (`boozerbike`, `rikkibike`, `skizzobike`, `mikebike`, `kouribike` in the
    cutscenes), so the guest on their own bike fits. Scripted rides such as
    `TLL1` (`BP_BikeSpeedController`) pace to the host only.
@@ -255,12 +259,15 @@ camp rally).
 
 ## 5. Next steps
 
-1. Read `BendGameMission.ActiveMissionData` during a mission (it was null at
-   the title menu) and confirm it names the running mission.
-2. Add the per-mission policy table (code → categories above) as a pure
-   header next to `story.hpp`, covered by `tools/test_protocol.cpp`, and have
-   the host send the active mission code so both peers apply the same rules.
-3. Live-test the stealth risk (§4.3) first: it is the only gap that can fail
-   the host's mission.
-4. Implement the passenger-seat rule (§4.2): it is small and avoids a broken
-   state during ten missions.
+Done: `BendGameMission.ActiveMissionData` names the running mission (checked
+by starting `OBR`); the per-mission table is
+[`mission_policy.hpp`](../src/coop/mission_policy.hpp), covered by
+`tools/test_protocol.cpp`; the passenger-seat rule (§4.2) uses it.
+
+1. Validate the passenger-seat rule in a paired session.
+2. Live-test the stealth risk (§4.3): it is the only gap that can fail the
+   host's mission. If confirmed, limit proxy awareness in `kMissionStealth`
+   missions.
+3. Send the host's active mission code to the guest (a protocol change), so
+   the guest can apply the flashback, capture and cutscene policies.
+4. Stream companions and mission vehicles as display-only replicas (§4.1).

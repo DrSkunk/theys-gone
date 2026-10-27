@@ -8,6 +8,7 @@
 #include "../src/coop/enemy.hpp"
 #include "../src/coop/gear.hpp"
 #include "../src/coop/story.hpp"
+#include "../src/coop/mission_policy.hpp"
 #include "../src/coop/steam_abi.hpp"
 #include "../src/coop/save_policy.hpp"
 #include "../src/coop/savesync.hpp"
@@ -616,6 +617,34 @@ void TestEnemyHit() {
     assert(coop::AimDistanceToBody(start, up, feet) < 0);
 }
 
+void TestMissionPolicy() {
+    assert(coop::MissionCode("OBR-MissionData") == "OBR");
+    assert(coop::MissionCode("TLL2-MissionData") == "TLL2");
+    assert(coop::MissionCode("DRR-drifter_run") == "DRR");
+    assert(coop::MissionCode("DLC_Combat_GGA_MissionData").empty());
+    assert(coop::MissionCode("").empty());
+    assert(coop::MissionFlags("OBR") & coop::kMissionPillion);
+    assert(coop::MissionFlags("AHB5") & coop::kMissionCapture);
+    assert(coop::MissionFlags("TLL2") & coop::kMissionStealth);
+    assert(coop::MissionFlags("HAT") == (coop::kMissionEscort | coop::kMissionSetPiece));
+    assert(coop::MissionFlags("") == 0 && coop::MissionFlags("CLMX_Arcade_Easy") == 0 && coop::MissionFlags("OB") == 0);
+    // Codes are unique and the table covers the 95 story missions of acts 2-7.
+    size_t count = 0;
+    for (const auto& a : coop::kMissionPolicies) {
+        ++count;
+        assert(!a.code.empty() && a.code.size() <= 4);
+        size_t same = 0;
+        for (const auto& b : coop::kMissionPolicies) same += a.code == b.code;
+        assert(same == 1);
+    }
+    assert(count == 95);
+    assert(coop::PassengerSeatOffered(true, 0));
+    assert(coop::PassengerSeatOffered(true, coop::MissionFlags("HAT")));
+    assert(!coop::PassengerSeatOffered(true, coop::MissionFlags("RFS2")));
+    assert(!coop::PassengerSeatOffered(false, 0));
+    std::puts("mission policy ok");
+}
+
 void TestStory() {
     static_assert(sizeof(coop::StoryPacket) == 32, "story wire size");
     coop::StoryHasher a, b, c;
@@ -1116,6 +1145,7 @@ int main() {
     TestEnemy();
     TestGear();
     TestStory();
+    TestMissionPolicy();
     TestObjectiveProgress();
     TestEnemyHit();
     using coop::DebugCommand;

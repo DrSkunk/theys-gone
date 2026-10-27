@@ -135,7 +135,7 @@ poetry run python tools/debug_control.py --game-dir "/path/to/BendGame/Binaries/
 | `god-on` / `god-off` | Make the player invulnerable / vulnerable |
 | `spawn-single` | Spawn one swarmer with its native AI, about 6 m ahead |
 | `spawn-pack` | Spawn eight independent swarmers (at most 16 owned at a time) |
-| `status` | Log player and enemy health, controllers and movement |
+| `status` | Log player and enemy health, controllers and movement, and the running story mission code and policy flags |
 | `continue-title` | In-game bot: run the visible title splash's native button animation, or invoke Continue only when it is the first visible title-menu row |
 | `ui-probe` | Log native startup/menu objects, visibility, option counts, first label, cached versus freshly queried save availability, and every `Image` in an on-screen widget with its brush texture; does not activate a menu action |
 | `probe-player` / `probe-enemy` | Apply 5 base damage and check the health change |

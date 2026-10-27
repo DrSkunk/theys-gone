@@ -3426,3 +3426,20 @@ Findings:
   *I Say We Head North*, not *We'll Make It Quick*; `BMB` is the latter).
 - `BendGameMission.ActiveMissionData` and `CurrentTrackedMission` were null
   at the title menu; reading them during a mission is still untested.
+
+### Active mission and passenger seat (2026-10-27, single PC)
+
+Same backup, staging and restore procedure (`run1/before-policy-20261027`,
+28 files). After Enter on the title splash and `continue-title`, the pawn
+loaded (`playerHealth=121.875`) with no story mission running:
+`status` reported `mission='' missionFlags=0x000`. `mission-act
+"BendGameMission.StartMissionFromID - MissionID=3 OnlyLoadIfUnlocked=0"`
+restarted the completed *I Say We Head North*; 0.6 s later the log read
+`mission: active 'OBR' (policy flags 0x023); passenger seat reserved for the
+story`, and the OBR intro cutscene with Boozer was on screen. The game was
+stopped, the backup restored and all hashes verified; the log, catalog and
+screenshot are in `run1/logs/policy-20261027/`.
+
+Not tested: no partner was connected, so the cleared `kAcceptPassengers` bit,
+the hidden prompt and the forced dismount were not observed; the mission was
+not completed, so returning to `mission=''` afterwards was not observed.

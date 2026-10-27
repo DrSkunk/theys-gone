@@ -259,6 +259,11 @@ passenger can't attack, and saving is blocked while riding. Hold **Get off**
 (or press F9) to dismount. An exit is refused when there is no safe ground to
 stand on.
 
+During story missions where a character rides on the driver's bike (Lisa,
+Sarah, Boozer) or the driver rides on theirs, the seat is kept for the story:
+the prompt does not appear, and a partner already riding is let off. This
+rule has been checked on one PC but not yet in a two-player session.
+
 ## Configuration reference
 
 All keys are in the `[Coop]` section of `TheysGone.ini`.
