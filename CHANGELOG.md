@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.5.0](https://github.com/DrSkunk/theys-gone/compare/v0.4.0...v0.5.0) (2026-10-27)
+
+
+### ⚠ BREAKING CHANGES
+
+* the protocol version is now 9; both players must update.
+
+### Features
+
+* free roam with gradual enemy ownership handoff (protocol v9) ([dd32bac](https://github.com/DrSkunk/theys-gone/commit/dd32bac8e61ae411f5886dc5a5aff2e308185c62))
+* **research:** engine replication experiment over SteamNetDriver ([d901d94](https://github.com/DrSkunk/theys-gone/commit/d901d948e32614cf7afe6be125ea206d114754bf))
+* **research:** late-adoption menu rebuild, game remote tooling, QA notes ([d6782c3](https://github.com/DrSkunk/theys-gone/commit/d6782c3f62dbc85e1d33984a41098b8409c9ab12))
+* **research:** live mission lab to observe and drive job transitions ([4573be9](https://github.com/DrSkunk/theys-gone/commit/4573be933cf316ed44ec0a90eee679888eade45b))
+* ship Theys Gone title and main-menu branding pak ([0ce7d0e](https://github.com/DrSkunk/theys-gone/commit/0ce7d0eeff34d325f352aeb8eeaf636ecfcc8b97))
+* **story:** sync persisted objective progress with sequenced packets ([1a0b15a](https://github.com/DrSkunk/theys-gone/commit/1a0b15a456105dc487283a100da57b4d2a1c5449))
+
+
+### Bug Fixes
+
+* **overlay:** stop Present recursion when other overlays hook the swap chain ([1d98857](https://github.com/DrSkunk/theys-gone/commit/1d988576d8ff9daa91471107ee220ce6d01d4e9f))
+
+
+### Documentation
+
+* add AGENTS.md with project state, commands and contributor rules ([3ad5997](https://github.com/DrSkunk/theys-gone/commit/3ad59979d465bcbeae655a4abbc0cf13b811de57))
+
 ## [0.4.0](https://github.com/DrSkunk/theys-gone/compare/v0.3.0...v0.4.0) (2026-10-21)
 
 
