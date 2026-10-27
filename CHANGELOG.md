@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.1](https://github.com/DrSkunk/theys-gone/compare/v0.5.0...v0.5.1) (2026-10-27)
+
+
+### Documentation
+
+* document objective sync, protocol upgrades and the branding pak ([4d9ef8c](https://github.com/DrSkunk/theys-gone/commit/4d9ef8cf0e00104a8fcad7176b095bf4ef5c500d))
+
 ## [0.5.0](https://github.com/DrSkunk/theys-gone/compare/v0.4.0...v0.5.0) (2026-10-27)
 
 
