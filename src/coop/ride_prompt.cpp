@@ -26,6 +26,11 @@ std::string g_label;
 FVector g_at{};
 bool g_failed = false;
 bool g_succeeded = false;
+bool g_isVisible = false;
+
+// Persistent string buffers so Slate never dereferences deallocated stack memory
+static std::wstring s_wide;
+static std::wstring s_empty;
 
 UObject* Prop(UObject* obj, const char* name) {
     UObject* value = nullptr;
@@ -49,12 +54,15 @@ std::string Narrow(const FStringView& text) {
 
 // ActorInteractDetails: PreButtonText @8, Text @24 (FString each), 112 bytes total.
 bool SetText(const std::string& label) {
-    std::wstring wide(label.begin(), label.end()), empty;
-    FStringView pre{empty.c_str(), 1, 1}, post{wide.c_str(), static_cast<int32_t>(wide.size() + 1),
-                                               static_cast<int32_t>(wide.size() + 1)};
+    if (!IsLive(g_actor)) return false;
+    s_wide.assign(label.begin(), label.end());
+    s_empty.clear();
+    FStringView pre{s_empty.c_str(), 1, 1}, post{s_wide.c_str(), static_cast<int32_t>(s_wide.size() + 1),
+                                               static_cast<int32_t>(s_wide.size() + 1)};
     Call(g_actor, "UpdateInteractText").set("PreText", pre).set("PostText", post).invoke();
     auto slate = Prop(g_actor, "SlateInputComponent");
-    auto property = IsLive(slate) ? FindChild(slate->cls, "InteractDetails") : nullptr;
+    if (!IsLive(slate)) return false;
+    auto property = FindChild(slate->cls, "InteractDetails");
     if (!property) return false;
     uint8_t details[112];
     std::memcpy(details, reinterpret_cast<uint8_t*>(slate) + PropertyOffset(property), sizeof details);
@@ -104,16 +112,23 @@ void Destroy() {
     g_actor = nullptr;
     g_label.clear();
     g_succeeded = false;
+    g_isVisible = false;
 }
 
 bool Update(UObject* context, bool visible, const FVector& at, const std::string& label) {
     if (!visible || g_failed || !IsLive(context)) {
-        if (g_actor) Destroy();
+        if (g_actor && IsLive(g_actor) && g_isVisible) {
+            Call(g_actor, "SetActorHiddenInGame").setBool("bNewHidden", true).invoke();
+            Call(g_actor, "EnableOrDisableInteraction").setBool("Enabled", false).invoke();
+            g_isVisible = false;
+        }
+        ui::Hint("");
         return false;
     }
     if (g_actor && !IsLive(g_actor)) {
         g_actor = nullptr;
         g_label.clear();
+        g_isVisible = false;
     }
     if (!g_actor) {
         g_actor = Spawn(context, at);
@@ -123,9 +138,15 @@ bool Update(UObject* context, bool visible, const FVector& at, const std::string
             return false;
         }
         Call(g_actor, "EnableOrDisableInteraction").setBool("Enabled", true).invoke();
+        Call(g_actor, "SetActorHiddenInGame").setBool("bNewHidden", false).invoke();
         g_at = at;
         g_succeeded = false;
+        g_isVisible = true;
         Log("ride prompt: native interact spawned");
+    } else if (!g_isVisible) {
+        Call(g_actor, "SetActorHiddenInGame").setBool("bNewHidden", false).invoke();
+        Call(g_actor, "EnableOrDisableInteraction").setBool("Enabled", true).invoke();
+        g_isVisible = true;
     }
     if (label != g_label && SetText(label)) g_label = label;
     float dx = at.x - g_at.x, dy = at.y - g_at.y, dz = at.z - g_at.z;

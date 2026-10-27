@@ -1484,6 +1484,7 @@ bool CopyMeshAppearance(UObject* source, UObject* destination) {
 }
 
 void DestroyBike() {
+    ride::Destroy();
     EndPassenger(true);
     for (auto part : g_bike.parts)
         if (IsLive(part)) Call(part, "K2_DestroyActor").invoke();
@@ -2253,10 +2254,15 @@ void UpdateRidePrompt(double now) {
                (g_peer.flags & kInVehicle) && !(g_peer.flags & kPassenger) && now >= g_localSettledAt &&
                g_motion.BikeSpeed() <= 200) {
         Call where(g_bike.component, "K2_GetComponentLocation");
-        if (where.invoke()) {
+        Call myLoc(g_pawn, "K2_GetActorLocation");
+        if (where.invoke() && myLoc.invoke()) {
             at = where.get<FVector>("ReturnValue");
-            visible = true;
-            label = "Ride with " + PartnerName();
+            auto myPos = myLoc.get<FVector>("ReturnValue");
+            float dx = at.x - myPos.x, dy = at.y - myPos.y, dz = at.z - myPos.z;
+            if (dx * dx + dy * dy + dz * dz <= 400.0f * 400.0f) {
+                visible = true;
+                label = "Ride with " + PartnerName();
+            }
         }
     }
     if (ride::Update(g_pawn, visible, at, label)) {
