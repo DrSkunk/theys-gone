@@ -17,11 +17,13 @@ inspect:
 build:
 	bash build.sh
 
-# Release archive: the plugin, its default INI, licenses and the README.
+# Release archive: the plugin, its default INI, branding pak, licenses and the README.
 dist: build
 	rm -rf "$(DIST)" "$(DIST).zip"
 	mkdir -p "$(DIST)"
 	cp package/TheysGone.asi package/TheysGone.ini package/LICENSE-Dear-ImGui.txt LICENSE README.md "$(DIST)/"
+	mkdir -p "$(DIST)/BendGame/Content/Paks"
+	cp package/BendGame/Content/Paks/pakchunk99-TheysGone_Brand_P.pak "$(DIST)/BendGame/Content/Paks/"
 	cd dist && zip -qr -X "TheysGone-$(VERSION).zip" "TheysGone-$(VERSION)"
 	cd dist && shasum -a 256 "TheysGone-$(VERSION).zip" > "TheysGone-$(VERSION).zip.sha256"
 	@echo "packaged dist/TheysGone-$(VERSION).zip"

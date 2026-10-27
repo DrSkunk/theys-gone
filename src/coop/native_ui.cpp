@@ -116,6 +116,32 @@ UObject* ObjectField(UObject* obj, const char* name) {
     return value && IsLive(*value) ? *value : nullptr;
 }
 
+bool BrushOf(UObject* image, UObject*& resource, float& width, float& height) {
+    resource = nullptr;
+    width = height = 0;
+    auto property = IsLive(image) ? FindChild(image->cls, "Brush") : nullptr;
+    if (!property) return false;
+    int offset = PropertyOffset(property);
+    int size = *reinterpret_cast<int32_t*>(reinterpret_cast<uint8_t*>(property) + off::PropertyElementSize);
+    if (offset <= 0 || size <= 0) return false;
+    auto brush = reinterpret_cast<uint8_t*>(image) + offset;
+    float extent[2]{};
+    ReadStructFields(brush, static_cast<size_t>(size), {{"SlateBrush", "ImageSize"}}, extent, sizeof extent);
+    width = extent[0];
+    height = extent[1];
+    UObject* value = nullptr;
+    if (!ReadStructFields(brush, static_cast<size_t>(size), {{"SlateBrush", "ResourceObject"}}, &value, sizeof value))
+        return false;
+    resource = IsLive(value) ? value : nullptr;
+    return true;
+}
+
+// The owning UserWidget of a designer widget: Image -> WidgetTree -> UserWidget.
+UObject* OwningUserWidget(UObject* widget) {
+    auto tree = IsLive(widget) ? widget->outer : nullptr;
+    return IsLive(tree) && IsLive(tree->outer) ? tree->outer : nullptr;
+}
+
 // Blueprint classes load with their menus; look them up lazily and cheaply.
 struct ClassRef {
     const char* name;
@@ -186,7 +212,28 @@ struct MainMenu {
     std::shared_ptr<UObject> statusBlock;
     std::shared_ptr<UObject> statusBackground;
     bool loggedLabels = false;
+    bool brandLogged = false;
 } g_main;
+
+// The menu draws LogoSmall (title_logo_start_small) once past the splash. A replacement of that small
+// texture in the branding pak is ignored by the game, while the splash's Logo (title_logo_start) is
+// replaced, so LogoSmall reuses Logo's texture at its own brush size.
+void MainBrand() {
+    auto small = ObjectField(g_main.widget, "LogoSmall");
+    auto large = ObjectField(g_main.widget, "Logo");
+    UObject *smallTexture = nullptr, *largeTexture = nullptr;
+    float width = 0, height = 0;
+    if (!small || !large || !BrushOf(small, smallTexture, width, height) ||
+        !BrushOf(large, largeTexture, width, height) || !largeTexture || smallTexture == largeTexture)
+        return;
+    if (Name(largeTexture) != "title_logo_start" || (smallTexture && Name(smallTexture) != "title_logo_start_small"))
+        return;
+    bool applied = Call(small, "SetBrushFromTexture").set("Texture", largeTexture).invoke();
+    if (!g_main.brandLogged) {
+        g_main.brandLogged = true;
+        Log("native ui: title menu logo %s", applied ? "uses the branded title texture" : "rebrand failed");
+    }
+}
 
 TArrayRaw* MainNames() {
     return Field<TArrayRaw>(g_main.widget, "MenuOptionNames_Text");
@@ -555,6 +602,7 @@ void MainUpdate(const session::View& view, const std::vector<std::string>& log) 
         g_main.widget = widget;
     }
     if (!widget) return;
+    MainBrand();
     if (g_main.open && !MainPageActive()) {
         Log("native ui: the title menu left its main page; closing CO-OP");
         g_main.open = false;
@@ -1000,6 +1048,31 @@ void ProbeWidget(const char* label, UObject* widget) {
         hasHover ? (hovered ? "true" : "false") : "?", owner.c_str());
 }
 
+void ProbeImages() {
+    auto imageClass = FindClass("Image");
+    if (!imageClass) {
+        Log("ui-probe: image class not found");
+        return;
+    }
+    int listed = 0;
+    for (int32_t i = 0, n = ObjectCount(); i < n && listed < 120; ++i) {
+        auto obj = ObjectAt(i);
+        if (!obj || obj->cls != imageClass || !IsLive(obj) || IsDefaultOrArchetype(obj)) continue;
+        auto owner = OwningUserWidget(obj);
+        bool ownerInViewport = false, visible = false;
+        if (!owner || !WidgetBool(owner, "IsInViewport", ownerInViewport) || !ownerInViewport) continue;
+        WidgetBool(obj, "IsVisible", visible);
+        UObject* resource = nullptr;
+        float width = 0, height = 0;
+        BrushOf(obj, resource, width, height);
+        Log("ui-probe: image %s owner=%s visible=%s size=%.0fx%.0f resource=%s", Name(obj).c_str(),
+            Name(owner->cls).c_str(), visible ? "true" : "false", width, height,
+            resource ? FullName(resource).c_str() : "null");
+        ++listed;
+    }
+    Log("ui-probe: images listed=%d", listed);
+}
+
 } // namespace
 
 void Configure(bool trace) {
@@ -1110,6 +1183,7 @@ bool ProbeRuntimeUi() {
         }
         describe("main-menu", menu);
     }
+    ProbeImages();
     return true;
 }
 
