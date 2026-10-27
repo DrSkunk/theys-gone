@@ -34,6 +34,7 @@ the host progress. Host and join sessions through Steam or your local network.
 | Passenger riding | Walk up to your partner's bike and hold the native **Ride with** prompt (experimental) |
 | Host-first progress | The joining player plays on a copy of the host's save; their own saves are never touched |
 | Story sync | When the host saves with new story progress, the joining player is reloaded onto it |
+| Objective sync (opt-in) | Completed mission objectives reach the joining player within seconds, without waiting for a host save (experimental) |
 | Shared enemies | In standard mode, the host's hostile AI (up to 16 within 80 m) appears for the joining player instead of their own |
 | Free roam (opt-in) | Beyond 250 m, each player's game simulates enemies in its own region and shows the other's as replicas; hits reach either side's enemies, and a fight in progress stays with its owner when the players split or regroup |
 | Shared combat | The joining player's shots and melee damage the host's enemies; those enemies attack and damage the joining player |
@@ -46,7 +47,9 @@ the host progress. Host and join sessions through Steam or your local network.
 ### What is not synchronized
 
 - Live mission state, inventory, loot and doors. The joining player's story
-  is only resynced when the host saves.
+  is resynced when the host saves; with `MissionObjectiveSync=1`, completed
+  objectives also arrive live. Starting or completing a job still waits for
+  the host's next save.
 - Camp NPCs and companions: each player keeps their own.
 - In free roam, each enemy's AI and health stay with the game that owns it;
   the other player sees its pose and their hits are applied by the owner.
@@ -276,6 +279,7 @@ All keys are in the `[Coop]` section of `TheysGone.ini`.
 | `Discovery` | `0` | Developers: log engine details; F6 dumps the local pawn |
 | `MissionDiscovery` | `0` | Developers: trace mission/save function names and parameter layouts only; see [DEVELOPMENT.md](docs/DEVELOPMENT.md) |
 | `MenuDiscovery` | `0` | Developers: F6 dumps native menu classes/widget references and enables UI event tracing |
+| `MissionObjectiveSync` | `0` | Experimental: the host also sends completed objectives live instead of only at its next save. Needs `HostSave=1`; enable on both peers. The host save remains the fallback |
 | `HostSave` | `1` | Host-first progress: the host shares their save; the joining player's save writes go to a throw-away sandbox and the host's save is loaded (see [Playing on the host's save](#playing-on-the-hosts-save)). `0`: everybody plays their own save |
 | `DebugTools` | `0` | Developers: enable test tools (see [DEVELOPMENT.md](docs/DEVELOPMENT.md)) |
 | `AnimIdle`, `AnimWalk`, `AnimRun`, `AnimSprint` | Deacon clips | Fallback animations used when no pose stream arrives |
@@ -316,6 +320,10 @@ only if no other mod uses the ASI loader.
 Delete `BendGame/Content/Paks/pakchunk99-TheysGone_Brand_P.pak` to restore
 the original logos.
 
+Upgrading: both players must run the same release. Releases that change the
+network protocol, such as 0.5.0 (protocol v9), cannot connect to older ones;
+the changelog marks these as breaking changes.
+
 Upgrading from the older *Days Gone Together* builds: delete the old
 `DaysGoneTogether.*` files first. Settings are not migrated, and old builds
 cannot connect to Theys Gone.
@@ -325,7 +333,8 @@ cannot connect to Theys Gone.
 The mod is a C++20 DLL cross-compiled with MinGW-w64. It hooks Unreal Engine
 4's `UObject::ProcessEvent` and then drives the game through the engine's own
 reflection system, calling functions by name. Game files on disk are never
-modified, and no game assets are included. The full write-up covers the
+modified. The only game content shipped is the optional branding pak, which
+overrides five logo textures and loads alongside the original paks. The full write-up covers the
 reverse engineering, hooking, networking and synchronization:
 [docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md).
 
