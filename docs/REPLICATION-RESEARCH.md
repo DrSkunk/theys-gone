@@ -3388,3 +3388,41 @@ changes gradually.
   never kept.
 - Identities are not carried over at release; the new owner's own AI takes
   over.
+
+## Story mission catalog (2026-10-27, single PC, read-only)
+
+Goal: map internal mission and job codes to the names the game shows, as
+input for per-mission co-op policy ([STORY-COOP.md](STORY-COOP.md)).
+
+**Static pass.** The pak index of the isolated `run1` copy lists every
+`<CODE>n-MissionData` asset, the streamed mission sublevels
+(`Maps/ORWorld/Missions/Part<n>/<code>…`, usually with a `<CODE>1_Weather`
+level) and per-actor cinematic tracks
+(`Cinematics/Act<n>/<mission>/<scene>/<actor>`). Pak contents are
+Oodle-compressed, so display names are not readable statically.
+
+**Live pass.** `mission-state` gained a catalog section. Backups of the
+isolated prefix's `Saved` tree, the INI and ASI (28 files, SHA-256 list) were
+taken in `run1/before-catalog-20261027`, the new ASI
+(`e18956ba…7d8a`) was staged only in `run1`, and the copy was started with
+`launch-host-test.sh` as a transient unit. At the title menu (no gameplay
+pawn, `active=0`) `mission-state` wrote the catalog: 203 jobs and 118
+missions. `BendGameMission.GetMissionDataFromIDNew(0..255)` returned all
+story missions except `WBB1-MissionData` (found by scanning loaded
+`BendMissionData`). The game was stopped, the backup restored, and every
+hash verified. Output is archived in `run1/logs/catalog-20261027/`.
+
+Findings:
+
+- `BendMissionData.MissionNameText` and `BendJobData.JobNameText` hold the
+  English display names; objective texts name the companions ("Ride With
+  Boozer to Crazy Willie's", "Get Lisa to Your Bike", "Protect Rikki").
+- `MissionsAct` 2–7 is the story episode (`IND` act 2 matched the story
+  signature's episode 2). `GetChapterNameFromEpisode`: 2 "The Drifter
+  Road", 3 "Wings Of Angels", 4 "A Camper's Life", 5 "The Forsaken",
+  6 "Lost Life", 7 "Rest In Peace". Act 12 is post-credits, 17 the E3 demo,
+  18 DLC challenges and test missions.
+- Several walkthrough-based inferences were wrong (for example `OBR` is
+  *I Say We Head North*, not *We'll Make It Quick*; `BMB` is the latter).
+- `BendGameMission.ActiveMissionData` and `CurrentTrackedMission` were null
+  at the title menu; reading them during a mission is still untested.

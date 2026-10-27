@@ -28,6 +28,7 @@ threads); see [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md#prerequisites). Run
 | Current state, environment, gotchas, code map | [docs/REPLICATION-HANDOFF.md](docs/REPLICATION-HANDOFF.md) |
 | Evidence log for every live test | [docs/REPLICATION-RESEARCH.md](docs/REPLICATION-RESEARCH.md) |
 | User-facing behavior and settings | [README.md](README.md) |
+| Story phases, companions, co-op policy per mission type | [docs/STORY-COOP.md](docs/STORY-COOP.md) |
 
 Most gameplay logic is in [`src/coop/coop.cpp`](src/coop/coop.cpp). Pure,
 testable rules live in headers (`enemy.hpp`, `protocol.hpp`, `streaming.hpp`,
