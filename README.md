@@ -34,7 +34,9 @@ the host progress. Host and join sessions through Steam or your local network.
 | Passenger riding | Walk up to your partner's bike and hold the native **Ride with** prompt (experimental) |
 | Host-first progress | The joining player plays on a copy of the host's save; their own saves are never touched |
 | Story sync | When the host saves with new story progress, the joining player is reloaded onto it |
-| Shared enemies | The host's hostile AI, up to 16 within 80 m, appears for the joining player instead of their own |
+| Objective sync (opt-in) | Completed mission objectives reach the joining player within seconds, without waiting for a host save (experimental) |
+| Shared enemies | In standard mode, the host's hostile AI (up to 16 within 80 m) appears for the joining player instead of their own |
+| Free roam (opt-in) | Beyond 250 m, each player's game simulates enemies in its own region and shows the other's as replicas; hits reach either side's enemies, and a fight in progress stays with its owner when the players split or regroup |
 | Shared combat | The joining player's shots and melee damage the host's enemies; those enemies attack and damage the joining player |
 | Time and weather | The joining player's time of day and weather follow the host |
 | Appearance | Seven color presets for jacket, trousers and cap, and an option to hide the cap |
@@ -45,8 +47,16 @@ the host progress. Host and join sessions through Steam or your local network.
 ### What is not synchronized
 
 - Live mission state, inventory, loot and doors. The joining player's story
-  is only resynced when the host saves.
+  is resynced when the host saves; with `MissionObjectiveSync=1`, completed
+  objectives also arrive live. Starting or completing a job still waits for
+  the host's next save.
 - Camp NPCs and companions: each player keeps their own.
+- In free roam, each enemy's AI and health stay with the game that owns it;
+  the other player sees its pose and their hits are applied by the owner.
+  Protocol v9 adds a hidden host proxy in the guest's world while guest-owned
+  fights survive a regroup, so those enemies can target the host. This path
+  still needs paired validation. Missions, pickups, and world interactions
+  are not shared live.
 - Ranged enemy attacks on the joining player. Only melee swings at the
   joining player are forwarded, and their damage per enemy type is an estimate.
 - Projectiles, muzzle flashes and hit effects.
@@ -80,7 +90,10 @@ the host progress. Host and join sessions through Steam or your local network.
    you already have an ASI loader there, and don't overwrite other mods.
 4. Copy `TheysGone.asi` and `TheysGone.ini` from the zip into that same
    folder. Both files must stay side by side.
-5. **Linux / Steam Deck only:** Wine must load the proxy `version.dll`. In
+5. Copy the zip's `BendGame/Content/Paks/pakchunk99-TheysGone_Brand_P.pak`
+   into the matching folder under your game installation. This replaces the
+   title and main-menu logos with Theys Gone branding.
+6. **Linux / Steam Deck only:** Wine must load the proxy `version.dll`. In
    Steam, open the game's *Properties → Launch Options* and set:
 
    ```sh
@@ -194,7 +207,9 @@ Visibility=friends
 
 Only traffic from the other lobby member is accepted. `Port` and `PeerHost`
 do not control Steam connections. Epic Online Services is not implemented.
-The lobby owner is the host: their save, story and enemies are authoritative.
+The lobby owner is the host: their save, story and (in standard mode) enemies
+are authoritative. With `FreeRoam=1` on both peers, distant regions simulate
+their own enemies; each side shows the other's enemies as replicas.
 
 ## Controls
 
@@ -259,10 +274,12 @@ All keys are in the `[Coop]` section of `TheysGone.ini`.
 | `ShowCap` | `1` | Show your cap |
 | `SyncMotorcycles` | `1` | Bike sync |
 | `SyncEnemies` | `1` | Host enemy sync |
+| `FreeRoam` | `0` | Experimental, supported game build only: host streams terrain around a distant guest and each game simulates its local enemy region; each side shows and can hit the other's enemies. Enable on both peers |
 | `AllowPassenger` | `1` | Allow a passenger on your bike |
 | `Discovery` | `0` | Developers: log engine details; F6 dumps the local pawn |
 | `MissionDiscovery` | `0` | Developers: trace mission/save function names and parameter layouts only; see [DEVELOPMENT.md](docs/DEVELOPMENT.md) |
 | `MenuDiscovery` | `0` | Developers: F6 dumps native menu classes/widget references and enables UI event tracing |
+| `MissionObjectiveSync` | `0` | Experimental: the host also sends completed objectives live instead of only at its next save. Needs `HostSave=1`; enable on both peers. The host save remains the fallback |
 | `HostSave` | `1` | Host-first progress: the host shares their save; the joining player's save writes go to a throw-away sandbox and the host's save is loaded (see [Playing on the host's save](#playing-on-the-hosts-save)). `0`: everybody plays their own save |
 | `DebugTools` | `0` | Developers: enable test tools (see [DEVELOPMENT.md](docs/DEVELOPMENT.md)) |
 | `AnimIdle`, `AnimWalk`, `AnimRun`, `AnimSprint` | Deacon clips | Fallback animations used when no pose stream arrives |
@@ -277,7 +294,7 @@ All keys are in the `[Coop]` section of `TheysGone.ini`.
 The plugin writes `TheysGone.log` next to itself. A healthy start looks like this:
 
 ```text
-Theys Gone … starting (protocol v6)
+Theys Gone … starting (protocol v9)
 ProcessEvent hook installed
 GNames via pointer at rva 0x…, … names
 network: listening on UDP 27777, …
@@ -300,6 +317,12 @@ normally.
 Close the game and delete `TheysGone.asi`, `TheysGone.ini` and the
 `TheysGone*.log`/`.txt` files. Remove `version.dll`, and the launch option,
 only if no other mod uses the ASI loader.
+Delete `BendGame/Content/Paks/pakchunk99-TheysGone_Brand_P.pak` to restore
+the original logos.
+
+Upgrading: both players must run the same release. Releases that change the
+network protocol, such as 0.5.0 (protocol v9), cannot connect to older ones;
+the changelog marks these as breaking changes.
 
 Upgrading from the older *Days Gone Together* builds: delete the old
 `DaysGoneTogether.*` files first. Settings are not migrated, and old builds
@@ -310,7 +333,8 @@ cannot connect to Theys Gone.
 The mod is a C++20 DLL cross-compiled with MinGW-w64. It hooks Unreal Engine
 4's `UObject::ProcessEvent` and then drives the game through the engine's own
 reflection system, calling functions by name. Game files on disk are never
-modified, and no game assets are included. The full write-up covers the
+modified. The only game content shipped is the optional branding pak, which
+overrides five logo textures and loads alongside the original paks. The full write-up covers the
 reverse engineering, hooking, networking and synchronization:
 [docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md).
 
@@ -327,12 +351,18 @@ Building, testing, the simulated partner, debug tools and the release process
 are covered in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md). Contributions are
 welcome; see [CONTRIBUTING.md](CONTRIBUTING.md).
 
+The save file research and the save editor (CLI and browser) live in the
+separate [days-gone-save-editor](https://github.com/drskunk/days-gone-save-editor)
+repository.
+
 ## Legal
 
 Days Gone is © Sony Interactive Entertainment, developed by Bend Studio. This
 is an unofficial fan project, not affiliated with or endorsed by Sony or Bend
-Studio. It contains no game code or assets. You need your own copy of the game.
+Studio. You need your own copy of the game. The branding pak contains modified
+logo textures; underlying game artwork remains the property of its owners.
 
-Licensed under the [MIT License](LICENSE). Release builds bundle
+The mod's code is licensed under the [MIT License](LICENSE); that license does
+not grant rights to underlying game artwork. Release builds bundle
 [Dear ImGui](https://github.com/ocornut/imgui) (MIT); its license is included
 in the release archive.

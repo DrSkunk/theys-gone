@@ -11,8 +11,10 @@ and play, see the [README](../README.md). To build and test, see
 
 ## Overview
 
-Days Gone runs on Bend Studio's fork of **Unreal Engine 4.10.1**. The mod is a
-Windows DLL (`TheysGone.asi`) that runs inside the game process.
+Days Gone runs on Bend Studio's Unreal Engine 4 fork. A Run H crash dump
+reports `4.11.1-0+UE4`; earlier project notes said 4.10.1 based on source
+pattern comparisons. The mod is a Windows DLL (`TheysGone.asi`) that runs
+inside the game process.
 
 ```text
 DaysGone.exe
@@ -45,7 +47,7 @@ through the engine's own reflection system.
 | Game | Days Gone, Steam app 1259420 |
 | Build | 19221447; PE timestamp `0x68754d46`, SizeOfImage `0x093f0000` |
 | Executable SHA-256 | `17c2fca01d566914147a6d4924d038cb1f5a822c2829e4c45862e2bf837730b3` |
-| Engine | Unreal Engine 4.10.1, Bend fork |
+| Engine | Bend fork; runtime metadata reports `4.11.1-0+UE4` |
 
 The plugin refuses to install if the timestamp, image size or hook-site bytes
 differ. After a game update the mod disables itself rather than patching the
@@ -262,19 +264,22 @@ Steamworks SDK code is bundled or linked:
   current partner are dropped and released. Session requests are accepted
   only from lobby members. Steam authenticates the sender and encrypts the
   traffic, and its relays avoid exposing IP addresses or forwarding ports.
-- **Roles.** The lobby owner is the host for the save, story, world time, weather and enemies.
+- **Roles.** The lobby owner is the host for the save, story, world time and
+  weather. In standard mode, the host also owns enemies. With `FreeRoam=1` on
+  both peers, each game owns the enemies in its own distant region and shows
+  the other's as replicas (section 5).
   If the original owner leaves, the session ends instead of adopting Steam's
   replacement owner. In LAN mode, the player who chose Host is the host.
 
-### 4.2 State packet (protocol v6)
+### 4.2 State packet (protocol v9)
 
 [`protocol.hpp`](../src/coop/protocol.hpp) defines a fixed 144-byte
 little-endian packet, sent at 30 Hz:
 
 | Field | Type | Notes |
 |---|---|---|
-| magic, version | u32, u16 | `"DGCO"`, 6 |
-| flags | u16 | HasPawn, InVehicle, HasBike, Passenger, FriendlyFire, AcceptPassengers, Alive, SyncBikes, WorldState |
+| magic, version | u32, u16 | `"DGCO"`, 9 |
+| flags | u16 | HasPawn, InVehicle, HasBike, Passenger, FriendlyFire, AcceptPassengers, Alive, SyncBikes, WorldState, SyncEnemies, Separated (host only: free roam split enemy ownership by region) |
 | seq, timeMs | u32 each | wrapping sequence; sender's frame clock |
 | pos[3], yaw, pitch, vel[3] | f32 | finite, within ±1e8 |
 | name | char[16] | |
@@ -469,16 +474,42 @@ joining player's game only catches up at the host's saves.
 
 ### 5.9 Shared enemies and combat
 
-The host scans the object array in time-sliced batches for live, hostile
-`BendAIPawn`s (freakers, animals, and AI whose controller `IsEnemy` with the
-player) within 80 m of either player, at most 16. It streams their skeletons
-and appearance. The joining player builds a posed, non-colliding replica for
-each one and removes it after 1.5 s of silence or when its health reaches 0.
+In standard mode, the host scans the object array in time-sliced batches for
+live, hostile `BendAIPawn`s (freakers, animals, and AI whose controller
+`IsEnemy` with the player) within 80 m of either player, at most 16. It streams
+their skeletons and appearance. The joining player builds a posed,
+non-colliding replica for each one. Its alive/health state disables further
+hit requests at zero health; it does not immediately destroy the visual
+corpse. A replica is removed after the host stops sending its pose/appearance
+packets for 1.5 s.
 
 The joining player's own hostile AI is switched off: ambient generators,
 spawn areas and crowd generators are paused, and live hostile pawns are handed
 back to their pools with the generator's own `DespawnUnit`. Destroying pooled
 pawns directly did not work; the pool respawned them.
+
+With `FreeRoam=1` on both peers, the host's guarded world-composition hook
+keeps terrain streamed around a distant guest. Past 250 m, the guest resumes
+its own local AI and sends up to 16 nearby enemy skeletons and appearance
+descriptions to the host, which renders them as poseable replicas. Below
+150 m, the host owns new enemies again.
+
+Each enemy has exactly one owner, the game that simulates its AI and health.
+Entity IDs are the owner's, so each side's replicas are always the other
+side's enemies, and hits (`DMEH`) go to the owner in either direction: the
+owner applies them with `ApplyDamage` after a range check against the
+attacker's position.
+
+Ownership changes gradually. Both games sample, every 0.5 s, which of their
+enemies target the joining player (on the host, its stand-in). When the
+players split or regroup, the side giving up the region keeps the enemies
+that were fighting the joining player in the last 6 s and keeps streaming
+them; everything else follows the new owner. A kept enemy is released when it
+dies, ignores the joining player for 6 s, or after 180 s. The guest defers
+despawning its crowd and ambient generators until its kept enemies are
+released. The host's stand-in is rebuilt after the host teleports; while it is
+absent, recent engagement is judged as of its last presence (up to 30 s) and
+the 6 s calm clock waits.
 
 Combat crosses over in both directions:
 
@@ -492,6 +523,11 @@ Combat crosses over in both directions:
   `MeleeArmed` animation notify: a swing at the stand-in within reach becomes
   a strike (`DMPX`) applied on the joining player's PC. The damage per enemy
   type is an estimate.
+- **Guest-kept enemies to host.** While a guest-owned fight survives a
+  regroup, the guest creates the same kind of hidden proxy at the host's
+  avatar. Nearby guest-owned enemies can target it; their swings and damage
+  are forwarded with `DMPX` and applied to the host. This protocol-v9 path is
+  implemented but still needs paired validation.
 
 This is a custom replication layer inside the ASI, not Unreal's built-in
 multiplayer networking. A swing notification plus target/range checks is an
@@ -529,9 +565,11 @@ and the story-divergence test does not establish complete campaign co-op.
 - Each player runs their own copy of the world. The joining player plays on the
   host's save and is resynced at the host's saves, but live mission state,
   inventory and loot are not mirrored.
-- Enemy damage to the joining player is estimated per enemy type, and only
-  melee swings are forwarded; ranged enemies can't hurt the joining player
-  yet. Enemy AI only runs on the host.
+- Enemy melee damage is estimated per type; ranged damage remains
+  unverified. In standard mode enemy AI only runs on the host. Free-roam
+  protocol v9 adds a guest-side proxy so guest-kept enemies can target the
+  host after regrouping; this path still needs paired validation. Enemy
+  identities are not carried over once an enemy is released to the new owner.
 - No projectile or muzzle-flash replication. Friendly-fire damage is an
   approximation.
 - Motorcycle physics, fuel, damage and upgrades are not shared.

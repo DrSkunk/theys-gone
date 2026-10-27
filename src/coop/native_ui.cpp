@@ -117,6 +117,32 @@ UObject* ObjectField(UObject* obj, const char* name) {
     return value && IsLive(*value) ? *value : nullptr;
 }
 
+bool BrushOf(UObject* image, UObject*& resource, float& width, float& height) {
+    resource = nullptr;
+    width = height = 0;
+    auto property = IsLive(image) ? FindChild(image->cls, "Brush") : nullptr;
+    if (!property) return false;
+    int offset = PropertyOffset(property);
+    int size = *reinterpret_cast<int32_t*>(reinterpret_cast<uint8_t*>(property) + off::PropertyElementSize);
+    if (offset <= 0 || size <= 0) return false;
+    auto brush = reinterpret_cast<uint8_t*>(image) + offset;
+    float extent[2]{};
+    ReadStructFields(brush, static_cast<size_t>(size), {{"SlateBrush", "ImageSize"}}, extent, sizeof extent);
+    width = extent[0];
+    height = extent[1];
+    UObject* value = nullptr;
+    if (!ReadStructFields(brush, static_cast<size_t>(size), {{"SlateBrush", "ResourceObject"}}, &value, sizeof value))
+        return false;
+    resource = IsLive(value) ? value : nullptr;
+    return true;
+}
+
+// The owning UserWidget of a designer widget: Image -> WidgetTree -> UserWidget.
+UObject* OwningUserWidget(UObject* widget) {
+    auto tree = IsLive(widget) ? widget->outer : nullptr;
+    return IsLive(tree) && IsLive(tree->outer) ? tree->outer : nullptr;
+}
+
 // Blueprint classes load with their menus; look them up lazily and cheaply.
 struct ClassRef {
     const char* name;
@@ -130,7 +156,8 @@ struct ClassRef {
         return cls;
     }
 };
-ClassRef g_mainClass{"UI_MainMenuWidget_C"}, g_pauseClass{"OptionsTopMenuWidget_C"}, g_hudClass{"UI_HudWidget_C"};
+ClassRef g_mainClass{"UI_MainMenuWidget_C"}, g_titleClass{"UI_TitleScreenWidget_C"},
+    g_pauseClass{"OptionsTopMenuWidget_C"}, g_hudClass{"UI_HudWidget_C"};
 UObject* g_mainSeen = nullptr;
 UObject* g_pauseSeen = nullptr;
 UObject* g_hudSeen = nullptr;
@@ -187,7 +214,28 @@ struct MainMenu {
     std::shared_ptr<UObject> statusBackground;
     bool loggedLabels = false;
     double handledAt = -10;
+    bool brandLogged = false;
 } g_main;
+
+// The menu draws LogoSmall (title_logo_start_small) once past the splash. A replacement of that small
+// texture in the branding pak is ignored by the game, while the splash's Logo (title_logo_start) is
+// replaced, so LogoSmall reuses Logo's texture at its own brush size.
+void MainBrand() {
+    auto small = ObjectField(g_main.widget, "LogoSmall");
+    auto large = ObjectField(g_main.widget, "Logo");
+    UObject *smallTexture = nullptr, *largeTexture = nullptr;
+    float width = 0, height = 0;
+    if (!small || !large || !BrushOf(small, smallTexture, width, height) ||
+        !BrushOf(large, largeTexture, width, height) || !largeTexture || smallTexture == largeTexture)
+        return;
+    if (Name(largeTexture) != "title_logo_start" || (smallTexture && Name(smallTexture) != "title_logo_start_small"))
+        return;
+    bool applied = Call(small, "SetBrushFromTexture").set("Texture", largeTexture).invoke();
+    if (!g_main.brandLogged) {
+        g_main.brandLogged = true;
+        Log("native ui: title menu logo %s", applied ? "uses the branded title texture" : "rebrand failed");
+    }
+}
 
 TArrayRaw* MainNames() {
     return Field<TArrayRaw>(g_main.widget, "MenuOptionNames_Text");
@@ -266,6 +314,52 @@ void MainInject() {
     }
     MainRefresh();
     Log("native ui: added CO-OP to the title menu at row %d of %d", at, names->num);
+}
+
+bool g_titleSavesChanged = false;
+
+std::string MainRowsText(const TArrayRaw* names) {
+    std::string labels;
+    for (int i = 0; names && names->data && i < names->num && i < 64; ++i) {
+        FText24 label;
+        std::memcpy(&label, names->data + 24 * i, sizeof label);
+        labels += (i ? " | " : "") + TextString(label);
+    }
+    return labels;
+}
+
+bool IsContinueLabel(const std::string& label) {
+    std::string normalized;
+    for (unsigned char ch : label)
+        if (std::isalnum(ch)) normalized.push_back(static_cast<char>(std::toupper(ch)));
+    return normalized == "CONTINUE" || normalized == "CONTINUEGAME" || normalized == "CONTINUESTORY";
+}
+
+// WaitForInput is the menu's own "press any key" step: it builds MenuOptionNames_Text from the game's
+// labels and keeps CONTINUE / LOAD GAME only when HasAnySaves. A host save adopted under an already built
+// menu therefore needs that step again (forced) before the CO-OP row is re-added.
+void MainRebuildForSaves() {
+    auto names = MainNames();
+    if (!names || !names->data || names->num <= 0 || names->num > names->max) return;
+    g_titleSavesChanged = false;
+    FText24 first;
+    std::memcpy(&first, names->data, sizeof first);
+    if (IsContinueLabel(TextString(first))) return;
+    Call(g_main.widget, "RecheckSaves").invoke();
+    Call anySaves(g_main.widget, "HasAnySaves");
+    if (!anySaves.invoke() || !anySaves.get<bool>("Value")) {
+        Log("native ui: adopted save not visible to the title menu; rows unchanged");
+        return;
+    }
+    if (!Call(g_main.widget, "WaitForInput").set("bForced", true).invoke()) {
+        Log("native ui: cannot rebuild the title menu rows");
+        return;
+    }
+    names = MainNames();
+    Log("native ui: rebuilt the title menu for the adopted save: %s", names ? MainRowsText(names).c_str() : "?");
+    g_main.coopRow = -1;
+    g_main.coopText = nullptr;
+    g_main.loggedLabels = false;
 }
 
 void ShowLogPanel(bool show, UObject* panel, UObject* tree, UObject* source, CanvasLayout area,
@@ -569,6 +663,7 @@ void MainUpdate(const session::View& view, const std::vector<std::string>& log) 
         g_main.widget = widget;
     }
     if (!widget) return;
+    MainBrand();
 
     auto isFocused = []() {
         DWORD pid = 0;
@@ -630,7 +725,6 @@ void MainUpdate(const session::View& view, const std::vector<std::string>& log) 
         }
     }
     wasLButtonDown = isLButtonDown;
-
     if (g_main.open && !MainPageActive()) {
         Log("native ui: the title menu left its main page; closing CO-OP");
         g_main.open = false;
@@ -639,7 +733,10 @@ void MainUpdate(const session::View& view, const std::vector<std::string>& log) 
         MainShowStatus(false);
     }
     if (!g_main.open) {
-        if (g_nativeMenu && MainPageActive()) MainInject();
+        if (g_nativeMenu && MainPageActive()) {
+            if (g_titleSavesChanged) MainRebuildForSaves();
+            MainInject();
+        }
         return;
     }
     session::View title = view;
@@ -1014,6 +1111,90 @@ UObject* HudFontSource(UObject* hud) {
     return nullptr;
 }
 
+bool WidgetBool(UObject* widget, const char* function, bool& value) {
+    Call call(widget, function);
+    if (!call.ok() || !call.has("ReturnValue") || !call.invoke()) return false;
+    value = call.get<uint8_t>("ReturnValue") != 0;
+    return true;
+}
+
+bool WidgetVisibility(UObject* widget, uint8_t& value) {
+    Call call(widget, "GetVisibility");
+    if (!call.ok() || !call.has("ReturnValue") || !call.invoke()) return false;
+    value = call.get<uint8_t>("ReturnValue");
+    return true;
+}
+
+const char* VisibilityName(uint8_t value) {
+    switch (value) {
+    case 0: return "visible";
+    case 1: return "collapsed";
+    case 2: return "hidden";
+    case 3: return "hit-test-invisible";
+    case 4: return "self-hit-test-invisible";
+    default: return "unknown";
+    }
+}
+
+std::string BoolPropertyText(UObject* obj, const char* property) {
+    bool value = false;
+    if (!GetBoolProp(obj, property, value)) return "?";
+    return value ? "true" : "false";
+}
+
+std::string FloatPropertyText(UObject* obj, const char* property) {
+    auto value = Field<float>(obj, property);
+    return value ? std::to_string(*value) : "?";
+}
+
+void ProbeWidget(const char* label, UObject* widget) {
+    uint8_t visibility = 0;
+    bool inViewport = false, visible = false, focused = false, hovered = false;
+    const bool hasVisibility = WidgetVisibility(widget, visibility);
+    const bool hasViewport = WidgetBool(widget, "IsInViewport", inViewport);
+    const bool hasVisible = WidgetBool(widget, "IsVisible", visible);
+    const bool hasFocus = WidgetBool(widget, "HasAnyUserFocus", focused);
+    const bool hasHover = WidgetBool(widget, "IsHovered", hovered);
+    Call ownerCall(widget, "GetOwningPlayer");
+    std::string owner = "?";
+    if (ownerCall.ok() && ownerCall.has("ReturnValue") && ownerCall.invoke()) {
+        auto player = ownerCall.get<UObject*>("ReturnValue");
+        owner = IsLive(player) ? FullName(player) : "null";
+    }
+    Log("ui-probe: %s=%s viewport=%s visibility=%s visible=%s focus=%s hovered=%s owner=%s",
+        label, FullName(widget).c_str(),
+        hasViewport ? (inViewport ? "true" : "false") : "?",
+        hasVisibility ? VisibilityName(visibility) : "?",
+        hasVisible ? (visible ? "true" : "false") : "?",
+        hasFocus ? (focused ? "true" : "false") : "?",
+        hasHover ? (hovered ? "true" : "false") : "?", owner.c_str());
+}
+
+void ProbeImages() {
+    auto imageClass = FindClass("Image");
+    if (!imageClass) {
+        Log("ui-probe: image class not found");
+        return;
+    }
+    int listed = 0;
+    for (int32_t i = 0, n = ObjectCount(); i < n && listed < 120; ++i) {
+        auto obj = ObjectAt(i);
+        if (!obj || obj->cls != imageClass || !IsLive(obj) || IsDefaultOrArchetype(obj)) continue;
+        auto owner = OwningUserWidget(obj);
+        bool ownerInViewport = false, visible = false;
+        if (!owner || !WidgetBool(owner, "IsInViewport", ownerInViewport) || !ownerInViewport) continue;
+        WidgetBool(obj, "IsVisible", visible);
+        UObject* resource = nullptr;
+        float width = 0, height = 0;
+        BrushOf(obj, resource, width, height);
+        Log("ui-probe: image %s owner=%s visible=%s size=%.0fx%.0f resource=%s", Name(obj).c_str(),
+            Name(owner->cls).c_str(), visible ? "true" : "false", width, height,
+            resource ? FullName(resource).c_str() : "null");
+        ++listed;
+    }
+    Log("ui-probe: images listed=%d", listed);
+}
+
 } // namespace
 
 void Configure(bool trace, bool nativeMenu) {
@@ -1029,6 +1210,151 @@ bool IsUiWidget(UObject* obj) {
     if (!cls) return false;
     return cls == g_mainClass.cls || cls == g_pauseClass.cls ||
            (g_pause.category && obj == g_pause.category) || cls == g_hudClass.cls;
+}
+
+bool ProbeRuntimeUi() {
+    static constexpr const char* targets[] = {
+        "BP_MissionManager_C", "Debug_UXTesting_Screen_C", "UI_TitleScreenWidget_C", "UI_MainMenuWidget_C"
+    };
+    std::unordered_map<std::string, int> counts;
+    std::unordered_map<std::string, std::vector<UObject*>> objects;
+    for (auto target : targets) {
+        counts.emplace(target, 0);
+        objects.emplace(target, std::vector<UObject*>{});
+    }
+    for (int32_t i = 0, n = ObjectCount(); i < n; ++i) {
+        auto obj = ObjectAt(i);
+        if (!IsLive(obj) || !IsLive(obj->cls) || IsDefaultOrArchetype(obj)) continue;
+        auto name = Name(obj->cls);
+        auto count = counts.find(name);
+        if (count == counts.end()) continue;
+        ++count->second;
+        auto& instances = objects.find(name)->second;
+        if (instances.size() < 16) instances.push_back(obj);
+    }
+
+    int targetObjects = 0;
+    for (auto target : targets) {
+        auto count = counts.find(target)->second;
+        targetObjects += count;
+        Log("ui-probe: objects %s=%d%s", target, count, count > 16 ? " (first 16 listed)" : "");
+    }
+    if (!targetObjects) return false;
+
+    std::unordered_set<UObject*> described;
+    auto describe = [&](const char* label, UObject* widget) {
+        if (IsLive(widget) && described.insert(widget).second) ProbeWidget(label, widget);
+    };
+    for (auto manager : objects.find("BP_MissionManager_C")->second) {
+        auto screen = ObjectField(manager, "Debug_UXTestingWidget");
+        Log("ui-probe: chain manager=%s debug-screen=%s", FullName(manager).c_str(),
+            IsLive(screen) ? FullName(screen).c_str() : "null");
+        describe("debug-screen-from-manager", screen);
+    }
+    for (auto screen : objects.find("Debug_UXTesting_Screen_C")->second) {
+        auto title = ObjectField(screen, "UI_TitleScreenWidget");
+        Log("ui-probe: chain debug-screen=%s title=%s", FullName(screen).c_str(),
+            IsLive(title) ? FullName(title).c_str() : "null");
+        Log("ui-probe: debug-screen state HasPressedKeySinceStart=%s CanExit=%s TimeToWaitBeforeStart=%s holdTimeNeeded=%s",
+            BoolPropertyText(screen, "HasPressedKeySinceStart").c_str(),
+            FloatPropertyText(screen, "CanExit").c_str(),
+            FloatPropertyText(screen, "TimeToWaitBeforeStart").c_str(),
+            FloatPropertyText(screen, "holdTimeNeeded").c_str());
+        describe("debug-screen", screen);
+        describe("title-from-debug-screen", title);
+    }
+    for (auto title : objects.find("UI_TitleScreenWidget_C")->second) {
+        auto button = ObjectField(title, "Button");
+        Log("ui-probe: title state ShowButton=%s Button=%s", BoolPropertyText(title, "ShowButton").c_str(),
+            IsLive(button) ? FullName(button).c_str() : "null");
+        describe("title", title);
+    }
+    for (auto menu : objects.find("UI_MainMenuWidget_C")->second) {
+        auto cursor = Field<int32_t>(menu, "CursorPosition");
+        auto maxOptions = Field<int32_t>(menu, "MaxMenuOptions");
+        auto names = Field<TArrayRaw>(menu, "MenuOptionNames_Text");
+        auto active = Field<TArrayRaw>(menu, "ActiveTextFields");
+        auto firstEntry = ObjectField(menu, "TextEntry0");
+        bool mainPageActive = false;
+        if (active && active->data && active->num > 0 && active->num <= active->max && active->num <= 64) {
+            UObject* firstActive = nullptr;
+            std::memcpy(&firstActive, active->data, sizeof firstActive);
+            mainPageActive = firstActive == firstEntry;
+        }
+        std::string firstLabel = "?";
+        if (names && names->data && names->num > 0 && names->num <= names->max && names->num <= 64) {
+            FText24 first;
+            std::memcpy(&first, names->data, sizeof first);
+            firstLabel = TextString(first);
+        }
+        Log("ui-probe: main-menu state cursor=%d max=%d options=%d mainPageActive=%s firstLabel=%s",
+            cursor ? *cursor : -1, maxOptions ? *maxOptions : -1, names ? names->num : -1,
+            mainPageActive ? "true" : "false", firstLabel.c_str());
+        Call anySaves(menu, "HasAnySaves");
+        if (anySaves.invoke()) {
+            Log("ui-probe: main-menu saves cached=%s queried=%s",
+                BoolPropertyText(menu, "bSaveExists").c_str(),
+                anySaves.get<bool>("Value") ? "true" : "false");
+        } else {
+            Log("ui-probe: ERROR main-menu save availability query failed");
+        }
+        for (auto source : {menu, FindDefaultObject("UI_MainMenuWidget_C")}) {
+            for (auto field : {"MenuOptionNames_Text", "ActiveOptionsNames_Text", "NGOptionsNames_Text",
+                               "GameModeNamesText", "ArcadeModeOptionsNames_Text"}) {
+                auto texts = Field<TArrayRaw>(source, field);
+                std::string labels;
+                if (texts && texts->data && texts->num > 0 && texts->num <= texts->max && texts->num <= 64) {
+                    for (int i = 0; i < texts->num; ++i) {
+                        FText24 label;
+                        std::memcpy(&label, texts->data + 24 * i, sizeof label);
+                        labels += (i ? " | " : "") + TextString(label);
+                    }
+                }
+                Log("ui-probe: main-menu %s %s num=%d max=%d [%s]", source == menu ? "instance" : "default", field,
+                    texts ? texts->num : -1, texts ? texts->max : -1, labels.c_str());
+            }
+        }
+        describe("main-menu", menu);
+    }
+    ProbeImages();
+    return true;
+}
+
+bool ContinueTitle() {
+    if (IsLive(g_main.widget) && MainPageActive()) {
+        auto names = MainNames();
+        if (!names || !names->data || names->num <= 0) return false;
+        FText24 first;
+        std::memcpy(&first, names->data, sizeof first);
+        auto label = TextString(first);
+        if (!IsContinueLabel(label)) {
+            Log("native ui: Continue refused; first title row is '%s'", label.c_str());
+            return false;
+        }
+        MainSetCursor(0);
+        if (!Call(g_main.widget, "OnConfirmPressed").invoke()) return false;
+        Log("native ui: invoked the game's Continue action");
+        return true;
+    }
+
+    auto titleClass = g_titleClass.Get(g_now);
+    for (int32_t i = 0, n = ObjectCount(); IsLive(titleClass) && i < n; ++i) {
+        auto title = ObjectAt(i);
+        bool showButton = false;
+        if (!IsLive(title) || !IsA(title, titleClass) || !GetBoolProp(title, "ShowButton", showButton) || !showButton)
+            continue;
+        Call inViewport(title, "IsInViewport");
+        if (!inViewport.invoke() || !inViewport.get<bool>("ReturnValue")) continue;
+        Call visibility(title, "GetVisibility");
+        if (!visibility.invoke()) continue;
+        auto state = visibility.get<uint8_t>("ReturnValue");
+        if (state == kCollapsed || state == kHidden) continue;
+        Log("native ui: activating title splash button animation on %s", FullName(title).c_str());
+        if (!Call(title, "ButtonAnimation").invoke()) return false;
+        Log("native ui: invoked the game's title splash button animation");
+        return true;
+    }
+    return false;
 }
 
 bool BeforeEvent(UObject* obj, UObject* fn, void* parms) {
@@ -1105,6 +1431,10 @@ bool CursorNeeded(UObject* controller) {
             return true;
     }
     return false;
+}
+
+void TitleSavesChanged() {
+    g_titleSavesChanged = true;
 }
 
 bool Notify(const std::string& title, const std::string& body) {

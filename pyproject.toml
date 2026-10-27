@@ -1,9 +1,12 @@
 [project]
 name = "theys-gone"
-version = "0.4.0"
+version = "0.5.1"
 description = "Theys Gone: LAN co-op ASI mod for Days Gone (build and research tooling)"
 requires-python = ">=3.11,<4"
 dependencies = ["capstone>=5.0.6,<6"]
+
+[project.optional-dependencies]
+remote-windows = ["vgamepad (>=0.1,<0.2) ; sys_platform == \"win32\""]
 
 [tool.poetry]
 package-mode = false

@@ -351,7 +351,7 @@ bool GetBoolProp(UObject* obj, const char* name, bool& out, uint8_t* maskOut) {
     return true;
 }
 
-bool SetBoolProp(UObject* obj, const char* name, bool in) {
+bool SetBoolProp(UObject* obj, const char* name, bool value) {
     if (!IsLive(obj)) return false;
     auto property = FindChild(obj->cls, name);
     if (!property) return false;
@@ -359,9 +359,8 @@ bool SetBoolProp(UObject* obj, const char* name, bool in) {
     if (!ReadableMemory(fields, 4)) return false;
     uint8_t fieldSize = fields[0], byteOffset = fields[1], byteMask = fields[2];
     if (!fieldSize || fieldSize > 8 || byteOffset >= fieldSize || !byteMask) return false;
-    auto ptr = reinterpret_cast<uint8_t*>(obj) + PropertyOffset(property) + byteOffset;
-    if (in) *ptr |= byteMask;
-    else *ptr &= ~byteMask;
+    auto at = reinterpret_cast<uint8_t*>(obj) + PropertyOffset(property) + byteOffset;
+    *at = value ? (*at | byteMask) : (*at & ~byteMask);
     return true;
 }
 

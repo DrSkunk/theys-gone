@@ -351,6 +351,10 @@ bool SaveTransferResync() {
     return true;
 }
 
+bool SaveTransferInProgress() {
+    return g_guest.state == GuestState::requesting || g_guest.state == GuestState::receiving;
+}
+
 bool SaveTransferHandle(const char* data, int size, const SaveTransferContext& context) {
     Header header;
     if (size < 4) return false;

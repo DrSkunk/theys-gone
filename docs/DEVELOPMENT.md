@@ -14,7 +14,7 @@
 ```sh
 poetry install
 make test     # C++ protocol/motion/combat tests + Python unit tests
-make build    # package/TheysGone.asi + TheysGone.ini
+make build    # package/TheysGone.asi + TheysGone.ini + branding pak
 make dist     # dist/TheysGone-<version>.zip + .sha256
 ```
 
@@ -37,7 +37,7 @@ Python simulator and analysis tools. They don't replace testing in the game.
 |---|---|
 | [`src/coop/dllmain.cpp`](../src/coop/dllmain.cpp) | DLL entry, `InitializeASI` |
 | [`src/coop/coop.cpp`](../src/coop/coop.cpp) | Build check, hook, per-frame logic, all features |
-| [`src/coop/ue.hpp`](../src/coop/ue.hpp), [`ue.cpp`](../src/coop/ue.cpp) | UE 4.10 reflection layer |
+| [`src/coop/ue.hpp`](../src/coop/ue.hpp), [`ue.cpp`](../src/coop/ue.cpp) | Build-specific UE4 Bend reflection layer |
 | [`src/coop/protocol.hpp`](../src/coop/protocol.hpp) | State packet |
 | [`src/coop/pose.hpp`](../src/coop/pose.hpp), [`skeleton.cpp`](../src/coop/skeleton.cpp) | Pose compression, reading and writing skeletons |
 | [`src/coop/gear.hpp`](../src/coop/gear.hpp), [`enemy.hpp`](../src/coop/enemy.hpp) | Held-item and enemy datagrams |
@@ -66,6 +66,9 @@ datagram's own version constant, and update `tools/test_protocol.cpp` and
 
 [`tools/fake_peer.py`](../tools/fake_peer.py) speaks the protocol, so you can
 test with a single game.
+It also reports fresh version-3 host story packets (saved/live signatures,
+save serial and sequence) and fresh completed-objective packets, allowing both
+story protocols to be observed without a second game client.
 
 **On a Linux/Proton machine with systemd:** copy `tools/fake_peer.py` and
 `tools/same-pc/*.sh` into one folder on the gaming PC and run:
@@ -94,6 +97,22 @@ trails the player. Run `--help` for all options.
 `--fetch-save DIR` makes it a guest that downloads a `HostSave=1` host game's
 saves into `DIR` and prints their SHA-256.
 
+## Branding
+
+The validated binary asset is tracked at
+[`assets/branding/pakchunk99-TheysGone_Brand_P.pak`](../assets/branding/pakchunk99-TheysGone_Brand_P.pak).
+`make build` copies it into `package/BendGame/Content/Paks/`; `make dist`
+includes that same game-relative path in the archive. There is currently no
+source-to-pak regeneration tool in the repository.
+
+`UI_MainMenuWidget_C` shows two logo images: `Logo` (`title_logo_start`, the
+title splash) and `LogoSmall` (`title_logo_start_small`, the menu after the
+splash). The branding pak `pakchunk99-TheysGone_Brand_P.pak` replaces both
+textures, but the game keeps drawing the original small texture. The plugin
+therefore points `LogoSmall` at `Logo`'s texture at its own brush size, logged
+as `native ui: title menu logo uses the branded title texture`. Without the pak
+both textures are the original Days Gone logo, so the swap changes nothing.
+
 ## Debug tools
 
 The plugin includes local test tools for spawning enemies, invulnerability,
@@ -117,22 +136,69 @@ poetry run python tools/debug_control.py --game-dir "/path/to/BendGame/Binaries/
 | `spawn-single` | Spawn one swarmer with its native AI, about 6 m ahead |
 | `spawn-pack` | Spawn eight independent swarmers (at most 16 owned at a time) |
 | `status` | Log player and enemy health, controllers and movement |
+| `continue-title` | In-game bot: run the visible title splash's native button animation, or invoke Continue only when it is the first visible title-menu row |
+| `ui-probe` | Log native startup/menu objects, visibility, option counts, first label, cached versus freshly queried save availability, and every `Image` in an on-screen widget with its brush texture; does not activate a menu action |
 | `probe-player` / `probe-enemy` | Apply 5 base damage and check the health change |
+| `enemy-health-all-on` | Host: enable `bReplicateHealthToAll` only on this session's owned test enemies |
+| `kill-owned-enemy` | Host: apply bounded lethal native damage to one authoritative, session-owned test enemy and verify death; never selects ambient enemies or players |
 | `time-shift` | Host: advance the time of day by 6 hours |
 | `weather-next` | Host: switch to the next weather state |
 | `cleanup` | Destroy only the enemies this session spawned |
 | `end` | Clean up and restore damage and saving state |
-| `hit-enemy` | Guest: send 25 damage to the nearest live host enemy, as a real hit would |
+| `hit-enemy` | Send 25 damage to the nearest live replica of the partner's enemies, as a real hit would (the guest hits host enemies; in free roam the host can hit guest-owned enemies) |
 | `story-probe` | Log the job manager's jobs and missions and this PC's story signature |
 | `story-diverge` | Guest with the sandbox active: pretend the story differs, to force a resync |
 | `reload-save` | Reload the newest save in place (`ReloadBecauseOfJobFailure`) |
 | `ride-test` | Toggle a **Ride with** prompt 3 m ahead, to test the native interact prompt alone |
 | `dump-reflection` | Write every loaded class, property and function to `TheysGone-reflection.txt` |
 | `dump-objects` | Write a census of live objects to `TheysGone-objects.txt` |
-| `trace-on` / `trace-off` | Record every distinct ProcessEvent call with sample parameters to `TheysGone-trace.txt` |
+| `net-probe` | Write the engine's built-in networking state (net drivers, connections, controllers, roles, replicated actors and properties) to `TheysGone-net.txt` |
+| `net-listen` | Experimental, host: start the engine's built-in listen server (Steam P2P) on the live world; `[Research] ControllerClass=`, `PawnClass=`, `SpectatorJoin=` set what joining players get |
+| `net-connect` | Experimental, guest: join a built-in listen server at `[Research] ConnectUrl` (`steam.<host SteamID64>`) without reloading the map; `[Research] ClientNavigation=1` recreates the world's navigation system after the join |
+| `net-possess` | Experimental, host: spawn a pawn (`[Research] GuestPawnClass`, default `BendDefaultPlayerPawn_C`) 3 m from the host and let the joined player's controller possess it |
+| `net-takeover` | Experimental, guest: make the replicated controller local so this PC drives the host-owned pawn; run again to switch back. It also rebuilds the input stack for the taken-over controller, skips the own controller's `ProcessPlayerInput`, adopts the own controller's Blueprint input components and moves the taken-over controller to player index 0 (Bend's camera and many Blueprints use player 0) |
+| `net-diag` | Experimental: log roles, ownership (`GetNetConnection`), input components, control rotation and tick state of every player controller and player pawn |
+| `net-auto` | Experimental, guest: toggle the taken-over pawn's local role between SimulatedProxy and AutonomousProxy |
+| `net-nudge` | Experimental, guest: call `AddYawInput(30)` on the local controller to test input without the viewport |
+| `net-input` | Experimental: first run wraps `PlayerController` InputKey/InputAxis, UpdateRotation, AddYawInput, ProcessPlayerInput, the player pawn look handlers and the camera's rotation input; later runs log and reset per-controller counts, rotations, the static input stack and camera manager state |
+| `net-walk` | Experimental: feed `AddMovementInput` to the local controller's pawn every frame for 3 s and log the distance moved plus movement telemetry (velocity, acceleration, desiredSpeed, root motion) every 0.5 s. With `[Research] WalkTarget=remote` the host walks the pawn of the remote guest's controller instead |
+| `trace-on` / `trace-off` | Record every distinct ProcessEvent call with sample parameters to `TheysGone-trace.txt` (`OnRep_*`, `ReceiveBeginPlay` and `ClientRestart` are counted per object) |
+| `mission-watch-on` / `mission-watch-off` | Mission lab: log mission/job ProcessEvent calls with parameter values, poll job state (done, active, state, objective index, tracked job, episode) every 0.5 s and log each change; `off` prints per-function call counts |
+| `mission-state` | Read-only mission lab: write every job and mission row, the tracked job, the episode and active job objects to `TheysGone-missions.txt`; objective arrays include reflected struct fields and values. Does not require a gameplay pawn if the job manager is loaded |
+| `mission-act` | Mission lab, **changes the story**: call one mission function from `--arg "<Function> [ObjectName\|-] [Param=Value ...]"` and log the return value and the immediate state change. Use `Class.Function` when targeting a class. Requires `[Research] MissionActions=1`; back up saves first, because the game may autosave the result |
+| `stream-focus` | Free roam: with `--arg "<east m> <north m>"`, add a debug second streaming focus at that offset from the local pawn (more than 150 m away); `--arg off` clears it. Needs `FreeRoam=1` at launch and the streaming hook installed |
+| `stream-probe` | Free roam: log the separation state, the second focus, the last tile-merge counts, loaded levels, ground at the focus and AI within 150 m of it |
+| `move-by` | Free roam: teleport the local pawn by `--arg "<east m> <north m>"` (each within 20 km) and hold it until a capsule sweep finds ground (30 s limit). Debug only; a large jump can land in unloaded terrain, so move in steps of a few hundred metres |
 
-`hit-enemy`, `story-*`, `reload-save`, `ride-test`, `dump-*` and `trace-*`
-work without `begin`. The research commands only read and log.
+`hit-enemy`, `story-*`, `reload-save`, `ride-test`, `dump-*`, `net-*`, `trace-*`,
+`stream-*`, `move-by` and `mission-*` work without `begin`. The research commands only read and log, except
+`mission-act` and the experimental `net-*` commands, which drive the engine's own
+networking; see [REPLICATION-RESEARCH.md](REPLICATION-RESEARCH.md).
+
+`mission-act` looks the function up on the live `BendJobManager`, then
+`BendGameMission`, unless a class is named (`IND_Jobscript_C.MedBoxObtained`).
+A named class with no live instance falls back to its default object for static
+functions only (`BendGameplayStatics.SaveGameOW - bCriticalSave=1`).
+`ObjectName` fills the first object parameter by exact object name (for example
+`IND-JobData`). Named parameters may be Bool, Byte, Int, Float, Name or Object.
+The parameters are logged again after the call, which shows out values.
+For example, `IND_Jobscript_C.UpdateJobObjectiveStatusAndProgression -
+ObjIdentifier=IND3 ObjState=0` targets the class method; do not separate the
+class and function with a pipe.
+
+The experimental `net-*` path reads these `[Research]` options from
+`TheysGone.ini` at startup (all off by default):
+
+| Option | Side | Effect |
+|---|---|---|
+| `ClientNavigation=1` | guest | Recreate the navigation system after `net-connect`, so Bend's door code does not crash |
+| `PawnReplication=1` | both | Restore the stock `ACharacter::GetLifetimeReplicatedProps` on Bend's character classes, which Bend replaced with an empty function. Without it, pawns replicate nothing after spawning |
+| `BendHealthReplication=1` | both | Requires `PawnReplication=1`: additionally register `BendPawn.Health` with no lifetime condition. Set identically before `net-listen`/`net-connect` and restart both games to change it. This tests property transport only; Bend's native `OnRep_Health` virtual implementation is empty |
+| `ClientPossess=1` | guest | Run Bend's `Possess` on the client during `net-takeover`, which creates the player navigation object (`CancelCurrentPlayerNavigation` crashes without it) |
+| `ClientAuthoritativePosition=1` | host | Accept the guest's position (`ClientAuthorativePosition`, `MAXPOSITIONERRORSQUARED=1e12`). Bend moves by animation root motion, which the server does not reproduce for a remote pawn |
+| `GuestPawnClass=` | host | Pawn class for `net-possess` |
+| `WalkTarget=remote` | host | `net-walk` drives the remote guest's pawn |
+| `WalkConsume=1` | any | `net-walk` consumes the movement input itself after each step |
 
 Commands go through a file mailbox. The helper atomically writes
 `TheysGone-debug.ini` (`[Debug] Command=…, Request=<new number>`) next to
@@ -147,6 +213,131 @@ cinematic, or after five minutes without a command. Packs are **not** native
 hordes. The game's horde functions are tied to saved horde progress, so they
 are deliberately not used. Blocking saves reduces risk but is not a sandbox:
 use a backed-up or disposable save.
+
+`kill-owned-enemy` reports an error if native damage does not actually kill
+its owned target. A grapple/melee death-blow guard can clamp Health to 1;
+for an isolated death-replication test, damage a fresh enemy before it
+engages a player rather than bypassing that guard. `BendHealthReplication`
+can deliver final Health and tear-off without restoring the guest's mesh,
+dying animation, or corpse cleanup; see runs N/O in
+[REPLICATION-RESEARCH.md](REPLICATION-RESEARCH.md).
+
+## Remote game-session controller
+
+[`tools/game_remote.py`](../tools/game_remote.py) is a small Linux/Windows helper for
+controlling an active game session and retrieving screenshots. It is separate
+from the mod and exposes only health, PNG capture, and a bounded allowlist of
+keyboard taps, relative mouse moves, mouse clicks, virtual gamepad taps/stick
+and trigger input, and waits. It has no shell, file, process or
+arbitrary-command endpoint. Each tap releases its input and each analog input
+returns to neutral even if an action fails.
+
+**Linux:** the gaming PC needs Python 3.11+, `ydotool`/`ydotoold`, and either `grim`
+(Wayland, including compatible gamescope sessions) or `scrot` (X11). The
+`ydotoold` service and `/dev/uinput` permissions must be configured for the
+same user/session that runs the helper. Virtual gamepad support additionally
+requires `python-evdev` and working `/dev/uinput` access; `/v1/health` reports
+whether it initialized. Screenshot capture may depend on the compositor
+allowing capture of the game display; verify it in the actual session before
+relying on it.
+
+For KDE Wayland, `--capture spectacle` uses the installed KDE screenshot
+utility without opening its UI. For an X11/XWayland game (including Proton
+under Deck Gaming Mode), `--capture ffmpeg-x11` uses FFmpeg's `x11grab`.
+It requires the game's `DISPLAY` and a readable `XAUTHORITY` from the same
+session. Paths inside a Steam container may not exist in the host namespace.
+XWayland capture sees X11 content, not native Wayland windows or Steam's
+compositor overlays; inspect the returned PNG before relying on it.
+On the tested Deck, it returned a black image even with the game running.
+Use `--capture gamescope` with `WAYLAND_DISPLAY=gamescope-0` for Gaming Mode
+instead: it uses the installed `gamescopectl screenshot` command and waits
+for a complete PNG, capturing the compositor's actual game output.
+
+**Windows:** Python 3.11+ is sufficient for keyboard/mouse input and PNG
+screenshots. The helper automatically selects native `SendInput` (physical
+scan codes and relative mouse events) and Windows PowerShell/System.Drawing
+capture; `ydotool`, `grim` and `scrot` are not needed. `--capture windows`
+selects this explicitly. Run it in the logged-in, unlocked gaming session,
+with the game focused and at the same elevation level. Windows can block
+input into a more privileged application. Prefer borderless/windowed mode
+if exclusive fullscreen produces black screenshots.
+
+Windows virtual Xbox 360 input is optional: install the Poetry extra with
+`poetry install --extras remote-windows`, provision its ViGEmBus driver, and
+pass `--windows-gamepad` when serving. ViGEmBus is a legacy, retired driver;
+it is not needed for keyboard/mouse control, and the helper never installs
+drivers itself. Enabling gamepad support without a working package/driver
+fails at startup rather than pretending the controller is connected.
+`/v1/health` reports the selected input/capture backends and gamepad status.
+Stick Y is down-positive on both platforms; Windows maps it to XInput's
+opposite convention.
+
+Create an auth token on each PC and a TLS certificate with that machine's LAN
+IP or DNS name in its subject alternative names. Keep the private key and
+token private; securely copy the token and public certificate to the
+controller machine, not the TLS private key. Certificates can be generated
+on a machine with OpenSSL and securely provisioned to the gaming PC:
+
+```sh
+python3 tools/game_remote.py create-token ~/.config/theys-gone-remote.token
+openssl req -x509 -newkey rsa:3072 -sha256 -days 30 -nodes \
+  -keyout remote.key -out remote.crt \
+  -subj "/CN=days-gone-test-pc" \
+  -addext "subjectAltName=IP:192.168.1.50,DNS:days-gone-test-pc"
+chmod 600 remote.key
+python3 tools/game_remote.py serve --host 0.0.0.0 --port 8765 \
+  --token-file ~/.config/theys-gone-remote.token \
+  --capture grim --tls-cert remote.crt --tls-key remote.key
+```
+
+Use `--capture scrot` for an X11 session. The server refuses non-loopback
+listeners without TLS and requires the token for every endpoint. The
+controller trusts the certificate explicitly:
+
+```sh
+python3 tools/game_remote.py control --url https://192.168.1.50:8765 \
+  --token-file ./pc.token --ca-cert ./remote.crt health
+python3 tools/game_remote.py control --url https://192.168.1.50:8765 \
+  --token-file ./pc.token --ca-cert ./remote.crt screenshot ./host.png
+python3 tools/game_remote.py control --url https://192.168.1.50:8765 \
+  --token-file ./pc.token --ca-cert ./remote.crt actions \
+  '[{"type":"key","key":"w","duration_ms":300},{"type":"mouse_move","dx":30,"dy":0}]'
+```
+
+On Windows, create the token and start the helper from PowerShell after
+provisioning the TLS files (the certificate must contain this PC's actual
+IP/DNS name):
+
+```powershell
+$token = "$env:LOCALAPPDATA\TheysGone-remote.token"
+py -3 tools/game_remote.py create-token $token
+$identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+icacls $token /inheritance:r /grant:r "$($identity):(F)"
+icacls .\remote.key /inheritance:r /grant:r "$($identity):(F)"
+py -3 tools/game_remote.py serve --host 0.0.0.0 --token-file $token --tls-cert .\remote.crt --tls-key .\remote.key
+```
+
+Use a private-network-only firewall rule if Windows prompts or blocks the
+port; do not disable the firewall. The client can run on Linux, Windows or
+macOS, independently of which OS the gaming PC runs.
+
+Gamepad actions use names such as `south`, `start`, or `lb`; stick coordinates
+range from -32768 to 32767 and automatically return to center after the
+requested duration:
+
+```sh
+python3 tools/game_remote.py control --url https://192.168.1.50:8765 \
+  --token-file ./pc.token --ca-cert ./remote.crt actions \
+  '[{"type":"gamepad_stick","stick":"left","x":0,"y":24000,"duration_ms":400},{"type":"gamepad_button","button":"south","duration_ms":100}]'
+```
+
+An omitted `--host` listens only on loopback, and plain HTTP is accepted only
+for loopback control. Keep the helper on a trusted private network, stop it
+when testing is over, and do not forward its port publicly. Test health,
+screenshot, a short movement tap, a camera turn and input release on each
+machine before using it for replication experiments. Its action contract is
+covered by `make test`; screenshots and input injection still require
+verification on the actual gaming compositor.
 
 ## Native CO-OP menus and discovery
 
@@ -330,6 +521,11 @@ The guest starts from a copy of the host's save:
    loads it. After the load the pins are released, the guest's autosaves go
    to the sandbox, and the guest is teleported to the host once both are in
    game.
+   While host saves are pinned, the log records `.sav` opens with the
+   sandbox path, access, disposition, and open result (up to 128 per
+   adoption). `ReloadBecauseOfJobFailure` may return false even when its
+   asynchronous load later succeeds; use the verified story signature as the
+   result.
 
 All datagrams carry the sender's session id and are ignored unless it matches
 the connected partner. File names are limited to `[A-Za-z0-9_.-]` ending in
@@ -352,12 +548,35 @@ over the Steam transport. The host shares its last save on disk.
 
 ### Story sync (`DMST`)
 
-Each side samples a signature of `BendJobManager`'s jobs and missions (which
-are complete, which are known) every 3 s ([`story.hpp`](../src/coop/story.hpp)).
-The host sends its live signature, the signature at its last save and a save
-serial every second. When a guest's signature differs from the host's saved
-one for 6 s, and the host has saved this session, the guest requests the
-host's save again and reloads onto it. Verified live with `story-diverge`.
+Each side samples a signature of `BendJobManager`'s jobs and missions every
+3 s, including each job's objective index and every current objective ID/state
+in active jobs
+([`story.hpp`](../src/coop/story.hpp)). The host sends its live signature, the
+signature at its last save, a save serial and a monotonically sequenced packet
+every second; the guest ignores duplicate or stale packets. When a guest's
+signature differs from the host's saved one for 6 s, and the host has saved
+this session, the guest requests the host's save again and reloads onto it.
+This syncs persisted progress through the save-resync fallback. Story packets
+are version 3; both peers need a build with this version. With
+`MissionObjectiveSync=1` on both peers and `HostSave=1`, the host also retries
+uniquely identified completed objectives in sequenced `DMOB` packets every 3 s.
+The guest applies those idempotently only after adopting the host save and
+entering gameplay. Job start/completion, ambiguous IDs and failed applications
+still rely on save resync. This opt-in path has a paired LAN validation for one
+completed objective; the isolated host's sends were also observed with
+`fake_peer.py`. The Deck logged `objective sync: applied IND-JobData.IND3 from
+host` and its story signature matched the host. Save-resync fallback was also
+verified with DMOB disabled, including after a host objective autosave. Job
+start and job completion were validated on a paired LAN run: neither travels
+in DMOB, and both reach the guest through save resync at the host's next save.
+Starting a job does not autosave by itself. Completing one autosaves only after
+the host dismisses the MISSION COMPLETE reward screens, which block saving
+(`IsSafeForOWSave` reason 12). The guest then matched within about 33 s.
+A paired DMST v3 run also verified the saved `IND4` state-0-to-1 transition:
+the guest fetched the changed host save, reloaded automatically and matched
+both the objective state and story signature. This covers one non-completed
+objective transition, not broader campaign progression. DMOB continues to
+send only completed (state 2) objectives, so the option stays default-off.
 
 ## Shared enemies
 
@@ -390,6 +609,11 @@ With *Sync host's enemies* on, both PCs set `kSyncEnemies`:
   2.6 m sends a strike (swarmer 12, others 15-35, an estimate). Real damage
   the stand-in takes is forwarded too, capped at 400 per change. The guest
   applies strikes with `ApplyDamage`.
+- **Guest-kept enemies to host (protocol v9).** While the guest keeps enemies
+  through a reunion, it creates the same hidden proxy at the host's avatar.
+  Nearby guest-owned enemies can target it; their swings and damage use the
+  same `DMPX` path, now accepted by either player owner. This direction still
+  needs paired validation.
 
 Verified live between two PCs: the guest's own enemies vanished and the host's
 appeared; `hit-enemy` brought a host swarmer from 160 to below 0; a pack split
@@ -466,10 +690,11 @@ modify base damage: a 25-point debug hit reduced one swarmer by 18.75.
 | Surface | Evidence / status |
 |---|---|
 | Host save and sandbox | LAN transfer and in-place reload verified between two real PCs; real guest save hashes remained unchanged in the sandbox tests |
-| Story catch-up | Forced divergence with `story-diverge` triggered a host-save resync; natural mission progression and full campaign play remain unverified |
+| Story catch-up | Forced divergence and a host objective autosave both triggered host-save resync with DMOB disabled; the Deck returned to the host signature. Natural campaign progression remains unverified |
 | Guest AI suppression | Local enemies disappeared and host replicas appeared in the two-PC LAN test |
 | Guest damage to host enemies | `hit-enemy` damaged and killed a real host swarmer; this bypasses aim and does not validate real shooting or melee input |
 | Host melee damage to guest | Swarmer pack targeted the stand-in, damaged and killed the guest; guest and stand-in respawned, and a later clean-build strike reduced health from 121.9 to 109.9 |
+| Free roam enemy handoff | Paired `move-by` tests: the guest kept 8 Swarmers across a reunion and the host's hits applied to them; the host kept 6 Swarmers fighting the guest across a split, which kept striking the guest and took guest hits 312 m from the host. Debug-spawned packs only; not yet verified in a natural mission fight |
 | Native bike interaction | Standalone `ride-test` prompt exercised; boarding a real partner's bike through it still needs a player test |
 | Steam transport | Earlier lobby/transport tests do not validate these new gameplay paths; current gameplay evidence is from UDP LAN |
 
@@ -501,6 +726,13 @@ then validates the PE structure. It reports reflection-string anchors and the
 functions that reference them. The results are leads for analysis, not proven
 engine addresses. The tool never attaches to a process or writes anything
 except its report.
+
+## Save files
+
+The save format research and the save editor (Python codec/CLI and browser
+editor) are maintained in the separate
+[days-gone-save-editor](https://github.com/drskunk/days-gone-save-editor)
+repository. The transfer code in `src/coop/` treats saves as opaque bytes.
 
 ## Releases
 

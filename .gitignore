@@ -12,3 +12,5 @@ TheysGone-debug.lock
 .TheysGone-debug-*
 dist/
 .DS_Store
+apitoken
+sshpw

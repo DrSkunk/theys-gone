@@ -41,8 +41,10 @@ constexpr int StructSuper = 0x30;
 constexpr int StructChildren = 0x38;
 constexpr int FunctionFlags = 0x88;
 constexpr int FunctionParmsSize = 0x90;
+constexpr int FunctionNative = 0xb0; // UFunction::Func (native thunk pointer)
 constexpr int PropertyArrayDim = 0x30;
 constexpr int PropertyElementSize = 0x34;
+constexpr int PropertyFlags = 0x38; // uint64 EPropertyFlags; CPF_Net is bit 5
 }
 
 constexpr int32_t RF_ClassDefaultObject = 0x10;
@@ -89,7 +91,7 @@ UObject* FindFunction(const UObject* cls, const char* name);
 int PropertyOffset(const UObject* prop);
 // Reads a BoolProperty, including native bitfields, through its UBoolProperty byte mask.
 bool GetBoolProp(UObject* obj, const char* name, bool& out, uint8_t* maskOut = nullptr);
-bool SetBoolProp(UObject* obj, const char* name, bool in);
+bool SetBoolProp(UObject* obj, const char* name, bool value);
 struct StructField { const char* structure; const char* member; };
 bool ReadStructFields(const void* data, size_t size, std::initializer_list<StructField> fields, void* out, size_t outSize);
 template <typename T> bool ReadEventParam(UObject* function, void* parameters, const char* name, T& out) {

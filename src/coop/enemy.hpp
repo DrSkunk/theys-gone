@@ -12,7 +12,11 @@
 
 namespace coop {
 
-// Host-to-client enemy replication: poses travel as kPoseEnemy frames, appearance as EnemyInfoPacket.
+// Enemy poses travel as kPoseEnemy frames, appearance as EnemyInfoPacket. Every enemy has exactly one owner:
+// the machine whose game simulates it. Entity ids belong to the owner, so each side's replicas hold only the
+// other side's ids, and a hit on a replica is sent to that replica's owner. During free roam the guest owns
+// its region's enemies; when the regions merge or split, enemies already fighting a player stay with their
+// owner until they die or lose interest (KeepHandedEnemy) instead of vanishing.
 constexpr uint32_t kEnemyInfoMagic = 0x4E454D44; // "DMEN"
 constexpr uint16_t kEnemyInfoVersion = 1;
 constexpr size_t kEnemyMeshPaths = 4;      // body plus up to three modular parts
@@ -23,6 +27,37 @@ constexpr float kEnemyRadius = 8000.f;     // 80 m around either player
 constexpr double kEnemySendInterval = 1.0 / 15;
 constexpr double kEnemyInfoInterval = 1.0;
 constexpr double kEnemyTimeout = 1.5;
+
+constexpr double kHandoffCalm = 6.0;   // an enemy that ignores its player this long goes back to normal rules
+constexpr double kHandoffMax = 180.0;  // upper bound on keeping an enemy past an ownership change
+constexpr double kHandoffAbsence = 30.0; // longest stand-in rebuild that still counts as the same fight
+
+// Whether an enemy was fighting the partner when ownership changes. While a partner proxy is absent after
+// an avatar rebuild, the fight is judged as of `presentAt`, the last time the target was available.
+inline bool FightingAtHandoff(double onGuest, double now, bool playerHere, double presentAt) {
+    double reference = playerHere || now - presentAt > kHandoffAbsence ? now : presentAt;
+    return reference - onGuest <= kHandoffCalm;
+}
+
+// The guest sends its own enemies while it owns a region, and afterwards while it still keeps some of them.
+inline bool EnemyStreamSendAllowed(bool host, bool peerEnabled, bool separated, bool keeping) {
+    return peerEnabled && (host || separated || keeping);
+}
+
+// The host shows whatever the guest owns; the guest always shows the host's enemies.
+inline bool EnemyStreamReceiveAllowed(bool host, bool peerEnabled) {
+    return !host || peerEnabled;
+}
+
+inline bool PartnerProxyWanted(bool host, bool peerReady, bool freeRoam, bool separated, bool keeping) {
+    return peerReady && (host || (freeRoam && !separated && keeping));
+}
+
+// Whether an enemy kept across an ownership change stays with its owner. `engaged` is the last time it
+// targeted the player it was fighting and `since` when the ownership change happened.
+inline bool KeepHandedEnemy(bool alive, double engaged, double since, double now) {
+    return alive && now - engaged < kHandoffCalm && now - since < kHandoffMax;
+}
 
 #pragma pack(push, 1)
 struct EnemyInfoPacket {
@@ -89,7 +124,7 @@ inline std::vector<int> EnemyBoneSubset(const std::vector<std::string>& names, c
     return subset;
 }
 
-// Guest-to-host hit on a replicated enemy. The host applies the damage to its real pawn.
+// A hit on a replicated enemy, sent to the enemy's owner, which applies the damage to its real pawn.
 constexpr uint32_t kEnemyHitMagic = 0x48454D44; // "DMEH"
 constexpr uint16_t kEnemyHitVersion = 1;
 constexpr float kEnemyHitMaxDamage = 1000.f;
@@ -126,12 +161,12 @@ inline EnemyHitPacket EncodeEnemyHit(uint32_t session, uint32_t entity, uint32_t
     return p;
 }
 
-// Host-to-guest damage: host enemies attacked the guest's stand-in pawn in the host world.
-constexpr uint32_t kGuestStrikeMagic = 0x58504D44; // "DMPX"
-constexpr uint16_t kGuestStrikeVersion = 1;
+// Damage from an enemy attack on the partner's stand-in pawn, applied by that player's owner.
+constexpr uint32_t kPartnerStrikeMagic = 0x58504D44; // "DMPX"
+constexpr uint16_t kPartnerStrikeVersion = 1;
 
 #pragma pack(push, 1)
-struct GuestStrikePacket {
+struct PartnerStrikePacket {
     uint32_t magic;
     uint16_t version, reserved;
     uint32_t session, sequence;
@@ -139,17 +174,17 @@ struct GuestStrikePacket {
 };
 #pragma pack(pop)
 
-inline bool DecodeGuestStrike(const char* data, int len, GuestStrikePacket& out) {
-    if (len != static_cast<int>(sizeof(GuestStrikePacket))) return false;
+inline bool DecodePartnerStrike(const char* data, int len, PartnerStrikePacket& out) {
+    if (len != static_cast<int>(sizeof(PartnerStrikePacket))) return false;
     std::memcpy(&out, data, sizeof out);
-    return out.magic == kGuestStrikeMagic && out.version == kGuestStrikeVersion && !out.reserved && out.session &&
+    return out.magic == kPartnerStrikeMagic && out.version == kPartnerStrikeVersion && !out.reserved && out.session &&
         out.sequence && out.damage > 0 && out.damage <= kEnemyHitMaxDamage;
 }
 
-inline GuestStrikePacket EncodeGuestStrike(uint32_t session, uint32_t sequence, float damage) {
-    GuestStrikePacket p{};
-    p.magic = kGuestStrikeMagic;
-    p.version = kGuestStrikeVersion;
+inline PartnerStrikePacket EncodePartnerStrike(uint32_t session, uint32_t sequence, float damage) {
+    PartnerStrikePacket p{};
+    p.magic = kPartnerStrikeMagic;
+    p.version = kPartnerStrikeVersion;
     p.session = session;
     p.sequence = sequence;
     p.damage = damage;

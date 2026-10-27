@@ -12,6 +12,8 @@
 #include "../src/coop/save_policy.hpp"
 #include "../src/coop/savesync.hpp"
 #include "../src/coop/session.hpp"
+#include "../src/coop/research.hpp"
+#include "../src/coop/streaming.hpp"
 
 #include <cassert>
 #include <cstring>
@@ -20,6 +22,7 @@
 #include <cstddef>
 #include <string>
 #include <vector>
+#include <cstdlib>
 
 coop::StatePacket MovingPacket(uint32_t milliseconds, float speed = 1000) {
     coop::StatePacket packet{};
@@ -543,6 +546,44 @@ void TestGear() {
 }
 
 void TestEnemyHit() {
+    using namespace coop;
+    // Host always streams; the guest streams while it owns a region or still keeps enemies from one.
+    assert(EnemyStreamSendAllowed(true, true, false, false));
+    assert(!EnemyStreamSendAllowed(true, false, true, true));
+    assert(!EnemyStreamSendAllowed(false, true, false, false));
+    assert(EnemyStreamSendAllowed(false, true, true, false));
+    assert(EnemyStreamSendAllowed(false, true, false, true));
+    assert(!EnemyStreamSendAllowed(false, false, true, true));
+    assert(EnemyStreamReceiveAllowed(false, false));
+    assert(EnemyStreamReceiveAllowed(false, true));
+    assert(EnemyStreamReceiveAllowed(true, true));
+    assert(!EnemyStreamReceiveAllowed(true, false));
+    assert(PartnerProxyWanted(true, true, false, false, false));
+    assert(!PartnerProxyWanted(true, false, true, false, true));
+    assert(!PartnerProxyWanted(false, true, false, false, true));
+    assert(!PartnerProxyWanted(false, true, true, true, true));
+    assert(PartnerProxyWanted(false, true, true, false, true));
+    assert(!PartnerProxyWanted(false, true, true, false, false));
+    auto strike = EncodePartnerStrike(7, 1, 25);
+    PartnerStrikePacket decodedStrike;
+    assert(DecodePartnerStrike(reinterpret_cast<const char*>(&strike), sizeof strike, decodedStrike));
+    assert(decodedStrike.session == 7 && decodedStrike.sequence == 1 && Near(decodedStrike.damage, 25, 0.001f));
+    // Kept enemies stay while alive, recently engaged and within the handoff time limit.
+    assert(KeepHandedEnemy(true, 10, 10, 10));
+    assert(KeepHandedEnemy(true, 10, 0, 10 + kHandoffCalm - 0.1));
+    assert(!KeepHandedEnemy(true, 10, 0, 10 + kHandoffCalm));
+    assert(!KeepHandedEnemy(false, 10, 10, 10));
+    assert(KeepHandedEnemy(true, kHandoffMax - 1, 0, kHandoffMax - 0.5));
+    assert(!KeepHandedEnemy(true, kHandoffMax, 0, kHandoffMax));
+    using coop::FightingAtHandoff;
+    assert(FightingAtHandoff(100, 100 + kHandoffCalm, true, 100 + kHandoffCalm));
+    assert(!FightingAtHandoff(100, 100 + kHandoffCalm + 1, true, 100 + kHandoffCalm + 1));
+    // Stand-in rebuilt after a teleport: judged as of its last presence, within the absence limit.
+    assert(FightingAtHandoff(100, 110, false, 101));
+    assert(!FightingAtHandoff(100, 110, false, 108));
+    assert(!FightingAtHandoff(100, 101 + coop::kHandoffAbsence + 1, false, 101));
+    assert(!FightingAtHandoff(-1e9, 0, true, 0));
+
     static_assert(sizeof(coop::EnemyHitPacket) == 24, "enemy hit wire size");
     auto hit = coop::EncodeEnemyHit(7, 3, 11, false, 42.5f);
     coop::EnemyHitPacket decoded{};
@@ -576,7 +617,7 @@ void TestEnemyHit() {
 }
 
 void TestStory() {
-    static_assert(sizeof(coop::StoryPacket) == 28, "story wire size");
+    static_assert(sizeof(coop::StoryPacket) == 32, "story wire size");
     coop::StoryHasher a, b, c;
     a.Add("Mission_A", true);
     a.Add("Mission_B", false);
@@ -591,12 +632,33 @@ void TestStory() {
     d.Add("Mission_A", true);
     d.Add("Mission_B", false);
     assert(d.Finish(3).hash != sa.hash); // the episode counts too
+    coop::StoryHasher e, f;
+    e.Add("Job_A", false, 0x82, 5);
+    f.Add("Job_A", false, 0x82, 6);
+    assert(e.Finish(2).hash != f.Finish(2).hash); // objective progress participates in story identity
+    coop::StoryHasher state0, state1, state3, same;
+    for (auto* hasher : {&state0, &state1, &state3, &same}) hasher->Add("Job_A", false, 0x82, 5);
+    state0.AddObjectiveState("Job_A", "IND4", 6, 0);
+    state1.AddObjectiveState("Job_A", "IND4", 6, 1);
+    state3.AddObjectiveState("Job_A", "IND4", 6, 3);
+    same.AddObjectiveState("Job_A", "IND4", 6, 1);
+    auto state0Sig = state0.Finish(2), state1Sig = state1.Finish(2), state3Sig = state3.Finish(2),
+         sameSig = same.Finish(2);
+    assert(state0Sig.hash != state1Sig.hash);
+    assert(state1Sig.hash != state3Sig.hash);
+    assert(state1Sig.hash == sameSig.hash);
+    auto stateOneSaved = coop::EncodeStory(77, state1Sig, state1Sig.hash, 5, 10);
+    assert(coop::StoryNeedsResync(stateOneSaved, state0Sig, 0, 0));
+    assert(coop::StoryResyncMatches(state1Sig.hash, state1Sig));
+    assert(!coop::StoryResyncMatches(state0Sig.hash, state1Sig));
+    assert(!coop::StoryResyncMatches(state1Sig.hash, coop::StorySignature{}));
 
-    auto packet = coop::EncodeStory(77, sc, sa.hash, 4);
+    auto packet = coop::EncodeStory(77, sc, sa.hash, 4, 8);
     coop::StoryPacket decoded;
     assert(coop::DecodeStory(reinterpret_cast<const char*>(&packet), sizeof packet, decoded));
     assert(decoded.session == 77 && decoded.savedSignature == sa.hash && decoded.liveSignature == sc.hash);
-    assert(decoded.saveSerial == 4 && decoded.completed == 2 && decoded.unlocked == 2 && decoded.episode == 2);
+    assert(decoded.saveSerial == 4 && decoded.completed == 2 && decoded.unlocked == 2 && decoded.episode == 2 &&
+           decoded.sequence == 8);
     assert(!coop::DecodeStory(reinterpret_cast<const char*>(&packet), sizeof packet - 1, decoded));
     auto bad = packet;
     bad.session = 0;
@@ -604,16 +666,79 @@ void TestStory() {
     bad = packet;
     bad.completed = 3;
     assert(!coop::DecodeStory(reinterpret_cast<const char*>(&bad), sizeof bad, decoded));
+    bad = packet;
+    bad.version = 1;
+    assert(!coop::DecodeStory(reinterpret_cast<const char*>(&bad), sizeof bad, decoded));
+    bad = packet;
+    bad.version = 2;
+    assert(!coop::DecodeStory(reinterpret_cast<const char*>(&bad), sizeof bad, decoded));
+    bad = packet;
+    bad.sequence = 0;
+    assert(!coop::DecodeStory(reinterpret_cast<const char*>(&bad), sizeof bad, decoded));
+    assert(coop::StorySequenceIsNewer(8, 7));
+    assert(!coop::StorySequenceIsNewer(7, 8));
+    assert(!coop::StorySequenceIsNewer(8, 8));
+    assert(coop::StorySequenceIsNewer(1, UINT32_MAX)); // wraparound
+    assert(!coop::StorySequenceIsNewer(0x80000000u, 0)); // half-range is ambiguous
+    auto newer = packet;
+    newer.sequence = 9;
+    assert(coop::StoryPacketIsNewer(newer, packet));
+    assert(!coop::StoryPacketIsNewer(packet, packet)); // duplicate
+    auto restarted = packet;
+    restarted.session = 78;
+    restarted.sequence = 1;
+    assert(coop::StoryPacketIsNewer(restarted, packet)); // new host session resets its sequence
 
     // The guest reloads only for host progress it does not already have, once per host progress.
-    assert(!coop::StoryNeedsResync(decoded, sa, 0));          // host saved what we play
-    auto unsaved = coop::EncodeStory(77, sc, 0, 0);
-    assert(!coop::StoryNeedsResync(unsaved, sc, 0));          // host has not saved this session
-    auto ahead = coop::EncodeStory(77, sc, sc.hash, 5);
-    assert(coop::StoryNeedsResync(ahead, sa, 0));
-    assert(!coop::StoryNeedsResync(ahead, sa, sc.hash));      // already reloaded for it
-    assert(!coop::StoryNeedsResync(ahead, coop::StorySignature{}, 0)); // our progress unknown
+    assert(!coop::StoryNeedsResync(decoded, sa, 0, 0));        // host saved what we play
+    auto unsaved = coop::EncodeStory(77, sc, 0, 0, 9);
+    assert(!coop::StoryNeedsResync(unsaved, sc, 0, 0));        // host has not saved this session
+    auto ahead = coop::EncodeStory(77, sc, sc.hash, 5, 10);
+    assert(coop::StoryNeedsResync(ahead, sa, 0, 0));
+    assert(!coop::StoryNeedsResync(ahead, sa, sc.hash, 0));    // already verified it
+    assert(!coop::StoryNeedsResync(ahead, sa, 0, sc.hash));    // already downloading it
+    assert(!coop::StoryNeedsResync(ahead, coop::StorySignature{}, 0, 0)); // our progress unknown
+    assert(!coop::StoryResyncMatches(0, sc));                   // no expected signature
     std::puts("story ok");
+}
+
+void TestObjectiveProgress() {
+    using namespace coop;
+    auto packet = EncodeObjectiveProgress(77, 8, "IND-JobData", "IND3", 2);
+    ObjectiveProgressPacket decoded{};
+    assert(DecodeObjectiveProgress(reinterpret_cast<const char*>(&packet), sizeof packet, decoded));
+    assert(decoded.session == 77 && decoded.sequence == 8 && decoded.state == 2);
+    assert(std::string(decoded.jobName) == "IND-JobData" && std::string(decoded.objectiveId) == "IND3");
+    assert(!DecodeObjectiveProgress(reinterpret_cast<const char*>(&packet), sizeof packet - 1, decoded));
+    assert(EncodeObjectiveProgress(77, 8, "IND-JobData", "IND4", 1).magic == 0);
+
+    auto bad = packet;
+    bad.version = 0;
+    assert(!DecodeObjectiveProgress(reinterpret_cast<const char*>(&bad), sizeof bad, decoded));
+    bad = packet;
+    bad.flags = 1;
+    assert(!DecodeObjectiveProgress(reinterpret_cast<const char*>(&bad), sizeof bad, decoded));
+    bad = packet;
+    bad.state = 1;
+    assert(!DecodeObjectiveProgress(reinterpret_cast<const char*>(&bad), sizeof bad, decoded));
+    bad = packet;
+    bad.sequence = 0;
+    assert(!DecodeObjectiveProgress(reinterpret_cast<const char*>(&bad), sizeof bad, decoded));
+    bad = packet;
+    std::memset(bad.objectiveId, 'A', sizeof bad.objectiveId);
+    assert(!DecodeObjectiveProgress(reinterpret_cast<const char*>(&bad), sizeof bad, decoded));
+    bad = packet;
+    bad.objectiveId[0] = '/';
+    assert(!DecodeObjectiveProgress(reinterpret_cast<const char*>(&bad), sizeof bad, decoded));
+    auto empty = EncodeObjectiveProgress(77, 8, "", "IND3", 2);
+    assert(!DecodeObjectiveProgress(reinterpret_cast<const char*>(&empty), sizeof empty, decoded));
+
+    auto wrapped = EncodeObjectiveProgress(77, 1, "IND-JobData", "IND3", 2);
+    auto previous = EncodeObjectiveProgress(77, UINT32_MAX, "IND-JobData", "IND3", 2);
+    assert(ObjectiveProgressPacketIsNewer(wrapped, previous));
+    assert(!ObjectiveProgressPacketIsNewer(previous, wrapped));
+    auto restarted = EncodeObjectiveProgress(78, 1, "IND-JobData", "IND3", 2);
+    assert(ObjectiveProgressPacketIsNewer(restarted, previous));
 }
 
 void TestSteamAbi() {
@@ -884,7 +1009,105 @@ void TestSession() {
     assert(lanDir.Hosts().size() == LanDirectory::kLimit);
 }
 
+void TestResearchLifetime() {
+    using namespace coop::research::detail;
+    LifetimeProperty storage[2]{{7, 0, 4, 1}, {}};
+    LifetimeProperties properties{storage, 1, 2};
+    assert(RegisterLifetimeProperty(properties, 7, nullptr) == LifetimeRegistration::present);
+    assert(properties.num == 1 && storage[0].condition == 4 && storage[0].notifyCondition == 1);
+    assert(RegisterLifetimeProperty(properties, 22, nullptr) == LifetimeRegistration::added);
+    assert(properties.num == 2 && properties.max == 2 && storage[1].index == 22);
+    assert(storage[1].padding == 0 && storage[1].condition == 0 && storage[1].notifyCondition == 0);
+    assert(RegisterLifetimeProperty(properties, 22, nullptr) == LifetimeRegistration::present);
+    assert(properties.num == 2);
+    auto fail = +[](void*, size_t, uint32_t) -> void* { return nullptr; };
+    assert(RegisterLifetimeProperty(properties, 23, fail) == LifetimeRegistration::allocationFailed);
+    assert(properties.data == storage && properties.num == 2 && properties.max == 2);
+
+    for (auto invalid : {LifetimeProperties{storage, -1, 2}, LifetimeProperties{storage, 3, 2},
+                         LifetimeProperties{storage, 0, -1}, LifetimeProperties{nullptr, 0, 1},
+                         LifetimeProperties{storage, 0, 4097}}) {
+        auto before = invalid;
+        assert(RegisterLifetimeProperty(invalid, 22, fail) == LifetimeRegistration::invalid);
+        assert(invalid.data == before.data && invalid.num == before.num && invalid.max == before.max);
+    }
+    std::vector<LifetimeProperty> full(4096, {1, 0, 0, 0});
+    LifetimeProperties capped{full.data(), 4096, 4096};
+    assert(RegisterLifetimeProperty(capped, 22, fail) == LifetimeRegistration::invalid);
+    assert(capped.num == 4096 && capped.max == 4096);
+
+    LifetimeProperties growing{};
+    auto reallocate = +[](void* data, size_t bytes, uint32_t alignment) -> void* {
+        assert(alignment == 0 && bytes % sizeof(LifetimeProperty) == 0);
+        return std::realloc(data, bytes);
+    };
+    assert(RegisterLifetimeProperty(growing, 22, reallocate) == LifetimeRegistration::added);
+    assert(growing.num == 1 && growing.max == 1 && growing.data[0].index == 22);
+    assert(RegisterLifetimeProperty(growing, 65535, reallocate) == LifetimeRegistration::added);
+    assert(growing.num == 2 && growing.max == 2 && growing.data[0].index == 22 && growing.data[1].index == 65535);
+    std::free(growing.data);
+}
+
+void TestStreamingMerge() {
+    using coop::streaming::TileRecord;
+    auto rec = [](int32_t tile, int32_t lod) { TileRecord r; r.tile = tile; r.lod = lod; return r; };
+    auto has = [](const std::vector<TileRecord>& list, int32_t tile, int32_t lod) {
+        for (const auto& r : list)
+            if (r.tile == tile) return r.lod == lod;
+        return false;
+    };
+    auto count = [](const std::vector<TileRecord>& list, int32_t tile) {
+        size_t n = 0;
+        for (const auto& r : list) n += r.tile == tile;
+        return n;
+    };
+    // Host sees 1 (full) and 2 (LOD 1); partner sees 2 (full) and 4; 3 and 5 are hidden for both.
+    coop::streaming::Selection host{{rec(1, -1), rec(2, 1)}, {rec(3, -1), rec(4, -1), rec(5, -1)}};
+    coop::streaming::Selection partner{{rec(2, -1), rec(4, 0)}, {rec(1, -1), rec(3, -1), rec(5, -1)}};
+    coop::streaming::MergeStats stats;
+    auto merged = coop::streaming::MergeSelections(host, partner, {}, &stats);
+    assert(merged.visible.size() == 3);
+    assert(has(merged.visible, 1, -1) && has(merged.visible, 2, -1) && has(merged.visible, 4, 0));
+    assert(merged.hidden.size() == 2 && count(merged.hidden, 3) == 1 && count(merged.hidden, 5) == 1);
+    assert(count(merged.hidden, 1) == 0 && count(merged.hidden, 4) == 0);
+    assert(stats.added == 1 && stats.refined == 1 && stats.forced == 0);
+    // Host order is preserved so the host's own tiles commit first.
+    assert(merged.visible[0].tile == 1 && merged.visible[1].tile == 2 && merged.visible[2].tile == 4);
+
+    // A one-shot variant tile hidden by either pass stays hidden even if the other pass wanted it.
+    coop::streaming::Selection hostShot{{rec(7, -1)}, {}};
+    coop::streaming::Selection partnerShot{{}, {rec(7, -1)}};
+    merged = coop::streaming::MergeSelections(hostShot, partnerShot, {7}, &stats);
+    assert(merged.visible.empty() && merged.hidden.size() == 1 && stats.forced == 1);
+    // Without the flag, either focus keeps it visible.
+    merged = coop::streaming::MergeSelections(hostShot, partnerShot, {}, &stats);
+    assert(merged.visible.size() == 1 && merged.hidden.empty() && stats.forced == 0);
+
+    // Identical selections merge to the host selection.
+    merged = coop::streaming::MergeSelections(host, host, {}, &stats);
+    assert(merged.visible.size() == host.visible.size() && merged.hidden.size() == host.hidden.size());
+    assert(stats.added == 0 && stats.refined == 0);
+
+    assert(coop::streaming::FocusNeedsRefresh(true, false, 0, 0, 1e6f));
+    assert(coop::streaming::FocusNeedsRefresh(false, true, 0, 0, 1e6f));
+    assert(!coop::streaming::FocusNeedsRefresh(false, false, 5000, 5000, 1e6f));
+    assert(!coop::streaming::FocusNeedsRefresh(true, true, 500, 500, 1e6f));
+    assert(coop::streaming::FocusNeedsRefresh(true, true, 1000, 0, 1e6f));
+    assert(!coop::streaming::NextSeparated(false, 20000));
+    assert(coop::streaming::NextSeparated(false, 26000));
+    assert(coop::streaming::NextSeparated(true, 20000));
+    assert(!coop::streaming::NextSeparated(true, 14000));
+    float east = 0, north = 0;
+    assert(coop::streaming::ParseOffsetMeters("-1200 350.5", east, north) && east == -1200 && north == 350.5f);
+    assert(!coop::streaming::ParseOffsetMeters("1200", east, north));
+    assert(!coop::streaming::ParseOffsetMeters("1 2 3", east, north));
+    assert(!coop::streaming::ParseOffsetMeters("30000 0", east, north));
+    assert(!coop::streaming::ParseOffsetMeters("nan 0", east, north));
+}
+
 int main() {
+    TestStreamingMerge();
+    TestResearchLifetime();
     TestSession();
     TestSavePolicy();
     TestSaveSync();
@@ -893,6 +1116,7 @@ int main() {
     TestEnemy();
     TestGear();
     TestStory();
+    TestObjectiveProgress();
     TestEnemyHit();
     using coop::DebugCommand;
     for (auto text : {"", "God", "god", "god-on extra", "spawn", "DestroyAll", "begin\n", "spawn-pack; end"})
@@ -906,10 +1130,14 @@ int main() {
     assert(coop::ParseDebugCommand("cleanup") == DebugCommand::cleanup);
     assert(coop::ParseDebugCommand("probe-player") == DebugCommand::probePlayer);
     assert(coop::ParseDebugCommand("probe-enemy") == DebugCommand::probeEnemy);
+    assert(coop::ParseDebugCommand("enemy-health-all-on") == DebugCommand::enemyHealthAllOn);
+    assert(coop::ParseDebugCommand("kill-owned-enemy") == DebugCommand::killOwnedEnemy);
     assert(coop::ParseDebugCommand("time-shift") == DebugCommand::timeShift);
     assert(coop::ParseDebugCommand("weather-next") == DebugCommand::weatherNext);
     assert(coop::ParseDebugCommand("inspect") == DebugCommand::inspect);
     assert(coop::ParseDebugCommand("status") == DebugCommand::status);
+    assert(coop::ParseDebugCommand("continue-title") == DebugCommand::continueTitle);
+    assert(coop::ParseDebugCommand("ui-probe") == DebugCommand::uiProbe);
     assert(coop::ParseDebugCommand("dump-reflection") == DebugCommand::dumpReflection);
     assert(coop::ParseDebugCommand("dump-objects") == DebugCommand::dumpObjects);
     assert(coop::ParseDebugCommand("trace-on") == DebugCommand::traceOn);
@@ -918,7 +1146,25 @@ int main() {
     assert(coop::ParseDebugCommand("reload-save") == DebugCommand::reloadSave);
     assert(coop::ParseDebugCommand("story-probe") == DebugCommand::storyProbe);
     assert(coop::ParseDebugCommand("story-diverge") == DebugCommand::storyDiverge);
+    assert(coop::ParseDebugCommand("stream-focus") == DebugCommand::streamFocus);
+    assert(coop::ParseDebugCommand("move-by") == DebugCommand::moveBy);
+    assert(coop::ParseDebugCommand("stream-probe") == DebugCommand::streamProbe);
     assert(coop::ParseDebugCommand("hit-enemy") == DebugCommand::hitEnemy);
+    assert(coop::ParseDebugCommand("net-probe") == DebugCommand::netProbe);
+    assert(coop::ParseDebugCommand("net-listen") == DebugCommand::netListen);
+    assert(coop::ParseDebugCommand("net-connect") == DebugCommand::netConnect);
+    assert(coop::ParseDebugCommand("net-possess") == DebugCommand::netPossess);
+    assert(coop::ParseDebugCommand("net-takeover") == DebugCommand::netTakeover);
+    assert(coop::ParseDebugCommand("net-diag") == DebugCommand::netDiag);
+    assert(coop::ParseDebugCommand("net-auto") == DebugCommand::netAuto);
+    assert(coop::ParseDebugCommand("net-nudge") == DebugCommand::netNudge);
+    assert(coop::ParseDebugCommand("net-input") == DebugCommand::netInput);
+    assert(coop::ParseDebugCommand("net-walk") == DebugCommand::netWalk);
+    assert(coop::ParseDebugCommand("mission-watch-on") == DebugCommand::missionWatchOn);
+    assert(coop::ParseDebugCommand("mission-watch-off") == DebugCommand::missionWatchOff);
+    assert(coop::ParseDebugCommand("mission-state") == DebugCommand::missionState);
+    assert(coop::ParseDebugCommand("mission-act") == DebugCommand::missionAct);
+    assert(coop::ParseDebugCommand("mission-act x") == DebugCommand::unknown);
     coop::DebugRequestGate gate;
     gate.Initialize(42);
     assert(!gate.Accept(0) && !gate.Accept(42));
@@ -988,6 +1234,11 @@ int main() {
     assert(!coop::DecodeState(data, sizeof packet, decoded));
     packet.flags |= coop::kInVehicle;
     assert(coop::DecodeState(data, sizeof packet, decoded));
+    packet.flags |= coop::kSeparated | coop::kSyncEnemies;
+    assert(coop::DecodeState(data, sizeof packet, decoded) && (decoded.flags & coop::kSeparated));
+    packet.flags = static_cast<uint16_t>(packet.flags | (1u << 11));
+    assert(!coop::DecodeState(data, sizeof packet, decoded));
+    packet.flags = coop::kPassenger | coop::kHasPawn | coop::kInVehicle;
     packet.attackKind = 2;
     assert(!coop::DecodeState(data, sizeof packet, decoded));
     packet.session = 1; packet.targetSession = 2; packet.consent = 3; packet.targetConsent = 4;

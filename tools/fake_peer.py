@@ -17,10 +17,18 @@ import struct
 import time
 
 MAGIC = 0x4F434744
-VERSION = 6
+VERSION = 9
 HAS_PAWN = 1
 WORLD_STATE = 1 << 8
 SYNC_ENEMIES = 1 << 9
+STORY_MAGIC = 0x54534D44
+STORY_VERSION = 3
+STORY_FORMAT = '<IHBBIIIIHHI'
+STORY_SIZE = struct.calcsize(STORY_FORMAT)
+OBJECTIVE_PROGRESS_MAGIC = 0x424F4D44
+OBJECTIVE_PROGRESS_VERSION = 1
+OBJECTIVE_PROGRESS_FORMAT = '<IHBBII48s48s'
+OBJECTIVE_PROGRESS_SIZE = struct.calcsize(OBJECTIVE_PROGRESS_FORMAT)
 BASE_FORMAT = '<IHHII3fff3f16s'
 FORMAT = BASE_FORMAT + '6I7f4BIfBBIffBB'
 SIZE = struct.calcsize(FORMAT)
@@ -97,6 +105,92 @@ def decode_save_datagram(data):
     if magic != SAVE_MAGIC or version != SAVE_VERSION or not SAVE_REQUEST <= kind <= SAVE_CHUNK:
         return None
     return kind, session, transfer, data[SAVE_HEADER_SIZE:]
+
+
+def encode_story(session, episode, saved_signature, live_signature, save_serial,
+                 completed, unlocked, sequence, *, flags=0, version=STORY_VERSION):
+    return struct.pack(STORY_FORMAT, STORY_MAGIC, version, episode, flags, session, saved_signature,
+                       live_signature, save_serial, completed, unlocked, sequence)
+
+
+def decode_story_datagram(data):
+    if len(data) != STORY_SIZE:
+        return None
+    (magic, version, episode, flags, session, saved_signature, live_signature, save_serial,
+     completed, unlocked, sequence) = struct.unpack(STORY_FORMAT, data)
+    if (magic != STORY_MAGIC or version != STORY_VERSION or flags or not session or not sequence or
+            completed > unlocked):
+        return None
+    return {'episode': episode, 'session': session, 'saved_signature': saved_signature,
+            'live_signature': live_signature, 'save_serial': save_serial,
+            'completed': completed, 'unlocked': unlocked, 'sequence': sequence}
+
+
+def story_sequence_is_newer(candidate, previous):
+    distance = (candidate - previous) & 0xFFFFFFFF
+    return 0 < distance < 0x80000000
+
+
+def encode_objective_progress(session, sequence, job_name, objective_id, *, state=2, flags=0,
+                              version=OBJECTIVE_PROGRESS_VERSION):
+    return struct.pack(OBJECTIVE_PROGRESS_FORMAT, OBJECTIVE_PROGRESS_MAGIC, version, state, flags, session, sequence,
+                       job_name.encode('ascii'), objective_id.encode('ascii'))
+
+
+def decode_objective_progress_datagram(data):
+    if len(data) != OBJECTIVE_PROGRESS_SIZE:
+        return None
+    magic, version, state, flags, session, sequence, raw_job, raw_objective = struct.unpack(
+        OBJECTIVE_PROGRESS_FORMAT, data)
+
+    def valid_name(value):
+        name, separator, _ = value.partition(b'\0')
+        return bool(separator and name) and all(
+            0x41 <= byte <= 0x5A or 0x61 <= byte <= 0x7A or 0x30 <= byte <= 0x39 or byte in b'_-.' for byte in name
+        )
+
+    if (magic != OBJECTIVE_PROGRESS_MAGIC or version != OBJECTIVE_PROGRESS_VERSION or state != 2 or flags or
+            not session or not sequence or not valid_name(raw_job) or not valid_name(raw_objective)):
+        return None
+    return {'session': session, 'sequence': sequence, 'state': state,
+            'job_name': raw_job.split(b'\0', 1)[0].decode('ascii'),
+            'objective_id': raw_objective.split(b'\0', 1)[0].decode('ascii')}
+
+
+class StoryObserver:
+    """Accepts each host story packet once, including a sequence reset for a new session."""
+
+    def __init__(self):
+        self.previous = None
+
+    def accept(self, data):
+        packet = decode_story_datagram(data)
+        if packet is None:
+            return None
+        previous = self.previous
+        if previous is not None and packet['session'] == previous['session'] and not story_sequence_is_newer(
+                packet['sequence'], previous['sequence']):
+            return None
+        self.previous = packet
+        return packet
+
+
+class ObjectiveProgressObserver:
+    """Accepts each host objective packet once, including a sequence reset for a new session."""
+
+    def __init__(self):
+        self.previous = None
+
+    def accept(self, data):
+        packet = decode_objective_progress_datagram(data)
+        if packet is None:
+            return None
+        previous = self.previous
+        if previous is not None and packet['session'] == previous['session'] and not story_sequence_is_newer(
+                packet['sequence'], previous['sequence']):
+            return None
+        self.previous = packet
+        return packet
 
 
 class SaveServer:
@@ -250,7 +344,7 @@ def decode(data):
     damage, bx, by, bz, bp, byaw, br = values[20:27]
     jacket, trousers, cap_color, cap, attack_kind, health, actions, weapon_type, shot_sequence = values[27:36]
     world_time_of_day, world_relative_time, world_weather, world_transition_rate = values[36:]
-    if magic != MAGIC or version != VERSION or flags & ~1023:
+    if magic != MAGIC or version != VERSION or flags & ~2047:
         return None
     if any(not math.isfinite(v) or abs(v) > 1e8 for v in (x, y, z, yaw, pitch, vx, vy, vz, damage,
                                                         bx, by, bz, bp, byaw, br, health,
@@ -358,6 +452,8 @@ def main():
     if server:
         print(f'serving {len(server.bundle)} byte save bundle from {args.serve_save}')
     game_session, last_save_log = 0, 0.0
+    story_observer = StoryObserver()
+    objective_observer = ObjectiveProgressObserver()
     while not args.duration or time.monotonic() - start < args.duration:
         while True:
             try:
@@ -371,6 +467,18 @@ def main():
                     sock.sendto(reply, game)
                 if fetcher:
                     fetcher.handle(data, game_session)
+                continue
+            story = story_observer.accept(data)
+            if story:
+                print(f"story session={story['session']} sequence={story['sequence']} "
+                      f"episode={story['episode']} saved={story['saved_signature']:08x} "
+                      f"live={story['live_signature']:08x} save={story['save_serial']} "
+                      f"jobs={story['completed']}/{story['unlocked']}")
+                continue
+            objective = objective_observer.accept(data)
+            if objective:
+                print(f"objective session={objective['session']} sequence={objective['sequence']} "
+                      f"job={objective['job_name']} id={objective['objective_id']} state={objective['state']}")
                 continue
             gear = decode_gear_datagram(data)
             if gear and gear != held:

@@ -10,7 +10,9 @@ The mod is unofficial and is not affiliated with or endorsed by Bend Studio, Son
 
 [b]Upgrading from Days Gone Together[/b]
 
-The mod was renamed. Delete the old [i]DaysGoneTogether.asi[/i], [i]DaysGoneTogether.ini[/i] and [i]DaysGoneTogether*.log[/i] files before installing. Old and new versions cannot connect to each other.
+Both players must run the same release. Releases that change the network protocol, such as 0.5.0 (protocol v9), cannot connect to older ones.
+
+The mod was renamed from Days Gone Together. Delete the old [i]DaysGoneTogether.asi[/i], [i]DaysGoneTogether.ini[/i] and [i]DaysGoneTogether*.log[/i] files before installing. Old and new versions cannot connect to each other.
 
 [b]Installation instructions[/b]
 
@@ -22,6 +24,7 @@ Install the mod on [b]both PCs[/b]. Both players need the same game build and mo
 [*]Download [i]version.dll[/i] in the column [i]Win64[/i] from the latest release of [b][url=https://github.com/ThirteenAG/Ultimate-ASI-Loader/releases/latest]Ultimate ASI Loader (x64)[/url][/b] (tested with v9.7.4).
 [*]Move [i]version.dll[/i] to the game's [i]BendGame/Binaries/Win64[/i] folder, next to [i]DaysGone.exe[/i]. If you already have a [i]version.dll[/i] there, do not overwrite it; check that loader's instructions first.
 [*]Copy [i]TheysGone.asi[/i] and [i]TheysGone.ini[/i] from the archive into that same [i]BendGame/Binaries/Win64[/i] folder.
+[*]Copy [i]BendGame/Content/Paks/pakchunk99-TheysGone_Brand_P.pak[/i] from the archive into the matching folder under your game installation for Theys Gone title and main-menu logos. Delete that pak to restore the original logos.
 [*]On Linux or Steam Deck, add this to the game's Steam launch options:
 [code]WINEDLLOVERRIDES="version=n,b" %command%[/code]
 [*]Start the game on both PCs.
@@ -48,15 +51,17 @@ Press [b]F8[/b] (gamepad: View/Back + Y) for the settings overlay with appearanc
 [*]Ride as a passenger on your partner's motorcycle: walk up and hold the native [b]Ride with[/b] prompt (experimental).
 [*]Host-first progress: the joining player plays on a copy of the host's save; their own saves are never touched.
 [*]Story sync: when the host saves new story progress, the joining player is reloaded onto it.
+[*]Objective sync (opt-in, experimental): with [i]MissionObjectiveSync=1[/i] on both PCs, completed mission objectives reach the joining player within seconds instead of at the host's next save.
 [*]Shared enemies: the host's freakers, animals and hostile humans replace the joining player's own.
 [*]Shared combat: the joining player's shots and melee damage the host's enemies, and those enemies attack the joining player.
+[*]Free roam (opt-in, experimental): with [i]FreeRoam=1[/i] on both PCs, players can split up. Beyond 250 m each game runs the enemies in its own region and shows the other's; hits reach either side's enemies, and a fight in progress stays with its owner when you split or regroup.
 [*]Synchronize time of day and weather from host to joining player.
 [*]Choose from seven appearance color presets and hide the cap.
 [*]Optionally enable friendly fire when both players opt in.
 [*]Use the in-game settings menu, including with keyboard, mouse or gamepad.
 [/list]
 
-[b]Not synchronized:[/b] live mission state, inventory, loot, doors, camp NPCs, ranged enemy attacks on the joining player, projectiles and hit effects, or motorcycle physics, fuel, damage and upgrades. Your partner's outfit model uses your own Deacon outfit, with their selected colors applied.
+[b]Not synchronized:[/b] live mission state (apart from opt-in completed objectives), inventory, loot, doors, camp NPCs, ranged enemy attacks on the joining player, projectiles and hit effects, or motorcycle physics, fuel, damage and upgrades. Your partner's outfit model uses your own Deacon outfit, with their selected colors applied.
 
 [b]Requirements[/b]
 
