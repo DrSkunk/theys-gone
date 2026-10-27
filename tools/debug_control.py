@@ -31,8 +31,11 @@ COMMANDS = (
     "mission-watch-off",
     "mission-state",
     "mission-act",
+    "stream-focus",
+    "stream-probe",
+    "move-by",
 )
-ARG_COMMANDS = ("mission-act",)
+ARG_COMMANDS = ("mission-act", "stream-focus", "move-by")
 ARG_LIMIT = 240
 
 

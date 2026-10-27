@@ -7,7 +7,7 @@
 namespace coop {
 
 constexpr uint32_t kMagic = 0x4F434744; // "DGCO"
-constexpr uint16_t kProtocolVersion = 6;
+constexpr uint16_t kProtocolVersion = 9;
 
 enum StateFlags : uint16_t {
     kHasPawn = 1 << 0,
@@ -20,6 +20,7 @@ enum StateFlags : uint16_t {
     kSyncBikes = 1 << 7,
     kWorldState = 1 << 8,
     kSyncEnemies = 1 << 9, // guest: wants the host's enemies; host: streams them
+    kSeparated = 1 << 10,  // host: free roam put the players in separate regions; each world owns its own enemies
 };
 
 enum ActionFlags : uint8_t {
@@ -76,7 +77,7 @@ inline bool DecodeState(const char* data, int len, StatePacket& out) {
     std::memcpy(&out, data, sizeof out);
     if (out.magic != kMagic || out.version != kProtocolVersion ||
         (out.flags & ~(kHasPawn | kInVehicle | kHasBike | kPassenger | kFriendlyFire |
-                       kAcceptPassengers | kAlive | kSyncBikes | kWorldState | kSyncEnemies))) return false;
+                       kAcceptPassengers | kAlive | kSyncBikes | kWorldState | kSyncEnemies | kSeparated))) return false;
     const float values[] = {out.pos[0], out.pos[1], out.pos[2], out.yaw, out.pitch,
                             out.vel[0], out.vel[1], out.vel[2], out.bikePos[0], out.bikePos[1], out.bikePos[2],
                             out.bikeRotation[0], out.bikeRotation[1], out.bikeRotation[2], out.damage, out.health,

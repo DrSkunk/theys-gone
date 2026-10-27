@@ -26,6 +26,8 @@ void SaveTransferConfigure(bool share, bool join);
 void SaveTransferInvalidate();
 // Guest: download the host's save again (its progress moved on); false while a transfer is running.
 bool SaveTransferResync();
+// Guest: true while a snapshot is being requested or received.
+bool SaveTransferInProgress();
 // Returns true when the datagram belonged to the save transfer.
 bool SaveTransferHandle(const char* data, int size, const SaveTransferContext& context);
 void SaveTransferTick(const SaveTransferContext& context);

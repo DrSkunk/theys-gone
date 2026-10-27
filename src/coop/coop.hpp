@@ -18,6 +18,7 @@ struct Config {
     std::string playerName;        // empty: the Steam persona name (or "Deacon" without Steam)
     bool discovery = false;
     bool missionDiscovery = false; // log runtime mission/save UFunction signatures; read-only
+    bool missionObjectiveSync = false; // opt-in replication of completed objectives; save sync remains fallback
     bool menuDiscovery = false;    // F6 dumps native menu classes and live widget references
     bool hostSave = true; // host shares its save; a guest plays it in a sandbox so its own saves stay untouched
     bool debugTools = false;
@@ -30,6 +31,7 @@ struct Config {
     bool poseFace = false;  // also stream the face rig (about 280 extra bones)
     bool autoLan = false;   // Transport=udp: start a LAN session at launch (host, or join PeerHost)
     bool steamPumpCallbacks = false; // also run SteamAPI_RunCallbacks from the mod (only if invites never arrive)
+    bool freeRoam = false; // host: stream world tiles around a distant partner and hand them their region's enemies
 };
 
 Config LoadConfig(const std::wstring& iniPath);

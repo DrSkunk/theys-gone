@@ -14,7 +14,7 @@
 ```sh
 poetry install
 make test     # C++ protocol/motion/combat tests + Python unit tests
-make build    # package/TheysGone.asi + TheysGone.ini
+make build    # package/TheysGone.asi + TheysGone.ini + branding pak
 make dist     # dist/TheysGone-<version>.zip + .sha256
 ```
 
@@ -66,6 +66,9 @@ datagram's own version constant, and update `tools/test_protocol.cpp` and
 
 [`tools/fake_peer.py`](../tools/fake_peer.py) speaks the protocol, so you can
 test with a single game.
+It also reports fresh version-3 host story packets (saved/live signatures,
+save serial and sequence) and fresh completed-objective packets, allowing both
+story protocols to be observed without a second game client.
 
 **On a Linux/Proton machine with systemd:** copy `tools/fake_peer.py` and
 `tools/same-pc/*.sh` into one folder on the gaming PC and run:
@@ -94,6 +97,22 @@ trails the player. Run `--help` for all options.
 `--fetch-save DIR` makes it a guest that downloads a `HostSave=1` host game's
 saves into `DIR` and prints their SHA-256.
 
+## Branding
+
+The validated binary asset is tracked at
+[`assets/branding/pakchunk99-TheysGone_Brand_P.pak`](../assets/branding/pakchunk99-TheysGone_Brand_P.pak).
+`make build` copies it into `package/BendGame/Content/Paks/`; `make dist`
+includes that same game-relative path in the archive. There is currently no
+source-to-pak regeneration tool in the repository.
+
+`UI_MainMenuWidget_C` shows two logo images: `Logo` (`title_logo_start`, the
+title splash) and `LogoSmall` (`title_logo_start_small`, the menu after the
+splash). The branding pak `pakchunk99-TheysGone_Brand_P.pak` replaces both
+textures, but the game keeps drawing the original small texture. The plugin
+therefore points `LogoSmall` at `Logo`'s texture at its own brush size, logged
+as `native ui: title menu logo uses the branded title texture`. Without the pak
+both textures are the original Days Gone logo, so the swap changes nothing.
+
 ## Debug tools
 
 The plugin includes local test tools for spawning enemies, invulnerability,
@@ -118,7 +137,7 @@ poetry run python tools/debug_control.py --game-dir "/path/to/BendGame/Binaries/
 | `spawn-pack` | Spawn eight independent swarmers (at most 16 owned at a time) |
 | `status` | Log player and enemy health, controllers and movement |
 | `continue-title` | In-game bot: run the visible title splash's native button animation, or invoke Continue only when it is the first visible title-menu row |
-| `ui-probe` | Log native startup/menu objects, visibility, option counts, first label, and cached versus freshly queried save availability; does not activate a menu action |
+| `ui-probe` | Log native startup/menu objects, visibility, option counts, first label, cached versus freshly queried save availability, and every `Image` in an on-screen widget with its brush texture; does not activate a menu action |
 | `probe-player` / `probe-enemy` | Apply 5 base damage and check the health change |
 | `enemy-health-all-on` | Host: enable `bReplicateHealthToAll` only on this session's owned test enemies |
 | `kill-owned-enemy` | Host: apply bounded lethal native damage to one authoritative, session-owned test enemy and verify death; never selects ambient enemies or players |
@@ -126,7 +145,7 @@ poetry run python tools/debug_control.py --game-dir "/path/to/BendGame/Binaries/
 | `weather-next` | Host: switch to the next weather state |
 | `cleanup` | Destroy only the enemies this session spawned |
 | `end` | Clean up and restore damage and saving state |
-| `hit-enemy` | Guest: send 25 damage to the nearest live host enemy, as a real hit would |
+| `hit-enemy` | Send 25 damage to the nearest live replica of the partner's enemies, as a real hit would (the guest hits host enemies; in free roam the host can hit guest-owned enemies) |
 | `story-probe` | Log the job manager's jobs and missions and this PC's story signature |
 | `story-diverge` | Guest with the sandbox active: pretend the story differs, to force a resync |
 | `reload-save` | Reload the newest save in place (`ReloadBecauseOfJobFailure`) |
@@ -145,18 +164,27 @@ poetry run python tools/debug_control.py --game-dir "/path/to/BendGame/Binaries/
 | `net-walk` | Experimental: feed `AddMovementInput` to the local controller's pawn every frame for 3 s and log the distance moved plus movement telemetry (velocity, acceleration, desiredSpeed, root motion) every 0.5 s. With `[Research] WalkTarget=remote` the host walks the pawn of the remote guest's controller instead |
 | `trace-on` / `trace-off` | Record every distinct ProcessEvent call with sample parameters to `TheysGone-trace.txt` (`OnRep_*`, `ReceiveBeginPlay` and `ClientRestart` are counted per object) |
 | `mission-watch-on` / `mission-watch-off` | Mission lab: log mission/job ProcessEvent calls with parameter values, poll job state (done, active, state, objective index, tracked job, episode) every 0.5 s and log each change; `off` prints per-function call counts |
-| `mission-state` | Mission lab: write every job and mission row, the tracked job, the episode and the active job objects with their properties and functions to `TheysGone-missions.txt` |
-| `mission-act` | Mission lab, **changes the story**: call one mission function from `--arg "<Function>\|<Class>.<Function> [ObjectName\|-] [Param=Value ...]"` and log the return value and the immediate state change. Requires `[Research] MissionActions=1`; back up saves first, because the game may autosave the result |
+| `mission-state` | Read-only mission lab: write every job and mission row, the tracked job, the episode and active job objects to `TheysGone-missions.txt`; objective arrays include reflected struct fields and values. Does not require a gameplay pawn if the job manager is loaded |
+| `mission-act` | Mission lab, **changes the story**: call one mission function from `--arg "<Function> [ObjectName\|-] [Param=Value ...]"` and log the return value and the immediate state change. Use `Class.Function` when targeting a class. Requires `[Research] MissionActions=1`; back up saves first, because the game may autosave the result |
+| `stream-focus` | Free roam: with `--arg "<east m> <north m>"`, add a debug second streaming focus at that offset from the local pawn (more than 150 m away); `--arg off` clears it. Needs `FreeRoam=1` at launch and the streaming hook installed |
+| `stream-probe` | Free roam: log the separation state, the second focus, the last tile-merge counts, loaded levels, ground at the focus and AI within 150 m of it |
+| `move-by` | Free roam: teleport the local pawn by `--arg "<east m> <north m>"` (each within 20 km) and hold it until a capsule sweep finds ground (30 s limit). Debug only; a large jump can land in unloaded terrain, so move in steps of a few hundred metres |
 
-`hit-enemy`, `story-*`, `reload-save`, `ride-test`, `dump-*`, `net-*`, `trace-*`
-and `mission-*` work without `begin`. The research commands only read and log, except
+`hit-enemy`, `story-*`, `reload-save`, `ride-test`, `dump-*`, `net-*`, `trace-*`,
+`stream-*`, `move-by` and `mission-*` work without `begin`. The research commands only read and log, except
 `mission-act` and the experimental `net-*` commands, which drive the engine's own
 networking; see [REPLICATION-RESEARCH.md](REPLICATION-RESEARCH.md).
 
 `mission-act` looks the function up on the live `BendJobManager`, then
 `BendGameMission`, unless a class is named (`IND_Jobscript_C.MedBoxObtained`).
+A named class with no live instance falls back to its default object for static
+functions only (`BendGameplayStatics.SaveGameOW - bCriticalSave=1`).
 `ObjectName` fills the first object parameter by exact object name (for example
 `IND-JobData`). Named parameters may be Bool, Byte, Int, Float, Name or Object.
+The parameters are logged again after the call, which shows out values.
+For example, `IND_Jobscript_C.UpdateJobObjectiveStatusAndProgression -
+ObjIdentifier=IND3 ObjState=0` targets the class method; do not separate the
+class and function with a pipe.
 
 The experimental `net-*` path reads these `[Research]` options from
 `TheysGone.ini` at startup (all off by default):
@@ -493,6 +521,11 @@ The guest starts from a copy of the host's save:
    loads it. After the load the pins are released, the guest's autosaves go
    to the sandbox, and the guest is teleported to the host once both are in
    game.
+   While host saves are pinned, the log records `.sav` opens with the
+   sandbox path, access, disposition, and open result (up to 128 per
+   adoption). `ReloadBecauseOfJobFailure` may return false even when its
+   asynchronous load later succeeds; use the verified story signature as the
+   result.
 
 All datagrams carry the sender's session id and are ignored unless it matches
 the connected partner. File names are limited to `[A-Za-z0-9_.-]` ending in
@@ -516,15 +549,34 @@ over the Steam transport. The host shares its last save on disk.
 ### Story sync (`DMST`)
 
 Each side samples a signature of `BendJobManager`'s jobs and missions every
-3 s, including each job's objective index
+3 s, including each job's objective index and every current objective ID/state
+in active jobs
 ([`story.hpp`](../src/coop/story.hpp)). The host sends its live signature, the
 signature at its last save, a save serial and a monotonically sequenced packet
 every second; the guest ignores duplicate or stale packets. When a guest's
 signature differs from the host's saved one for 6 s, and the host has saved
 this session, the guest requests the host's save again and reloads onto it.
-This syncs persisted objective transitions through the save-resync fallback;
-direct idempotent objective application is not implemented yet. Verified live
-with `story-diverge`; paired objective-resync validation is pending.
+This syncs persisted progress through the save-resync fallback. Story packets
+are version 3; both peers need a build with this version. With
+`MissionObjectiveSync=1` on both peers and `HostSave=1`, the host also retries
+uniquely identified completed objectives in sequenced `DMOB` packets every 3 s.
+The guest applies those idempotently only after adopting the host save and
+entering gameplay. Job start/completion, ambiguous IDs and failed applications
+still rely on save resync. This opt-in path has a paired LAN validation for one
+completed objective; the isolated host's sends were also observed with
+`fake_peer.py`. The Deck logged `objective sync: applied IND-JobData.IND3 from
+host` and its story signature matched the host. Save-resync fallback was also
+verified with DMOB disabled, including after a host objective autosave. Job
+start and job completion were validated on a paired LAN run: neither travels
+in DMOB, and both reach the guest through save resync at the host's next save.
+Starting a job does not autosave by itself. Completing one autosaves only after
+the host dismisses the MISSION COMPLETE reward screens, which block saving
+(`IsSafeForOWSave` reason 12). The guest then matched within about 33 s.
+A paired DMST v3 run also verified the saved `IND4` state-0-to-1 transition:
+the guest fetched the changed host save, reloaded automatically and matched
+both the objective state and story signature. This covers one non-completed
+objective transition, not broader campaign progression. DMOB continues to
+send only completed (state 2) objectives, so the option stays default-off.
 
 ## Shared enemies
 
@@ -557,6 +609,11 @@ With *Sync host's enemies* on, both PCs set `kSyncEnemies`:
   2.6 m sends a strike (swarmer 12, others 15-35, an estimate). Real damage
   the stand-in takes is forwarded too, capped at 400 per change. The guest
   applies strikes with `ApplyDamage`.
+- **Guest-kept enemies to host (protocol v9).** While the guest keeps enemies
+  through a reunion, it creates the same hidden proxy at the host's avatar.
+  Nearby guest-owned enemies can target it; their swings and damage use the
+  same `DMPX` path, now accepted by either player owner. This direction still
+  needs paired validation.
 
 Verified live between two PCs: the guest's own enemies vanished and the host's
 appeared; `hit-enemy` brought a host swarmer from 160 to below 0; a pack split
@@ -633,10 +690,11 @@ modify base damage: a 25-point debug hit reduced one swarmer by 18.75.
 | Surface | Evidence / status |
 |---|---|
 | Host save and sandbox | LAN transfer and in-place reload verified between two real PCs; real guest save hashes remained unchanged in the sandbox tests |
-| Story catch-up | Forced divergence with `story-diverge` triggered a host-save resync; natural mission progression and full campaign play remain unverified |
+| Story catch-up | Forced divergence and a host objective autosave both triggered host-save resync with DMOB disabled; the Deck returned to the host signature. Natural campaign progression remains unverified |
 | Guest AI suppression | Local enemies disappeared and host replicas appeared in the two-PC LAN test |
 | Guest damage to host enemies | `hit-enemy` damaged and killed a real host swarmer; this bypasses aim and does not validate real shooting or melee input |
 | Host melee damage to guest | Swarmer pack targeted the stand-in, damaged and killed the guest; guest and stand-in respawned, and a later clean-build strike reduced health from 121.9 to 109.9 |
+| Free roam enemy handoff | Paired `move-by` tests: the guest kept 8 Swarmers across a reunion and the host's hits applied to them; the host kept 6 Swarmers fighting the guest across a split, which kept striking the guest and took guest hits 312 m from the host. Debug-spawned packs only; not yet verified in a natural mission fight |
 | Native bike interaction | Standalone `ride-test` prompt exercised; boarding a real partner's bike through it still needs a player test |
 | Steam transport | Earlier lobby/transport tests do not validate these new gameplay paths; current gameplay evidence is from UDP LAN |
 
