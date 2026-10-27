@@ -7,7 +7,10 @@
 #include <backends/imgui_impl_dx11.h>
 
 #include <atomic>
+#include <cstdint>
+#include <cstdio>
 #include <mutex>
+#include <string>
 
 namespace coop {
 namespace {
@@ -15,6 +18,12 @@ using PresentFn = HRESULT (STDMETHODCALLTYPE*)(IDXGISwapChain*, UINT, UINT);
 using ResizeFn = HRESULT (STDMETHODCALLTYPE*)(IDXGISwapChain*, UINT, UINT, UINT, DXGI_FORMAT, UINT);
 PresentFn originalPresent = nullptr;
 ResizeFn originalResize = nullptr;
+// The vendor implementations, read from the module file on disk. Other overlays (notably Steam's) hook the same
+// shared vtable and can capture our hook as their "original"; forwarding to them again would recurse forever.
+PresentFn nativePresent = nullptr;
+ResizeFn nativeResize = nullptr;
+thread_local int presentDepth = 0, resizeDepth = 0;
+std::atomic<bool> presentLoopLogged = false, resizeLoopLogged = false;
 std::mutex frameMutex, renderMutex;
 OverlayFrame frame;
 std::atomic<bool> ready = false;
@@ -25,12 +34,90 @@ ID3D11DeviceContext* context = nullptr;
 ID3D11RenderTargetView* target = nullptr;
 ImGuiContext* imguiContext = nullptr;
 
+struct Depth {
+    int& value;
+    explicit Depth(int& counter) : value(counter) { ++value; }
+    ~Depth() { --value; }
+};
+
+HMODULE ModuleAt(const void* address) {
+    HMODULE module = nullptr;
+    if (!address || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                        static_cast<LPCWSTR>(address), &module))
+        return nullptr;
+    return module;
+}
+
+// "module.dll+0x1234" for crash-dump matching; raw address when no module owns it.
+std::string Describe(const void* address) {
+    char text[MAX_PATH + 32];
+    HMODULE module = ModuleAt(address);
+    char path[MAX_PATH]{};
+    if (!module || !GetModuleFileNameA(module, path, MAX_PATH)) {
+        std::snprintf(text, sizeof text, "%p", address);
+        return text;
+    }
+    const char* name = path;
+    for (const char* at = path; *at; ++at) if (*at == '\\' || *at == '/') name = at + 1;
+    std::snprintf(text, sizeof text, "%s+0x%llx", name, static_cast<unsigned long long>(
+        reinterpret_cast<const uint8_t*>(address) - reinterpret_cast<const uint8_t*>(module)));
+    return text;
+}
+
+// Reads a vtable entry as the module file on disk has it, rebased to where the module is loaded. Hooks patch the
+// table in memory only, so this recovers the vendor function even when another overlay hooked it before us.
+void* OnDiskEntry(void* const* entry) {
+    HMODULE module = ModuleAt(entry);
+    wchar_t path[MAX_PATH]{};
+    if (!module || !GetModuleFileNameW(module, path, MAX_PATH)) return nullptr;
+    auto base = reinterpret_cast<uint8_t*>(module);
+    auto nt = reinterpret_cast<IMAGE_NT_HEADERS64*>(base + reinterpret_cast<IMAGE_DOS_HEADER*>(base)->e_lfanew);
+    uint64_t rva = reinterpret_cast<const uint8_t*>(entry) - base;
+    HANDLE file = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
+    if (file == INVALID_HANDLE_VALUE) return nullptr;
+    auto readAt = [&](uint64_t offset, void* out, DWORD size) {
+        LARGE_INTEGER position{};
+        position.QuadPart = static_cast<LONGLONG>(offset);
+        DWORD read = 0;
+        return SetFilePointerEx(file, position, nullptr, FILE_BEGIN) && ReadFile(file, out, size, &read, nullptr) &&
+               read == size;
+    };
+    // The loader rewrites ImageBase in memory after relocating, so the preferred base must come from the file.
+    IMAGE_DOS_HEADER dos{};
+    IMAGE_NT_HEADERS64 diskNt{};
+    uint64_t value = 0;
+    bool found = readAt(0, &dos, sizeof dos) && readAt(static_cast<uint64_t>(dos.e_lfanew), &diskNt, sizeof diskNt) &&
+                 diskNt.OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR64_MAGIC;
+    if (found) {
+        found = false;
+        auto section = IMAGE_FIRST_SECTION(nt);
+        for (WORD i = 0; i < nt->FileHeader.NumberOfSections; ++i, ++section) {
+            if (rva < section->VirtualAddress || rva + sizeof value > section->VirtualAddress + section->SizeOfRawData)
+                continue;
+            found = readAt(section->PointerToRawData + (rva - section->VirtualAddress), &value, sizeof value);
+            break;
+        }
+    }
+    CloseHandle(file);
+    if (!found || value < diskNt.OptionalHeader.ImageBase) return nullptr;
+    uint64_t offset = value - diskNt.OptionalHeader.ImageBase;
+    if (offset >= nt->OptionalHeader.SizeOfImage) return nullptr;
+    return base + offset;
+}
+
 void ReleaseTarget() {
     if (target) target->Release();
     target = nullptr;
 }
 
 HRESULT STDMETHODCALLTYPE Present(IDXGISwapChain* chain, UINT interval, UINT flags) {
+    if (presentDepth > 0 && nativePresent) {
+        if (!presentLoopLogged.exchange(true))
+            Log("overlay: Present re-entered from %s; forwarding to the native implementation",
+                Describe(__builtin_return_address(0)).c_str());
+        return nativePresent(chain, interval, flags);
+    }
+    Depth depth(presentDepth);
     if (!(flags & DXGI_PRESENT_TEST)) {
         std::lock_guard lock(renderMutex);
         DXGI_SWAP_CHAIN_DESC desc{};
@@ -53,7 +140,10 @@ HRESULT STDMETHODCALLTYPE Present(IDXGISwapChain* chain, UINT interval, UINT fla
                     if (ImGui_ImplDX11_Init(device, context)) {
                         activeChain = chain;
                         ready = true;
-                        Log("overlay: Direct3D 11 renderer ready");
+                        auto table = *reinterpret_cast<void***>(chain);
+                        Log("overlay: Direct3D 11 renderer ready (called from %s; vtable %s: Present=%s ResizeBuffers=%s)",
+                            Describe(__builtin_return_address(0)).c_str(), Describe(table).c_str(),
+                            Describe(table[8]).c_str(), Describe(table[13]).c_str());
                     } else {
                         Log("overlay: Direct3D 11 renderer initialization failed");
                         ImGui::DestroyContext(imguiContext);
@@ -116,8 +206,17 @@ HRESULT STDMETHODCALLTYPE Present(IDXGISwapChain* chain, UINT interval, UINT fla
 
 HRESULT STDMETHODCALLTYPE Resize(IDXGISwapChain* chain, UINT count, UINT width, UINT height,
                                   DXGI_FORMAT format, UINT flags) {
-    std::lock_guard lock(renderMutex);
-    if (chain == activeChain) ReleaseTarget();
+    if (resizeDepth > 0 && nativeResize) {
+        if (!resizeLoopLogged.exchange(true))
+            Log("overlay: ResizeBuffers re-entered from %s; forwarding to the native implementation",
+                Describe(__builtin_return_address(0)).c_str());
+        return nativeResize(chain, count, width, height, format, flags);
+    }
+    Depth depth(resizeDepth);
+    {
+        std::lock_guard lock(renderMutex);
+        if (chain == activeChain) ReleaseTarget();
+    }
     return originalResize(chain, count, width, height, format, flags);
 }
 
@@ -147,6 +246,13 @@ DWORD WINAPI InstallRenderer(void*) {
         if (VirtualProtect(table + 8, 6 * sizeof(void*), PAGE_READWRITE, &protection)) {
             originalPresent = reinterpret_cast<PresentFn>(table[8]);
             originalResize = reinterpret_cast<ResizeFn>(table[13]);
+            nativePresent = reinterpret_cast<PresentFn>(OnDiskEntry(table + 8));
+            nativeResize = reinterpret_cast<ResizeFn>(OnDiskEntry(table + 13));
+            Log("overlay: vtable %s: Present=%s (native %s) ResizeBuffers=%s (native %s)", Describe(table).c_str(),
+                Describe(reinterpret_cast<void*>(originalPresent)).c_str(),
+                Describe(reinterpret_cast<void*>(nativePresent)).c_str(),
+                Describe(reinterpret_cast<void*>(originalResize)).c_str(),
+                Describe(reinterpret_cast<void*>(nativeResize)).c_str());
             InterlockedExchangePointer(table + 8, reinterpret_cast<void*>(&Present));
             InterlockedExchangePointer(table + 13, reinterpret_cast<void*>(&Resize));
             DWORD ignored = 0;
