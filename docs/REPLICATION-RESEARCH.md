@@ -2892,25 +2892,499 @@ the checkpoint overlaps seen earlier, are visible there. The 0.5 s state poll
 of `CurrentJobObjectiveIndex`, `JobCurrentState` and completion did catch the
 change, so polling is the reliable host-side observer.
 
+**Objective IDs and updater follow-up (2026-10-26).** `mission-state` now
+reflects the `BendJobObjectives` elements in each active job's current and
+default objective arrays. On the saved IND fixture, objective index 5 was
+`IND3` in state 1, with earlier objectives in state 2 and the next objective
+in state 0. Calling
+`IND_Jobscript_C.UpdateJobObjectiveStatusAndProgression(IND3, 2)` advanced
+the index from 5 to 6 and set `IND3` to state 2. Repeating the same call left
+the index at 6 and reported zero immediate state changes. The first call
+changed `autosave01.sav`; the isolated save set was preserved and the
+pre-test backup restored byte-for-byte. This verifies the host-side generic
+objective updater and repeat-call idempotence for a completed objective. A
+paired test subsequently verified guest application for this state-2
+objective.
+
+**Host-only non-completed objective-state probe (2026-10-26).** Starting from
+the isolated host fixture (`efeda779`), setting the next objective `IND4`
+from state 0 to state 1 through `UpdateJobObjectiveStatusAndProgression`
+changed the live objective list and autosaved, without changing the then-v2
+story signature. That exposed a gap: the guest would see neither a DMOB packet
+(which intentionally carries only state 2) nor a story mismatch to request the
+new save. Story hashing now includes each active job's current objective IDs,
+array indices and state bytes; the DMST version is bumped to 3. On the updated
+host, the same state-0-to-1 mutation changed the signature from `fa97ef49` to
+`1e6f784a`, confirming host-side detection. A separate call requesting
+`ObjState=0` for the current objective `IND3` resulted in `IND3` state 3,
+advanced the objective index 5 -> 6, changed the signature to `94993472`, and
+autosaved. The updater's input state is therefore not a reliable direct
+assignment for every value; direct DMOB application remains limited to the
+verified idempotent state 2. The Deck was unreachable during this probe;
+paired state-1 save-resync validation was subsequently completed below.
+The isolated host ASI, INI and saves were restored and compared with the
+pre-test backup.
+
 **Implications for mission sync.**
 - Host side: `ReadStory` now includes each job's objective index in the
-  signature. The host's periodic `DMST` packet is version 2 and sequenced; the
-  guest rejects duplicate/stale sequence numbers. When a transition is saved,
+  signature and the identifier/index/state of current objectives in active
+  jobs. The host's periodic `DMST` packet is version 3 and sequenced; the
+  guest rejects duplicate/stale sequence numbers. Both peers need this version.
+  When a transition is saved,
   the existing six-second reconciliation detects the objective-aware saved
   signature and reloads the host save. This is save-backed synchronization,
-  not immediate direct application; paired objective-resync validation remains
-  necessary.
+  not immediate direct application; the paired `DMOB` test below validates
+  one immediate completed-objective transition, but not save-resync fallback.
 - Guest side: the job scripts expose the generic, Blueprint-callable primitives
   `UpdateJobObjectiveStatusAndProgression(Name ObjIdentifier, Byte ObjState)`,
   `GoBackToJobObjectiveStage(Int)`, `CompleteTheJob` and `FailTheJob`, plus
   `BP_JobManager_C.StartJobAtID`/`UnlockJobAtID`. `CompleteTheJob` is verified
-  for a full job transition. The generic objective updater still needs testing
-  with a real objective ID and valid state; `CurrentJobObjectiveList` IDs
-  remain undiscovered.
-- Next: pair-test the objective-aware save resync; then identify objective IDs
-  and test generic guest application before replacing save reloads with
-  sequenced, idempotent game-thread state application.
+  for a full job transition. The generic objective updater is verified for
+  state 2 with the real ID `IND3`; the paired test below also verifies the
+  opt-in guest application path for that completed state.
+- Offline implementation: opt-in `MissionObjectiveSync=1` sends uniquely
+  identified completed objectives in sequenced `DMOB` v1 packets every 3 s.
+  The guest queues fresh packets and applies them only after the host save is
+  adopted and gameplay is ready, using `GetObjectiveState` and the verified
+  idempotent updater. The fake peer decodes and observes these packets. Save
+  resync remains the fallback for unavailable jobs, ambiguous IDs, job
+  start/completion (validated below) and failed applications. This path is disabled by default
+  and must be enabled on both peers.
+- **Host-only packet validation (2026-10-26).** Deployed build
+  `7a8e81fb567b606dd34892935add89e173690c099b2db0eba0b5a91c81ee4a72` to the
+  isolated host copy and enabled the option only in its test INI. In gameplay,
+  the fake peer observed 130 `DMOB` packets across repeated snapshots for
+  `IND-JobData`: `IND0`, `IND1`, `IND5`, `IND6` and `IND2`, all state 2. The
+  live objective report showed `IND3` state 1 and `IND4` state 0, confirming
+  that only completed objectives were sent. This validates host extraction,
+  encoding, transmission and observation.
+- **Paired guest-application validation (2026-10-26).** With both peers
+  configured for UDP, `HostSave=1` and `MissionObjectiveSync=1`, the Deck
+  connected to the isolated host and installed its 7,719,152-byte save
+  snapshot. Both `story-probe` reports initially matched at `efeda779`. After
+  invoking the verified `IND_Jobscript_C.MedBoxObtained` event on the host,
+  the host signature advanced to `94993472`; the Deck logged
+  `objective sync: applied IND-JobData.IND3 from host`, and its subsequent
+  `story-probe` matched at `94993472`. This verifies one state-2 objective
+  application after host-save adoption and gameplay readiness. The Deck needed
+  to be foregrounded for the large save transfer to make progress. The
+  additional objective states still need paired validation; job
+  start/completion are covered below. Both game
+  processes were stopped; the Deck and isolated host ASIs, INIs, and SaveGames
+  directories were restored and compared with their pre-test backups.
+- **Paired save-resync fallback validation (2026-10-26).** With
+  `MissionObjectiveSync=0`, both peers first matched at `efeda779`. The guest's
+  `story-diverge` aid unlocked `IZ_LoggingCampReset-JobData`, changing its
+  signature to `ef97a934`; the guest then fetched and loaded the host save and
+  returned to `efeda779`. A second run used the host's
+  `IND_Jobscript_C.MedBoxObtained` event. The host autosaved signature
+  `94993472`; the guest detected its `efeda779` mismatch, fetched the
+  7,722,010-byte host snapshot, adopted 11 save files, and reloaded in place.
+  The guest's subsequent `story-probe` matched `94993472`, with no DMOB
+  application. This verifies fallback for forced divergence and one real host
+  objective autosave; broader campaign progression remains untested. Both
+  game processes were stopped, and the Deck and host ASIs, INIs, and SaveGames
+  were restored and compared with their pre-test backups.
+- **Paired job start/completion validation (2026-10-27).** Both peers ran
+  `MissionObjectiveSync=1` and matched at `efeda779`. Job start: the host's
+  `BP_JobManager_C.StartJobAtID BE_AZ_01-JobData OnlyLoadIfUnlocked=1
+  UseSelectionScreen=0` made `BE_AZ_01` active (state 1 -> 2) but did not
+  autosave, so the guest correctly stayed on the host's saved signature. The
+  next host autosave (`IND_Jobscript_C.MedBoxObtained`) carried both changes,
+  signature `1a89e029`. The Deck had already applied `IND3` through DMOB
+  (`94993472`), then detected the difference, fetched the 7,735,902-byte
+  snapshot, reloaded in place and matched `1a89e029` with `BE_AZ_01` active.
+  Job completion: `IND_Jobscript_C.CompleteTheJob` completed IND (state 4,
+  signature `6b68ee72`) and opened the native MISSION COMPLETE and trust
+  reward screens. While they are open, `BendGameMode.IsSafeForOWSave` returns
+  false with `ReasonForFailing=12`, and `BendGameplayStatics.SaveGameOW` and
+  `BendQuickSave` do not save. After the host pressed Continue through the
+  screens, the game autosaved; the Deck detected `6b68ee72`, fetched the
+  7,762,538-byte snapshot, reloaded and matched about 33 s after the host
+  save, with IND no longer active. No DMOB errors were logged. So job
+  start/completion propagate through save resync at the host's next save,
+  not immediately. Both peers were restored and compared with the
+  `before-20261027-jobpair` backups.
+- **Paired DMST v3 state-1 save-resync validation (2026-10-26).** Both
+  isolated copies ran build
+  `b12bf60e963a0cc9c69ea8468e271451976fe07ac9ceac3f1910c6b53198dd1a`
+  with `HostSave=1` and `MissionObjectiveSync=1`. After host-save adoption
+  and job initialization, both peers matched at `fa97ef49`, with `IND4`
+  in state 0. The host's
+  `IND_Jobscript_C.UpdateJobObjectiveStatusAndProgression - ObjIdentifier=IND4 ObjState=1`
+  changed the current objective state to 1 without advancing the index.
+  The host autosaved `1e6f784a` at 22:39:43.940; the Deck detected the
+  mismatch and requested the new save at 22:39:53.339. It installed the
+  7,726,839-byte snapshot (11 files) at 22:40:38.789, invoked the automatic
+  in-place reload and logged the host save loaded at 22:40:46.440. Its
+  22:41:14.609 probe matched `1e6f784a`, and its current objective array
+  confirmed `IND4` state 1. No direct DMOB applications, objective-application
+  failures or objective-snapshot failures were logged. This verifies the
+  saved state-1 fallback, not direct non-completed objective application or
+  broader campaign progression. Both games were stopped, and both isolated
+  ASIs, INIs, SaveGames, prior guest sandboxes and debug mailboxes were restored
+  and compared with `before-dmst-v3-pair-20261026-2234`. Post-test logs and
+  saves remain under that backup's `after` directory.
+- **Paired objective failure and reload follow-up (2026-10-26/27).** Both
+  peers started at `fa97ef49` with IND active at objective 5 and `IND3` in
+  state 1. The host's
+  `IND_Jobscript_C.UpdateJobObjectiveStatusAndProgression - ObjIdentifier=IND3 ObjState=0`
+  changed `IND3` to failed (state 3), advanced IND to objective 6 and
+  autosaved `dc795cfb`. The Deck received snapshot `00790ac5` (7,722,608
+  bytes) and adopted all 11 files, but
+  `ReloadBecauseOfJobFailure` returned false; its later probe still reported
+  `fa97ef49`, objective 5 and `IND3` state 1. On the host,
+  `IND_Jobscript_C.GoBackToJobObjectiveStage - TheStage=5` returned true and
+  restored objective 5 / `IND3` state 1. This verifies host-side rewind, not a
+  paired retry from the failed state.
+
+  A follow-up isolated Deck test staged the host's failure snapshot with the
+  host stopped. Continue loaded `dc795cfb`, with IND at objective 6. Invoking
+  `ReloadBecauseOfJobFailure` from that loaded state returned false and left
+  the signature at `dc795cfb`. This shows the archived host-only snapshot
+  contains the failed state and loads through Continue. It does not prove that
+  the exact bundle from the paired run was identical, so transfer, sandbox
+  routing or save-selection differences are not ruled out.
+
+  For a resync with an expected signature, the guest keeps adopted files
+  pinned until a post-load story signature matches host progress; it marks
+  progress resynced only after that check. A mismatch is logged and surfaced
+  rather than accepted as a successful catch-up. An initial load with no saved
+  host signature is still allowed but explicitly logged as unverified. The
+  first paired retry failed while both games were running at roughly 0.6
+  updates/s during the transfer; this unusual runtime condition is a possible
+  contributor, not an established cause. Both isolated copies' ASIs, INIs and
+  SaveGames were restored and verified against the
+  `before-fail-retry-20261026-2250` backups. Logs and post-test saves are
+  archived under those backups' `after-objective-failure-retry/` directories.
+- **Paired save-slot trace and verified reload (2026-10-27).** A controlled
+  rerun started with both peers matched at `fa97ef49` (IND objective 5,
+  `IND3` state 1). The host's
+  `IND_Jobscript_C.UpdateJobObjectiveStatusAndProgression - ObjIdentifier=IND3 ObjState=0`
+  advanced IND to objective 6, set `IND3` to state 3, and saved `dc795cfb`.
+  The host offered snapshot `ae67fc0a` (11 files, 7,725,789 bytes). On the
+  Deck, `ReloadBecauseOfJobFailure` was invoked but returned false. The new
+  bounded save-open trace showed the game opening the adopted saves from
+  `TheysGone-guest-saves`; after enumerating the files, it opened
+  `autosave01.sav` again successfully. At 09:19:10 the asynchronous load
+  verifier released the pins and confirmed `dc795cfb`. Final host and guest
+  probes both reported `dc795cfb`, and both mission reports showed `IND3`
+  state 3. Thus the false function return is not proof that the reload failed;
+  the post-load signature check is the reliable result. This demonstrates one
+  successful paired failure-state resync, but does not explain the earlier
+  slow-transfer failure or establish behavior for every transition.
+
+  Both test units were stopped, and each isolated ASI, INI, SaveGames folder
+  and guest sandbox was restored and compared with the
+  `before-save-slot-trace-20261027-0904` backup. Final logs, mission reports
+  and save artifacts remain under `after-save-slot-trace-20261027-0904/` on
+  each machine.
+- Next: exercise additional campaign transitions and an objective retry at
+  normal update rates, preserving the paired state assertions. Keep
+  `MissionObjectiveSync` default-off and opt-in on both peers.
 
 **Tooling fixes found during the run.** `Parameters()` printed Blueprint
 locals that lie past `ParmsSize`, which read outside the caller's buffer; it
-now stops at the parameter block. `mission-act` gained Name parameters.
+now stops at the parameter block. `mission-act` gained Name parameters, then
+static functions on function libraries (run on the class default object, for
+example `BendGameplayStatics.SaveGameOW`) and a post-call parameter line that
+shows out values such as `ReasonForFailing`.
+
+## Repeated paired resync attempt blocked at guest startup (2026-10-27, 09:41 CET)
+
+**Build and safety.** `make test` passed (C++ checks and 75 Python tests), and
+`make build` produced ASI SHA-256
+`4886282040b94cb1c23ff0dba9d296aabc35a14937d8526958ccf5bf5b12bf0e`.
+The same build was staged on both isolated clients after creating fresh
+rollback copies. Crash-handler and uploader executables remained disabled in
+the isolated game copies. No live install or save was accessed.
+
+**Host baseline.** Cachy loaded the isolated on-foot fixture. Its first menu
+row was verified as `CONTINUE`; the in-game Continue command loaded story
+signature `fa97ef49` with player health 121.875.
+
+**Guest blocker.** The Deck initially launched with `DISPLAY=:1`, where no
+usable X11 socket was available and the ASI did not load. That isolated unit
+was stopped. Retrying under the active Desktop Mode display (`:0`) loaded the
+ASI and connected its UDP client to the host. The guest downloaded and installed snapshot `cd2ee32d` (7,717,293 bytes). One
+Return key was sent to each client only as startup setup, not as a QA action.
+Afterwards, `ui-probe` still found no runtime main menu or visible Continue
+row, and the guest log said to continue from the main menu to load the
+snapshot. No host story mutation was issued, so this is **BLOCKED before a
+resync trial**, not a failed trial or another pass.
+
+Both game units were stopped. The isolated ASIs, INIs, SaveGames, guest
+sandboxes and CRS settings were restored and compared with the fresh backups.
+The host and Deck evidence is archived under
+`run1/after-repeat-resync-20261027-0935/`; rollback copies are under
+`run1/before-repeat-resync-20261027-0935/`.
+
+**Guest-only UI follow-up.** A separate Deck-only launch on `DISPLAY=:0`
+loaded the ASI and showed a viewable `Days Gone` window. The configured
+`game_remote.py` input helper accepted one bounded Enter setup action, but a
+subsequent `ui-probe` still found only the collapsed title-widget template,
+with no runtime main menu or visible Continue row. No host was running and no
+story action was issued. That diagnostic was also archived, and the Deck
+state was restored and hash-checked against the same backup.
+
+**Next.** Resolve the Deck's missing runtime menu on the isolated prefix, then
+repeat the paired objective-retry scenario. Do not change resync logic based
+on this startup blocker; the test never reached a guest story load or host
+objective mutation.
+
+## Independent roaming: native streaming path (2026-10-27)
+
+**Target.** The user clarified that complete gameplay integration and an
+independently roaming second player take priority, including targeted
+decompilation where needed. Neither a visible partner nor nearby enemy
+replication proves that foundation. This does not yet select a replacement
+transport or prove the research native-network path is production-ready.
+
+**Current production limitations established from source.**
+
+- `FinishEnemyScan` selects already-existing host AI near either player's
+  absolute position. It does not request level loading, navigation coverage
+  or population simulation around the guest.
+- `SpawnProxy` creates a `SwarmerPawn_C`, stops its brain and changes its
+  faction. `UpdateGuestProxy` moves it to the guest avatar. This provides an
+  AI damage/target stand-in, not a second registered Bend player controller
+  and pawn.
+- Consequently, passing the existing close-range enemy tests must not be
+  described as independent-world simulation or unrestricted free roam.
+
+**Read-only native analysis.** Used Cachy's isolated
+`run1/game/BendGame/Binaries/Win64/DaysGone.exe` and retained
+`precopy-artifacts/TheysGone-reflection.txt`. The executable SHA-256 matched
+the supported build:
+`17c2fca01d566914147a6d4924d038cb1f5a822c2829e4c45862e2bf837730b3`.
+Analysis used bounded `objdump` ranges and direct-call references; no game
+was started, no binary patched, and no install, save or configuration changed.
+All addresses below are RVAs, not portable engine APIs.
+
+| Boundary | Static evidence |
+|---|---|
+| Reflected `SetStreamingPosition` | Thunk `0x13c8750` decodes world context, one vector and two bools, then calls `0x5bdd70` at `0x13c888a`. |
+| Native position setter `0x5bdd70` | Resolves the world, writes one vector to `world+0x32c`, reads `world+0xc38`, and tail-calls `0x2c65b10`. Reflection identifies `WorldComposition` at decimal 3128 (`0xc38`); the vector's field name is not established. |
+| Composition adapter `0x2c65b10` | Forwards the position pointer to `0x2c65b30`, sets the third argument to 1 and forwards two flags. |
+| Composition update `0x2c65b30` | Reads the first position, updates cached vectors at `composition+0x28` and `+0x34`, can write `world+0x32c`, and invokes `0x2c60250` with one copied vector and output-array addresses `composition+0x68` and `+0x78`. The inspected body does not consume the incoming third argument as a viewpoint count. |
+| Selection `0x2c60250` | Clears both output-array counts, reads world-origin X/Y at `world+0xc18/+0xc1c`, iterates tile records and performs distance-to-bounds comparisons using the input position. The full classification and LOD rules remain to be mapped. |
+| Application in `0x2c65b30` | Iterates 24-byte records from both outputs and calls `0x2c5fde0` with different load/visibility flags. Do not infer the complete record layout from stride alone. |
+| Normal update entry `0x2c65d30` | Iterates entries obtained through engine helpers, accumulates viewpoints and computes their average for origin rebasing. At `0x2c661b3` it passes a viewpoint count with the array pointer to `0x2c65b30`. Exact player inclusion/filtering still requires runtime confirmation. |
+
+`BendStreamingManager` is not the world-tile manager in this path: its
+reflected `StreamManager` member and async asset-load functions identify a
+different responsibility. Hooking that class based on its name alone would
+not address the traced world-composition boundary.
+
+**Implication, not yet a fix.** The traced path has a single-position
+selection bottleneck despite its caller's array/count interface. Calling the
+position setter once per player is not a two-focus solution: it overwrites
+the world's shared position and recomputes classifications. Calling the
+selector twice into the same arrays also discards the first result because
+the selector clears their counts. A candidate hook must preserve the host's
+focus and origin semantics while producing consistent combined tile/LOD
+decisions, not merely alternate positions or increase a radius.
+
+**Follow-up status.** The dual-focus hook and paired free-roam tests below
+supersede the static investigation's pending hook and startup-validation
+gates. Tile streaming, ground collision, regional AI simulation, reconnect,
+and reunion were exercised. Navigation parity, gameplay interactions, stable
+enemy identity across unload/reload, and full performance/memory profiling
+remain separate validation tasks.
+
+## Free roam: dual-focus streaming and regional enemy authority (2026-10-27)
+
+**Result: PASS for separation, guest-region simulation, reunion handover and
+death recovery on the isolated Cachy host / Steam Deck guest fixture.** Opt-in
+with `FreeRoam=1` on both peers; protocol v7.
+
+### Native dual-focus streaming hook
+
+`streaming_hook.cpp` follows on from the static trace above. Build guard:
+executable timestamp `0x68754d46`, plus byte checks at every patched site.
+
+- It detours the composition update `0x2c65b30` and redirects the selector
+  call whose return address is `0x2c65c60`.
+- The replacement selector runs the original `0x2c60250` once for the host's
+  position, then once for the second focus into scratch arrays.
+- The two selections are merged per tile:
+  - a tile is kept if either focus selects it;
+  - the finer LOD wins;
+  - the one-shot visibility bit `0x100` is preserved;
+  - scratch arrays are grown with `FMemory::Realloc` (`0x19740c0`).
+- Tile records live at `composition+0x50`, with count at `+0x58`, stride
+  `0xe0` and flags at `+0xa0`. The refresh threshold, about 15 m squared, is
+  at `+0x60`.
+- The selector takes a position relative to the world origin, so the second
+  focus is converted from absolute coordinates each tick.
+- The merge logic itself is portable (`streaming.hpp`) and unit-tested.
+
+Host-only measurements (debug focus via `stream-focus`):
+
+| Focus | Extra tiles | Loaded levels | Ground at focus |
+|---|---|---|---|
+| none | 0 | 127 | — |
+| 1.2 km west | 43 | 170 | yes, z≈-2985 |
+| towards the map centre | 181 | 295 | yes |
+| 3 km east / 1.5 km south (off the map) | 0 / 12 | 127–139 | no |
+
+The host's ticks stayed around 0.6–1 ms with the hook active, and there were
+no crashes. Clearing the focus returned the host to 127 levels.
+
+### Regional enemy authority
+
+Streaming tiles alone did not populate AI around a distant focus on the host:
+about 1 AI near the focus, versus about 15 in the guest's own world. So when
+the players are apart, enemy ownership is split by region:
+
+- **Who decides.** The host decides separation, with hysteresis
+  (`streaming::NextSeparated`): over 250 m means separated, under 150 m
+  means reunited. A lost partner counts as reunited. The decision goes out as
+  state flag `kSeparated` (bit 10).
+- **While separated.**
+  - The host streams only enemies near itself.
+  - The guest releases its local AI suppression, so its own game spawns and
+    simulates the enemies around it.
+  - The guest streams its nearby enemy appearance and poses to the host using
+    the existing `EnemyInfoPacket` and `kPoseEnemy` messages. The host renders
+    these as poseable replicas; the guest remains authoritative for their
+    simulation and health.
+  - The host also keeps the guest's region streamed through the hook, for
+    terrain and collision.
+- **On reunion.** The guest's existing suppression despawns its local
+  hostile AI, the host stops accepting guest-region replicas, and the host's
+  streamed enemies take over.
+
+Bug found live: `DecodeState` rejects unknown flag bits, so the first paired
+run silently dropped every host packet once `kSeparated` was set. The guest
+then timed out after 5 s. The flag mask now includes `kSeparated`, the
+protocol version was bumped to 7, and a regression test covers both the
+round-trip and rejection of unknown bit 11.
+
+### Paired live evidence (Cachy host, Deck guest, `move-by` relocation)
+
+- **Separation.**
+  - At 1200 m and 401 m the host logged "players separated", and kept 43
+    extra tiles around the guest.
+  - The guest kept receiving 20–24 packets/s, logged "local AI resumed", and
+    had 11–15 controlled AI within 150 m.
+- **Guest enemies visible on host.**
+  - At 401 m, the guest streamed three local AI pawns (wolves and a deer);
+    the host created three poseable replicas with 93-bone rigs and applied
+    pose frames continuously (about 70–165 applications/s).
+  - A controlled guest-side Swarmer spawn also arrived as a host
+    `swarmer_horde_c` replica with 136 bones; the host applied about
+    190 pose frames/s for four replicas with no rejected packets.
+  - Moving the guest away stopped updates; replicas expired after the
+    existing 1.5 s timeout. The guest remained their authority.
+- **Guest-region combat is live.** A guest left idle 1.2 km away dropped from
+  81.9 to 71.9 health, then to -526 within about 66 s, killed by its own
+  region's AI. This happened twice; it is game behaviour, not a sync error.
+- **Death recovery.**
+  - The host logged "partner gone; the host owns all enemies".
+  - The guest respawned with world sync about 15 s later and reconnected.
+  - It re-suppressed local AI ("the host owns enemies; despawning local
+    hostile AI").
+- **Reunion.**
+  - Walking back in 200 m steps, the host logged "players reunited (1 m)"
+    with no flip back. The guest despawned its local AI the same tick.
+  - Health stayed 121.9 throughout the final run, which was without god mode.
+- **Test-tool artifacts, not co-op faults.**
+  - A single 1200 m jump back into terrain the guest had unloaded made the
+    game relocate the pawn about 625 m into the air, and it fell to its death.
+  - A complex visibility line trace once placed the pawn on geometry it fell
+    through, about 9 m.
+  - `move-by` now uses a capsule sweep (simple collision, as the pawn uses);
+    the final run placed the pawn instantly with no damage.
+  - A navmesh projection attempt never resolved in this build and was
+    dropped.
+
+### Open limitations
+
+- Guest-region enemies are replicas on the host, not host-controlled AI;
+  health, AI and combat remain guest-authoritative. Since protocol v8 (see
+  the gradual handoff below), host hits on them are sent to the guest and
+  applied there, and the guest keeps enemies that are still fighting through a
+  reunion instead of despawning them. Protocol v9 adds a guest-side host
+  proxy so those enemies can target the host; paired validation is still
+  pending. The host still cannot directly redirect guest-owned AI.
+- Mission interactions, pickups and world state changed in the guest's region
+  are not yet host-authoritative while separated.
+- Frame-time peaks of about 600–800 ms appear on both sides while paired.
+  They predate separation, so free roam is not the cause, but they are
+  unexplained.
+
+## Gradual enemy ownership handoff (2026-10-27)
+
+**Result: PASS for protocol-v8 handoff in both directions on the Cachy host /
+Steam Deck guest fixture.** Protocol v9 adds a guest-side host proxy; its
+enemy-retarget and damage path is not yet paired-validated. The design follows
+Multivoid and SifuCoop: each enemy has one owner at a time, and ownership
+changes gradually.
+
+### Design
+
+- **One owner, symmetric hits.** Entity IDs belong to the owner, so each
+  side's replicas are only the other side's enemies. The existing `DMEH` hit
+  packet now goes to the owner in either direction; the receiver applies
+  `ApplyDamage` to its own pawn after a range check (melee 8 m, shots 150 m).
+  The host now also accepts guest enemies whenever the guest has
+  `SyncEnemies`, not only while separated.
+- **Keeping fights.** Every 0.5 s each side records which of its streamed
+  enemies target the guest (`GetCurrentTargetPawn`; on the host, the stand-in).
+  On a split the host keeps those engaged within 6 s; on a reunion the guest
+  does. Kept enemies are always streamed (sorted first, even beyond 80 m),
+  and the guest's suppression skips them and defers the crowd/ambient
+  despawn until none remain. Release: death, 6 s without targeting the
+  guest, or 180 s (`KeepHandedEnemy`).
+- **Stand-in rebuilds.** A host teleport rebuilds the avatar, which removes
+  the stand-in for about 5–15 s. The first live split therefore kept 0. The
+  fix samples engagement continuously and, while the stand-in is absent,
+  judges the fight as of its last presence (`FightingAtHandoff`, up to 30 s);
+  the calm clock also waits while it is absent.
+- **Guest-side host proxy (protocol v9).** While the guest keeps enemies
+  through a reunion, it spawns an AI-less pawn at the host avatar and makes
+  nearby guest-owned enemies aware of it. `DMPX` strikes are now accepted by
+  either player's owner. This remains experimental until a paired test
+  confirms retargeting and host health changes.
+
+### Paired live evidence
+
+- **Reunion (guest keeps).** The guest's `spawn-pack` gave 8 Swarmers; the
+  host showed 8 replicas. A host hit at 300 m was rejected ("out of range").
+  On reunion (101 m) the guest logged "keeping 8 enemies that are fighting
+  the guest", despawned only an uninvolved pooled wolf, and deferred the
+  generator despawn. A host hit at 100 m applied (160.0 → 141.2). After
+  `cleanup`: 8 releases, "ownership handoff complete", then the deferred
+  ambient despawn; host replicas expired 1.6 s later.
+- **Split (host keeps).** With 8 host Swarmers on the stand-in, three 100 m
+  host moves split the players at 312 m: "keeping 6 enemies that are
+  fighting the guest (of 8 sources: 0 dead, 2 not)". The rebuilt stand-in
+  appeared 5 s later, and the kept Swarmers kept swinging at it, with strikes
+  applied on the guest. Two guest `hit-enemy` calls landed on a kept enemy
+  (160.0 → 141.2 → 122.5). Host `cleanup` released all 6 and completed the
+  handoff; guest replicas expired about 2 s later.
+- **Final-build regroup retest (protocol v8).** On 2026-10-27 the guest moved
+  away 299 m, spawned 8 Swarmers, then regrouped. It kept 8 of 10 sources
+  (the two uninvolved sources were not kept); cleanup released all 8 and
+  completed the handoff. A subsequent host hit was correctly rejected at
+  292 m. Test logs are archived under each machine's
+  `TheysGone-coop-test/run1/handoff-*-regroup-final-20261027.log`.
+- **Protocol-v9 guest-proxy attempt (inconclusive).** The guest spawned 8
+  debug Swarmers, but they never entered the streamed enemy-source list: the
+  host received no replicas, and reunion logged `0 sources`. With no kept
+  enemies, the guest-side proxy was not exercised; no retarget or host-damage
+  result is claimed. A valid retry must first confirm streamed sources and
+  host replicas, then keep the guest alive through reunion and verify both
+  proxy targeting and a host health change. Logs are archived outside the
+  repository as `TheysGone-coop-test/run1/v9-guest-proxy-attempt-host.log` and
+  `TheysGone-coop-test/run1/v9-guest-proxy-attempt-deck.log`.
+
+### Limitations
+
+- Protocol-v9 proxy retargeting and damage to the host remain unverified in a
+  paired live test.
+- `GetCurrentTargetPawn` may not exist on every controller; such enemies are
+  never kept.
+- Identities are not carried over at release; the new owner's own AI takes
+  over.

@@ -107,6 +107,86 @@ every finding in docs/REPLICATION-RESEARCH.md as you go.
 
 ## Where things stand
 
+**Free roam implemented and paired-validated (2026-10-27):** with
+`FreeRoam=1` on both peers, the host's native dual-focus streaming hook keeps
+the guest's region loaded. When the players are more than 250 m apart, the
+host sets state flag `kSeparated`, and each game owns the
+enemies around its own player. The guest also streams enemy appearances and
+poses to the host, which renders poseable replicas while the guest remains
+authoritative for their AI and health. Under 150 m, the host owns new enemies
+again.
+
+**Gradual enemy ownership handoff (protocol v9):** each enemy has one owner,
+and hits go to the owner in either direction. On a split or reunion, enemies
+that were fighting the guest in the last 6 s stay with their current owner and
+keep streaming until they die, lose interest for 6 s, or reach 180 s. The
+guest no longer despawns a fight in progress when the players regroup.
+Protocol v8 handoff passed paired validation; protocol v9 adds a guest-side
+host proxy so guest-kept enemies can target and damage the host, pending a
+paired test.
+
+Validated on Cachy and the Deck:
+
+- separation;
+- guest-region AI;
+- host rendering guest-region wildlife and a Swarmer replica (with
+  continuous pose updates and no packet rejects);
+- guest death, respawn and reconnect;
+- reunion handover;
+- host hits on guest-owned enemies, and the guest keeping 8 Swarmers across
+  a reunion;
+- the host keeping 6 Swarmers that were fighting the guest across a split,
+  with their swings still reaching the guest and guest hits landing 312 m
+  from the host.
+- a final-build protocol-v8 regroup retest: the guest kept all 8 active
+  Swarmers (2 uninvolved sources were not kept), then released them on
+  cleanup. The guest rejected a host hit at 292 m as out of range.
+
+Open issues:
+
+- The protocol-v9 guest-side host proxy is implemented but not yet paired-
+  validated for enemy retargeting or damage to the host.
+- Enemy identities are not carried over once an enemy is released to the
+  new owner.
+- Interactions in the guest's region are not host-authoritative.
+
+Details are in `REPLICATION-RESEARCH.md`, "Free roam: dual-focus streaming
+and regional enemy authority". Test with `move-by` in steps of a few hundred
+metres; a single kilometre-scale jump can land in unloaded terrain.
+
+**Independent-roaming engine work (2026-10-27):** the user's target is two
+real engine participants who can roam separately, with targeted native
+reverse engineering where reflection is insufficient. Prioritize the
+world-streaming, simulation and player-registration foundations rather than
+treating nearby replica QA as proof of full co-op. The production host's guest
+stand-in is an AI pawn; selecting existing enemies near either player does
+not establish that distant guest regions are loaded or simulated.
+
+Read-only analysis of the hash-verified isolated executable traced
+`SetStreamingPosition` from native thunk `0x13c8750` to `0x5bdd70`, then
+`World.WorldComposition` to `0x2c65b10` / `0x2c65b30` and tile selection at
+`0x2c60250`. The inspected update body selects from one position even though
+the normal caller supplies a viewpoint array and count. Do not repeatedly
+replace the world's streaming position with each player's position: that
+overwrites shared state rather than establishing a union of required tiles.
+That trace led to the opt-in, build-guarded dual-focus hook and paired
+regional-enemy tests summarized above. Ambient spawning works independently
+on the guest, and the host renders the guest's streamed enemy poses. Enemy
+combat authority remains local to the guest while separated; navigation
+parity and host-side interaction with those enemies remain unverified. Full
+evidence is in the research log's "Free roam: dual-focus streaming and
+regional enemy authority" section.
+
+**Latest paired resync attempt (2026-10-27, 09:41 CET): BLOCKED before an
+objective action.** Cachy loaded the `fa97ef49` fixture. The Deck connected
+over UDP and installed the host snapshot, but its runtime main menu and
+visible Continue row never appeared, so no resync trial was run. Both
+isolated setups were stopped and restored from fresh backups. A guest-only
+follow-up on the correct display with the configured input helper still did
+not produce a runtime menu. Details and evidence are in
+`REPLICATION-RESEARCH.md` under “Repeated paired resync attempt blocked at
+guest startup.”
+
 **Late-adoption join fixed (2026-10-25, 17:29 CET):** the guest's title rows
 are built by the menu's own `WaitForInput(bForced)` ("press any key") step,
 not by `RecheckSaves` or a class default. Once a host save is adopted under
@@ -148,11 +228,14 @@ live: `IND_Jobscript_C.MedBoxObtained` moved `IND-JobData` from objective 5 to
 inside Blueprint code, so ProcessEvent hooks see nothing; poll
 `CurrentJobObjectiveIndex` instead. `Debug*` job functions are no-ops in this
 build. `CompleteTheJob` did work on the isolated fixture and changed IND to
-complete, moving tracking to the next job. The story signature now includes
-job objective indices, and version-2 story packets reject stale sequence
-numbers; guest apply still uses the tested save-resync fallback. A host-only
-test confirmed the objective-aware signature changes and is captured on save;
-paired objective-resync validation is next. Details are in
+complete, moving tracking to the next job. The story signature includes job
+objective indices and active objective identifiers/states; version-3 story
+packets reject stale sequence numbers. Both peers need the same protocol
+version. A paired v3 run verified the saved `IND4` state-0-to-1 transition
+through automatic guest save resync, matching signature `1e6f784a`.
+Opt-in direct DMOB application remains limited to uniquely identified
+completed objectives; broader campaign progression remains untested. Paired
+objective-resync validation is documented in
 `REPLICATION-RESEARCH.md`. A nearby bike
 interaction attempt and safe native-prompt probe were inconclusive at first.
 The safe `ride-test` prompt was confirmed in range: E logged both

@@ -6,6 +6,8 @@
 #include "save_guard.hpp"
 #include "save_transfer.hpp"
 #include "story.hpp"
+#include "streaming.hpp"
+#include "streaming_hook.hpp"
 #include "menu.hpp"
 #include "native_ui.hpp"
 #include "session.hpp"
@@ -36,6 +38,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <deque>
 #include <string>
 #include <unordered_map>
@@ -53,6 +56,7 @@ constexpr uint8_t kPrologue[19] = {0x40, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x5
 constexpr double kTickInterval = 1.0 / 60.0;
 constexpr double kSendInterval = 1.0 / 30.0;
 constexpr double kPeerTimeout = 5.0;
+constexpr size_t kObjectiveProgressApplyPerTick = 16;
 // Who was reported as connected without a matching disconnect yet (empty: nobody).
 std::string g_announcedPartner;
 
@@ -245,6 +249,7 @@ MotionBuffer g_motion;
 FrameClock g_frameClock;
 std::string g_remoteName;
 double g_lastRecv = -100;
+bool g_separated = false; // host only: free roam handed the distant guest its own region's enemies
 double g_lastStatus = -100;
 double g_lastSpawnAttempt = -100;
 uint32_t g_lastRemoteSeq = 0;
@@ -264,12 +269,14 @@ void ReceiveEnemyPose(const PosePacket& packet, double now);
 void ReceiveEnemyInfo(const char* data, int len, double now);
 void ReceiveGear(const char* data, int len, double now);
 void ReceiveStory(const char* data, int len);
+void ReceiveObjectiveProgress(const char* data, int len);
 void SendGear(UObject* pawn, double now);
 void DestroyGear();
 void ReceiveDamage(const StatePacket& packet);
 void ReceiveEnemyHit(const char* data, int len, double now);
-void ReceiveGuestStrike(const char* data, int len);
-bool IsGuestProxy(UObject* pawn);
+void ReceivePartnerStrike(const char* data, int len);
+bool IsPartnerProxy(UObject* pawn);
+bool ClassIsA(UObject* cls, UObject* base);
 void QueueEnemyHit(bool melee, UObject* weapon);
 bool HasEnemyReplicas();
 bool DebugHitEnemy();
@@ -1179,6 +1186,7 @@ void SendLocalState(UObject* pawn, double now) {
     if (g_settings.friendlyFire) p.flags |= kFriendlyFire;
     if (g_settings.motorcycles) p.flags |= kSyncBikes;
     if (g_settings.enemies) p.flags |= kSyncEnemies;
+    if (IsHost() && g_separated) p.flags |= kSeparated;
     if (g_settings.passengers) p.flags |= kAcceptPassengers;
     std::snprintf(p.name, sizeof p.name, "%s", session::TruncateUtf8(LocalName(), sizeof p.name - 1).c_str());
     g_damage.Fill(p);
@@ -1274,6 +1282,9 @@ void SendLocalState(UObject* pawn, double now) {
 
 bool g_saveLoading = false, g_loadAfterAdopt = false;
 double g_loadStartedAt = 0;
+bool g_loadVerificationPending = false;
+double g_loadVerificationAt = 0, g_loadVerificationDeadline = 0;
+uint32_t g_loadExpectedSignature = 0;
 
 SaveTransferContext TransferContext(double now) {
     SaveTransferContext context;
@@ -1304,12 +1315,16 @@ void ReceivePose(const char* data, int len, double now) {
         ReceiveStory(data, len);
         return;
     }
+    if (magic == kObjectiveProgressMagic) {
+        ReceiveObjectiveProgress(data, len);
+        return;
+    }
     if (magic == kEnemyHitMagic) {
         ReceiveEnemyHit(data, len, now);
         return;
     }
-    if (magic == kGuestStrikeMagic) {
-        ReceiveGuestStrike(data, len);
+    if (magic == kPartnerStrikeMagic) {
+        ReceivePartnerStrike(data, len);
         return;
     }
     PosePacket packet;
@@ -1685,6 +1700,139 @@ bool DebugError(const char* message) {
     g_settingsError = message;
     Log("debug: ERROR %s", message);
     return false;
+}
+
+// A fixed absolute point standing in for a distant partner, so the host can verify streaming alone.
+struct StreamDebug {
+    bool active = false;
+    FVector absolute{};
+} g_streamDebug;
+
+constexpr float kDebugFocusMin = 15000.f; // cm; closer debug focuses are covered by the host's own selection
+
+// Host only. The host decides separation for both players, so regional enemy ownership has one owner.
+void UpdatePartnerStreaming(double now) {
+    bool partner = g_cfg.freeRoam && IsHost() && now - g_lastRecv < kPeerTimeout && (g_peer.flags & kHasPawn);
+    bool active = false;
+    FVector local{};
+    Call me(g_pawn, "K2_GetActorLocation");
+    if ((partner || g_streamDebug.active) && IsLive(g_pawn) && me.invoke()) {
+        FVector origin = WorldOrigin(g_pawn), at = me.get<FVector>("ReturnValue");
+        auto toLocal = [&](float x, float y, float z) { return FVector{x - origin.x, y - origin.y, z - origin.z}; };
+        if (partner) {
+            FVector peer = toLocal(g_peer.pos[0], g_peer.pos[1], g_peer.pos[2]);
+            bool separated = streaming::NextSeparated(g_separated, std::hypot(peer.x - at.x, peer.y - at.y));
+            if (separated != g_separated)
+                Log("free roam: %s (%.0f m apart)", separated ? "players separated; the guest owns new enemies in its region"
+                    : "players reunited; the host owns new enemies", std::hypot(peer.x - at.x, peer.y - at.y) / 100);
+            g_separated = separated;
+            if (separated) local = peer, active = true;
+        }
+        if (g_streamDebug.active) {
+            local = toLocal(g_streamDebug.absolute.x, g_streamDebug.absolute.y, g_streamDebug.absolute.z);
+            active = std::hypot(local.x - at.x, local.y - at.y) > kDebugFocusMin;
+        }
+    }
+    if (!partner && g_separated) {
+        g_separated = false;
+        Log("free roam: partner gone; the host owns all enemies");
+    }
+    if (streaming::Installed()) streaming::SetSecondFocus(active, local);
+}
+
+bool SetStreamFocus(const std::string& arg) {
+    if (arg == "off") {
+        g_streamDebug.active = false;
+        Log("streaming: debug focus cleared");
+        return true;
+    }
+    float dx = 0, dy = 0;
+    if (!streaming::ParseOffsetMeters(arg, dx, dy))
+        return DebugError("stream-focus needs \"<east m> <north m>\" within 20 km, or \"off\"");
+    Call me(g_pawn, "K2_GetActorLocation");
+    if (!IsLive(g_pawn) || !me.invoke()) return DebugError("stream-focus needs a gameplay pawn");
+    FVector origin = WorldOrigin(g_pawn), at = me.get<FVector>("ReturnValue");
+    g_streamDebug = {true, {at.x + origin.x + dx * 100, at.y + origin.y + dy * 100, at.z + origin.z}};
+    Log("streaming: debug focus %.0f m, %.0f m from the host", dx, dy);
+    return true;
+}
+
+bool ProbePartnerStreaming() {
+    auto r = streaming::Report();
+    if (!r.installed) return DebugError("stream-probe needs FreeRoam=1 at launch");
+    Log("streaming probe: separated=%d active=%d focus=(%.0f, %.0f, %.0f) merges=%llu host=%d partner=%d merged=%d "
+        "extra=%d finer=%d one-shot=%d refresh=%.0f m", g_separated, r.active, r.focus.x, r.focus.y, r.focus.z,
+        static_cast<unsigned long long>(r.merges), r.primaryVisible, r.secondaryVisible, r.mergedVisible, r.added,
+        r.refined, r.forced, r.thresholdMeters);
+    if (!IsLive(g_pawn)) return true;
+    FVector origin = WorldOrigin(g_pawn), f = r.focus;
+    if (!r.active && g_streamDebug.active) {
+        f = {g_streamDebug.absolute.x - origin.x, g_streamDebug.absolute.y - origin.y,
+             g_streamDebug.absolute.z - origin.z};
+    }
+    FVector hit{};
+    int ground = TraceWorld({f.x, f.y, f.z + 50000}, {f.x, f.y, f.z - 50000}, &hit);
+    static UObject* levelClass = FindClass("Level");
+    static UObject* aiClass = FindClass("BendAIPawn");
+    int levels = 0, ai = 0, controlled = 0;
+    for (int32_t i = 0, count = ObjectCount(); i < count; ++i) {
+        auto o = ObjectAt(i);
+        if (!o || !o->cls || !o->outer || IsDefaultOrArchetype(o) || !IsLive(o)) continue;
+        if (o->cls == levelClass) ++levels;
+        else if (aiClass && ClassIsA(o->cls, aiClass)) {
+            Call where(o, "K2_GetActorLocation");
+            if (!where.invoke()) continue;
+            auto p = where.get<FVector>("ReturnValue");
+            if (std::hypot(p.x - f.x, p.y - f.y) > 15000) continue;
+            ++ai;
+            controlled += IsLive(Prop(o, "Controller")) && Alive(o);
+        }
+    }
+    Log("streaming probe: ground=%d%s%.0f, loaded levels=%d, AI within 150 m of focus=%d (%d controlled)",
+        ground, ground == 1 ? " z=" : " ", ground == 1 ? hit.z : 0.f, levels, ai, controlled);
+    return true;
+}
+
+// Debug-only relocation for free-roam tests. The destination may not be streamed in yet, so the pawn is held in
+// place until a ground trace succeeds.
+struct PendingMove {
+    bool active = false;
+    FVector absolute{};
+    double started = 0;
+} g_move;
+
+bool StartMoveBy(const std::string& arg, double now) {
+    float dx = 0, dy = 0;
+    if (!streaming::ParseOffsetMeters(arg, dx, dy)) return DebugError("move-by needs \"<east m> <north m>\" within 20 km");
+    Call me(g_pawn, "K2_GetActorLocation");
+    if (!IsLive(g_pawn) || !me.invoke()) return DebugError("move-by needs a gameplay pawn");
+    Call riding(g_pawn, "IsInVehicle");
+    if (riding.invoke() && riding.get<bool>("ReturnValue")) return DebugError("Dismount before move-by");
+    FVector origin = WorldOrigin(g_pawn), at = me.get<FVector>("ReturnValue");
+    g_move = {true, {at.x + origin.x + dx * 100, at.y + origin.y + dy * 100, at.z + origin.z}, now};
+    Log("move-by: moving %.0f m, %.0f m", dx, dy);
+    return true;
+}
+
+void StepMoveBy(double now) {
+    if (!g_move.active) return;
+    if (!IsLive(g_pawn) || now - g_move.started > 30) {
+        g_move.active = false;
+        Log("move-by: gave up; no ground at the destination after %.0f s", now - g_move.started);
+        return;
+    }
+    FVector origin = WorldOrigin(g_pawn);
+    FVector at{g_move.absolute.x - origin.x, g_move.absolute.y - origin.y, g_move.absolute.z - origin.z};
+    FVector hit{};
+    // A capsule sweep uses simple collision like the pawn does; a complex line trace stopped on canopy once and the
+    // pawn fell to its death.
+    bool ground = TraceWorld({at.x, at.y, at.z + 50000}, {at.x, at.y, at.z - 50000}, &hit, true) == 1;
+    if (ground) at.z = hit.z + 120;
+    Call(Prop(g_pawn, "CharacterMovement"), "StopMovementImmediately").invoke();
+    Call(g_pawn, "K2_SetActorLocation").set("NewLocation", at).setBool("bSweep", false).setBool("bTeleport", true).invoke();
+    if (!ground) return;
+    g_move.active = false;
+    Log("move-by: placed on ground z=%.0f after %.1f s", hit.z, now - g_move.started);
 }
 
 bool DebugSetDamageable(bool damageable) {
@@ -2117,7 +2265,7 @@ void UpdateDebugTools(double now) {
         if (!success && !summary.empty()) DebugError(summary.c_str());
     }
     else if (command == DebugCommand::hitEnemy) {
-        if (!DebugHitEnemy()) success = DebugError("hit-enemy needs a guest with a live enemy replica");
+        if (!DebugHitEnemy()) success = DebugError("hit-enemy needs a live enemy replica");
     }
     else if (command == DebugCommand::missionWatchOn || command == DebugCommand::missionWatchOff) {
         if (!IsLive(g_pawn)) success = DebugError("mission-watch needs a gameplay pawn");
@@ -2125,10 +2273,10 @@ void UpdateDebugTools(double now) {
     }
     else if (command == DebugCommand::missionState || command == DebugCommand::missionAct) {
         std::string summary;
-        if (!IsLive(g_pawn)) {
-            success = DebugError("mission commands need a gameplay pawn");
-        } else if (command == DebugCommand::missionState) {
+        if (command == DebugCommand::missionState) {
             success = research::MissionState(g_basePath + L"-missions.txt", summary);
+        } else if (!IsLive(g_pawn)) {
+            success = DebugError("mission-act needs a gameplay pawn");
         } else {
             wchar_t arg[256]{};
             GetPrivateProfileStringW(L"Debug", L"Arg", L"", arg, 256, path.c_str());
@@ -2137,6 +2285,18 @@ void UpdateDebugTools(double now) {
         }
         if (!summary.empty()) Log("research: %s: %s", text.c_str(), summary.c_str());
         if (!success && !summary.empty()) DebugError(summary.c_str());
+    }
+    else if (command == DebugCommand::streamFocus) {
+        wchar_t arg[256]{};
+        GetPrivateProfileStringW(L"Debug", L"Arg", L"", arg, 256, path.c_str());
+        if (!streaming::Installed()) success = DebugError("stream-focus needs FreeRoam=1 at launch");
+        else success = SetStreamFocus(Narrow(std::wstring(arg)));
+    }
+    else if (command == DebugCommand::streamProbe) success = ProbePartnerStreaming();
+    else if (command == DebugCommand::moveBy) {
+        wchar_t arg[256]{};
+        GetPrivateProfileStringW(L"Debug", L"Arg", L"", arg, 256, path.c_str());
+        success = StartMoveBy(Narrow(std::wstring(arg)), Now());
     }
     else if (command == DebugCommand::reloadSave) {
         if (!ReloadNewestSave()) success = DebugError("No mission manager to reload with");
@@ -2909,8 +3069,8 @@ void UpdateAvatar(UObject* localPawn, double now) {
     }
 }
 
-// Host-to-client enemy replication. The host streams the evaluated skeletons of AI pawns near either
-// player; the client renders poseable copies. Replicas are visual only: they have no AI or collision.
+// Enemy replication. Each machine streams the evaluated skeletons of the AI pawns it owns; the other renders
+// poseable copies. Replicas have no AI or collision; hits on them are sent to the owner (QueueEnemyHit).
 struct EnemySource {
     UObject* pawn = nullptr;
     uint32_t entity = 0;
@@ -2924,6 +3084,7 @@ struct EnemySource {
     std::vector<BonePose> all, bones;
     std::vector<std::string> paths;
     double lastInfo = -10;
+    double onGuest = -1e9; // last time it targeted the partner or the local proxy for them
 };
 struct EnemyReplica {
     UObject* actor = nullptr;
@@ -2949,6 +3110,16 @@ constexpr size_t kEnemyMaxReplicas = 32;
 bool EnemyReplicationActive(double now) {
     return g_settings.enemies && now - g_lastRecv < kPeerTimeout;
 }
+
+bool PlayersSeparated() { return IsHost() ? g_separated : (g_peer.flags & kSeparated) != 0; }
+
+// Enemies kept by their owner across an ownership change (free roam split or reunion), so a fight in
+// progress continues instead of the enemies vanishing. The host keeps enemies fighting the guest's stand-in
+// when the players split; the guest keeps enemies fighting it when they reunite.
+struct KeptEnemy { double since, engaged; };
+std::unordered_map<UObject*, KeptEnemy> g_kept;
+bool g_wasSeparated = false;
+double g_nextHandoffCheck = 0, g_guestPresentAt = -1e9;
 
 // "Package.Asset" path that FindObject resolves on the other machine.
 std::string AssetPath(UObject* asset) {
@@ -3236,16 +3407,21 @@ void FinishEnemyScan(UObject* pawn) {
     if (!me.invoke()) return;
     FVector origin = WorldOrigin(pawn), at = me.get<FVector>("ReturnValue");
     std::vector<FVector> players{{at.x + origin.x, at.y + origin.y, at.z + origin.z}};
-    if (g_peer.flags & kHasPawn) players.push_back({g_peer.pos[0], g_peer.pos[1], g_peer.pos[2]});
+    bool separated = PlayersSeparated();
+    // Together, the guest's only enemies are those it kept from its own region; the host owns the rest.
+    bool keptOnly = !IsHost() && !separated;
+    if ((g_peer.flags & kHasPawn) && !separated) players.push_back({g_peer.pos[0], g_peer.pos[1], g_peer.pos[2]});
     struct Candidate { UObject* pawn; float distance; };
     std::vector<Candidate> found;
     for (auto o : g_enemyScan.pawns) {
+        bool kept = g_kept.count(o) != 0;
+        if (keptOnly && !kept) continue;
         if (!IsLive(o) || !IsLive(Prop(Prop(o, "Mesh"), "SkeletalMesh"))) continue;
         // Pooled pawns parked near the world origin are alive but have no controller.
         Call alive(o, "IsAlive");
         bool living = alive.invoke() && alive.get<bool>("ReturnValue");
         if (living && !IsLive(Prop(o, "Controller"))) continue;
-        if (IsGuestProxy(o) || (living && !SharedEnemy(o, pawn))) continue;
+        if (IsPartnerProxy(o) || (living && !SharedEnemy(o, pawn))) continue;
         Call where(o, "K2_GetActorLocation");
         if (!where.invoke()) continue;
         auto p = where.get<FVector>("ReturnValue");
@@ -3255,7 +3431,9 @@ void FinishEnemyScan(UObject* pawn) {
             float dx = world.x - player.x, dy = world.y - player.y, dz = world.z - player.z;
             best = std::min(best, dx * dx + dy * dy + dz * dz);
         }
-        if (best <= kEnemyRadius * kEnemyRadius) found.push_back({o, best});
+        // Kept enemies are fighting the other player, possibly beyond this player's radius; they sort first.
+        if (kept) found.push_back({o, -1.f});
+        else if (best <= kEnemyRadius * kEnemyRadius) found.push_back({o, best});
     }
     std::sort(found.begin(), found.end(), [](const Candidate& a, const Candidate& b) { return a.distance < b.distance; });
     if (found.size() > kEnemyMaxStreamed) found.resize(kEnemyMaxStreamed);
@@ -3283,7 +3461,7 @@ void FinishEnemyScan(UObject* pawn) {
         next.push_back(std::move(source));
     }
     if (next.size() != g_enemySources.size())
-        Log("enemies: streaming %d of the host's AI pawns", static_cast<int>(next.size()));
+        Log("enemies: streaming %d local AI pawns", static_cast<int>(next.size()));
     g_enemySources = std::move(next);
 }
 
@@ -3384,7 +3562,9 @@ void SendEnemy(EnemySource& e, const FVector& origin, uint32_t timeMs, double no
 }
 
 void SendEnemies(UObject* pawn, double now) {
-    if (!IsHost() || !pawn || !EnemyReplicationActive(now) || !(g_peer.flags & kSyncEnemies)) {
+    bool peerEnabled = (g_peer.flags & kSyncEnemies) != 0;
+    if (!pawn || !EnemyReplicationActive(now) ||
+        !EnemyStreamSendAllowed(IsHost(), peerEnabled, PlayersSeparated(), !g_kept.empty())) {
         if (!g_enemySources.empty()) Log("enemies: stopped streaming");
         g_enemySources.clear();
         g_enemyScan.cursor = 0;
@@ -3416,7 +3596,8 @@ void DestroyEnemyReplicas() {
 }
 
 bool AcceptEnemies(double now) {
-    return !IsHost() && g_pawn && EnemyReplicationActive(now);
+    return g_pawn && EnemyReplicationActive(now) &&
+        EnemyStreamReceiveAllowed(IsHost(), (g_peer.flags & kSyncEnemies) != 0);
 }
 
 EnemyReplica* ReplicaFor(uint32_t entity) {
@@ -3522,7 +3703,7 @@ void UpdateEnemyReplicas(UObject* pawn, double now) {
     }
 }
 
-// Shared combat: the guest's hits on replicas become real damage on the host's pawns.
+// Shared combat: hits on replicas become real damage on the owner's pawns, in both directions.
 struct EnemyHitState {
     uint32_t sequence = 0;
     struct Resend { EnemyHitPacket packet; double at; };
@@ -3535,7 +3716,7 @@ bool HasEnemyReplicas() { return !g_enemyReplicas.empty(); }
 
 void QueueEnemyHit(bool melee, UObject* weapon) {
     double now = Now();
-    if (IsHost() || !g_pawn || g_passenger.pawn || g_menu.IsOpen() || g_enemyReplicas.empty() ||
+    if (!g_pawn || g_passenger.pawn || g_menu.IsOpen() || g_enemyReplicas.empty() ||
         !IsLive(weapon) || !AcceptEnemies(now) || !Alive(g_pawn)) return;
     uint32_t best = 0;
     float bestDistance = 1e30f;
@@ -3594,9 +3775,9 @@ void QueueEnemyHit(bool melee, UObject* weapon) {
     Log("enemies: %s hit replica %u at %.0f cm for %.1f", melee ? "melee" : "shot", best, bestDistance, amount);
 }
 
-// Sends a 25-point gunshot hit on the nearest live replica, bypassing aim; tests the network and host path.
+// Sends a 25-point gunshot hit on the nearest live replica, bypassing aim; tests the network and owner path.
 bool DebugHitEnemy() {
-    if (IsHost() || !g_pawn || !AcceptEnemies(Now())) return false;
+    if (!g_pawn || !AcceptEnemies(Now())) return false;
     uint32_t best = 0;
     float bestDistance = 1e30f;
     Call me(g_pawn, "K2_GetActorLocation");
@@ -3630,7 +3811,7 @@ void ReceiveEnemyHit(const char* data, int len, double now) {
         ++g_enemyStats.rejected;
         return;
     }
-    if (!IsHost() || !g_pawn || !EnemyReplicationActive(now) || !g_enemyHits.dedupe.Accept(hit.session, hit.sequence)) return;
+    if (!g_pawn || !EnemyReplicationActive(now) || !g_enemyHits.dedupe.Accept(hit.session, hit.sequence)) return;
     auto source = std::find_if(g_enemySources.begin(), g_enemySources.end(),
         [&](const EnemySource& e) { return e.entity == hit.entity; });
     if (source == g_enemySources.end() || !IsLive(source->pawn) || !Alive(source->pawn)) {
@@ -3662,18 +3843,17 @@ void ReceiveEnemyHit(const char* data, int len, double now) {
         Name(source->pawn).c_str(), hit.entity, hit.damage, before, after);
 }
 
-// The host's AI only fights pawns. A hidden stand-in pawn with the player's faction follows the guest's
-// avatar in the host world. Enemies nearer to it than to the host are made aware of it; their melee swings
-// at it (OnEnemySwing) and any damage it takes are forwarded to the guest, and its health is refilled.
-struct GuestProxy {
+// AI only fights pawns. A hidden stand-in with the local player's faction follows the partner avatar so local
+// enemies can target them. Their melee swings (OnEnemySwing) and damage are forwarded to the partner owner.
+struct PartnerProxy {
     UObject* pawn = nullptr;
     UObject* controller = nullptr;
     float health = 0;
     uint32_t sequence = 0;
     double nextSpawn = 0, nextReport = 0, settleAt = 0, nextAggro = 0;
-    struct Resend { GuestStrikePacket packet; double at; };
+    struct Resend { PartnerStrikePacket packet; double at; };
     std::vector<Resend> resend;
-    EnemyHitDedupe dedupe; // guest side
+    EnemyHitDedupe dedupe; // peer side
     bool failedLogged = false;
 } g_proxy;
 constexpr float kProxyMaxStrike = 400.f; // larger drops are engine resets, not hits
@@ -3686,14 +3866,15 @@ bool WriteFloatProp(UObject* o, const char* name, float value) {
 }
 
 bool ProxyWanted(double now) {
-    return IsHost() && g_pawn && EnemyReplicationActive(now) && (g_peer.flags & kSyncEnemies) &&
+    bool peerReady = g_pawn && EnemyReplicationActive(now) && (g_peer.flags & kSyncEnemies) &&
         (g_peer.flags & kHasPawn) && (g_peer.flags & kAlive) && IsLive(g_avatar.actor) && !g_avatar.hidden;
+    return PartnerProxyWanted(IsHost(), peerReady, g_cfg.freeRoam, PlayersSeparated(), !g_kept.empty());
 }
 
 void DestroyProxy(const char* why) {
     if (IsLive(g_proxy.controller)) Call(g_proxy.controller, "K2_DestroyActor").invoke();
     if (IsLive(g_proxy.pawn)) Call(g_proxy.pawn, "K2_DestroyActor").invoke();
-    if (g_proxy.pawn) Log("enemies: guest stand-in removed (%s)", why);
+    if (g_proxy.pawn) Log("enemies: partner stand-in removed (%s)", why);
     g_proxy.pawn = g_proxy.controller = nullptr;
 }
 
@@ -3703,7 +3884,7 @@ bool SpawnProxy(const FVector& at, double now) {
     auto library = FindDefaultObject("AIBlueprintHelperLibrary");
     Call faction(g_pawn, "GetFactionType");
     if (!pawnClass || !library || !faction.invoke()) {
-        if (!g_proxy.failedLogged) Log("enemies: guest stand-in unavailable (class, spawn library or faction missing)");
+        if (!g_proxy.failedLogged) Log("enemies: partner stand-in unavailable (class, spawn library or faction missing)");
         g_proxy.failedLogged = true;
         return false;
     }
@@ -3726,21 +3907,21 @@ bool SpawnProxy(const FVector& at, double now) {
     g_proxy.health = -1;
     g_proxy.settleAt = now + 1.5;
     Call proxyFaction(pawn, "GetFactionType");
-    Log("enemies: guest stand-in %s player faction=%u set=%d now=%d brain stopped=%d", Name(pawn).c_str(), playerFaction,
+    Log("enemies: partner stand-in %s player faction=%u set=%d now=%d brain stopped=%d", Name(pawn).c_str(), playerFaction,
         factioned, proxyFaction.invoke() ? proxyFaction.get<uint8_t>("ReturnValue") : 255, stopped);
     return true;
 }
 
-bool IsGuestProxy(UObject* pawn) { return pawn && pawn == g_proxy.pawn; }
+bool IsPartnerProxy(UObject* pawn) { return pawn && pawn == g_proxy.pawn; }
 
-void SendGuestStrike(float damage, double now) {
+void SendPartnerStrike(float damage, double now) {
     if (!++g_proxy.sequence) ++g_proxy.sequence;
-    auto packet = EncodeGuestStrike(g_session, g_proxy.sequence, std::min(damage, kEnemyHitMaxDamage));
+    auto packet = EncodePartnerStrike(g_session, g_proxy.sequence, std::min(damage, kEnemyHitMaxDamage));
     g_net->SendRaw(&packet, sizeof packet);
     g_proxy.resend.push_back({packet, now + 0.1});
 }
 
-void UpdateGuestProxy(double now) {
+void UpdatePartnerProxy(double now) {
     for (auto it = g_proxy.resend.begin(); it != g_proxy.resend.end();) {
         if (now < it->at) { ++it; continue; }
         g_net->SendRaw(&it->packet, sizeof it->packet);
@@ -3769,13 +3950,13 @@ void UpdateGuestProxy(double now) {
     if (now >= g_proxy.settleAt && GetProp(g_proxy.pawn, "Health", health) && std::isfinite(health)) {
         if (g_proxy.health <= 0) {
             g_proxy.health = health;
-            Log("enemies: guest stand-in health settled at %.1f", health);
+            Log("enemies: partner stand-in health settled at %.1f", health);
         } else if (health < g_proxy.health - 0.01f) {
             float damage = g_proxy.health - health;
             if (damage <= kProxyMaxStrike) {
-                SendGuestStrike(damage, now);
-                Log("enemies: guest stand-in took %.1f; forwarded to the partner", damage);
-            } else Log("enemies: guest stand-in health jumped by %.1f; not forwarded", damage);
+                SendPartnerStrike(damage, now);
+                Log("enemies: partner stand-in took %.1f; forwarded to the owner", damage);
+            } else Log("enemies: partner stand-in health jumped by %.1f; not forwarded", damage);
             WriteFloatProp(g_proxy.pawn, "Health", g_proxy.health);
         }
     }
@@ -3785,15 +3966,15 @@ void UpdateGuestProxy(double now) {
         auto Distance = [](FVector a, FVector b) {
             return std::sqrt((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y) + (a.z - b.z) * (a.z - b.z));
         };
-        FVector hostAt{};
+        FVector localAt{};
         Call self(g_pawn, "K2_GetActorLocation");
-        if (self.invoke()) hostAt = self.get<FVector>("ReturnValue");
+        if (self.invoke()) localAt = self.get<FVector>("ReturnValue");
         for (const auto& e : g_enemySources) {
             if (!IsLive(e.pawn) || !Alive(e.pawn)) continue;
             Call loc(e.pawn, "K2_GetActorLocation");
             if (!loc.invoke()) continue;
             FVector p = loc.get<FVector>("ReturnValue");
-            if (Distance(p, at) >= Distance(p, hostAt) || Distance(p, at) > 4000) continue;
+            if (Distance(p, at) >= Distance(p, localAt) || Distance(p, at) > 4000) continue;
             auto controller = Prop(e.pawn, "Controller");
             Call aware(controller, "SetAwarenessOfPawn"), faction(controller, "SetFactionValueOfPawn");
             aware.set("awarePawn", g_proxy.pawn).set("AwarenessLevel", 1.f).invoke();
@@ -3802,8 +3983,12 @@ void UpdateGuestProxy(double now) {
     }
     if (now >= g_proxy.nextReport) {
         g_proxy.nextReport = now + 15;
-        int onProxy = 0, onHost = 0, total = 0;
+        int onProxy = 0, onHost = 0, total = 0, dead = 0;
         for (const auto& e : g_enemySources) {
+            if (!IsLive(e.pawn) || !Alive(e.pawn)) {
+                ++dead;
+                continue;
+            }
             auto controller = Prop(e.pawn, "Controller");
             Call target(controller, "GetCurrentTargetPawn");
             if (!target.invoke()) continue;
@@ -3812,7 +3997,9 @@ void UpdateGuestProxy(double now) {
             onProxy += t == g_proxy.pawn;
             onHost += t == g_pawn;
         }
-        if (total) Log("enemies: %d streamed enemies target the partner %d, the host %d", total, onProxy, onHost);
+        if (total || dead)
+            Log("enemies: %d living streamed enemies target the partner %d, the local player %d (%d dead)",
+                total, onProxy, onHost, dead);
     }
 }
 
@@ -3830,7 +4017,7 @@ float SwingDamage(UObject* pawn) {
 void OnEnemySwing(UObject* notify, UObject* fn, void* parms) {
     static int begin = FindNameIndex("Received_NotifyBegin");
     static UObject* armedClass = nullptr;
-    if (!parms || fn->name.index != begin || !IsLive(notify) || !IsHost()) return;
+    if (!parms || fn->name.index != begin || !IsLive(notify)) return;
     if (notify->cls != armedClass) {
         if (armedClass || Name(notify->cls) != "AnimNotify_MeleeArmed_C") return;
         armedClass = notify->cls;
@@ -3851,35 +4038,100 @@ void OnEnemySwing(UObject* notify, UObject* fn, void* parms) {
     float distance = std::sqrt(dx * dx + dy * dy + dz * dz);
     if (distance > kProxySwingReach) return;
     float damage = SwingDamage(pawn);
-    SendGuestStrike(damage, Now());
+    SendPartnerStrike(damage, Now());
     Log("enemies: %s swung at the partner from %.0f cm; forwarded %.0f", Name(pawn).c_str(), distance, damage);
 }
 
-void ReceiveGuestStrike(const char* data, int len) {
-    GuestStrikePacket strike;
-    if (!DecodeGuestStrike(data, len, strike) || strike.session != g_peer.session || !g_peer.session) {
+void ReceivePartnerStrike(const char* data, int len) {
+    PartnerStrikePacket strike;
+    if (!DecodePartnerStrike(data, len, strike) || strike.session != g_peer.session || !g_peer.session) {
         ++g_enemyStats.rejected;
         return;
     }
-    if (IsHost() || !g_pawn || !Alive(g_pawn) || !g_proxy.dedupe.Accept(strike.session, strike.sequence)) return;
+    if (!g_pawn || !Alive(g_pawn) || !g_proxy.dedupe.Accept(strike.session, strike.sequence)) return;
     float before = 0, after = 0;
     GetProp(g_pawn, "Health", before);
     Call damage(C.statics, "ApplyDamage");
     if (!damage.set("DamagedActor", g_pawn).set("BaseDamage", strike.damage)
             .set("EventInstigator", static_cast<UObject*>(nullptr)).set("DamageCauser", static_cast<UObject*>(nullptr))
             .set("DamageTypeClass", FindClass("DamageType")).invoke()) {
-        Log("enemies: ApplyDamage failed for a host enemy strike");
+        Log("enemies: ApplyDamage failed for a partner enemy strike");
         return;
     }
     GetProp(g_pawn, "Health", after);
-    Log("enemies: host enemy hit you for %.1f: health %.1f -> %.1f", strike.damage, before, after);
+    Log("enemies: partner enemy hit you for %.1f: health %.1f -> %.1f", strike.damage, before, after);
+}
+
+UObject* TargetOf(UObject* pawn) {
+    Call target(Prop(pawn, "Controller"), "GetCurrentTargetPawn");
+    return target.invoke() ? target.get<UObject*>("ReturnValue") : nullptr;
+}
+
+// Runs before SendEnemies so the sources from the previous ownership are still known at a change.
+void UpdateHandoff(double now) {
+    bool active = g_pawn && EnemyReplicationActive(now) && (g_peer.flags & kSyncEnemies);
+    if (!active) {
+        if (!g_kept.empty()) Log("enemies: dropped %d kept enemies; enemy sync stopped", static_cast<int>(g_kept.size()));
+        g_kept.clear();
+        g_wasSeparated = false;
+        return;
+    }
+    // The host tracks its proxy for the guest; the guest tracks itself and its proxy for the host.
+    UObject* player = IsHost() ? g_proxy.pawn : g_pawn;
+    bool playerHere = IsLive(player);
+    bool sample = now >= g_nextHandoffCheck;
+    if (sample) {
+        g_nextHandoffCheck = now + 0.5;
+        // Engagement is sampled continuously so a change is judged on the recent fight, not one instant.
+        if (playerHere) {
+            g_guestPresentAt = now;
+            for (auto& e : g_enemySources) {
+                if (!IsLive(e.pawn) || !Alive(e.pawn)) continue;
+                auto target = TargetOf(e.pawn);
+                if (target == player || (!IsHost() && IsLive(g_proxy.pawn) && target == g_proxy.pawn))
+                    e.onGuest = now;
+            }
+        }
+    }
+    bool separated = PlayersSeparated();
+    if (separated != g_wasSeparated) {
+        g_wasSeparated = separated;
+        g_kept.clear();
+        // The side giving up the region keeps what was fighting the guest shortly before.
+        int dead = 0, others = 0;
+        if (IsHost() == separated) {
+            for (const auto& e : g_enemySources) {
+                if (!IsLive(e.pawn) || !Alive(e.pawn)) ++dead;
+                else if (!FightingAtHandoff(e.onGuest, now, playerHere, g_guestPresentAt)) ++others;
+                else g_kept[e.pawn] = {now, now};
+            }
+        }
+        Log("enemies: %s; keeping %d enemies that are fighting the guest (of %d sources: %d dead, %d not)",
+            separated ? "regions split" : "regions merged", static_cast<int>(g_kept.size()),
+            static_cast<int>(g_enemySources.size()), dead, others);
+    }
+    if (g_kept.empty() || !sample) return;
+    for (auto it = g_kept.begin(); it != g_kept.end();) {
+        bool alive = IsLive(it->first) && Alive(it->first);
+        // Interest can't be judged while the stand-in is absent, so the calm clock waits for it.
+        auto target = alive ? TargetOf(it->first) : nullptr;
+        if (alive && (!playerHere || target == player ||
+                (!IsHost() && IsLive(g_proxy.pawn) && target == g_proxy.pawn)))
+            it->second.engaged = now;
+        if (KeepHandedEnemy(alive, it->second.engaged, it->second.since, now)) { ++it; continue; }
+        Log("enemies: released kept %s (%s)", IsLive(it->first) ? Name(it->first).c_str() : "enemy",
+            !alive ? "dead or gone" : now - it->second.since >= kHandoffMax ? "time limit" : "lost interest");
+        it = g_kept.erase(it);
+        if (g_kept.empty()) Log("enemies: ownership handoff complete");
+    }
 }
 
 // While the host streams enemies, the guest's own hostile AI is removed and its spawners are paused, so
-// the only enemies the guest sees are the host's. Spawners resume when the session ends.
+// the only enemies the guest sees are the host's. Enemies the guest kept at a reunion are left alone until
+// released, and clearing the paused spawners waits for them. Spawners resume when the session ends.
 struct LocalAISuppression {
     int32_t cursor = 0;
-    bool active = false, masksLogged = false;
+    bool active = false, masksLogged = false, cleared = false;
     // class -> 0 other, 1 AI pawn, 2 spawn area, 3 crowd generator, 4 ambient generator
     std::unordered_map<UObject*, uint8_t> kinds;
     std::vector<UObject*> areas, generators, ambient;
@@ -3889,7 +4141,8 @@ struct LocalAISuppression {
 } g_suppress;
 
 bool SuppressionWanted(double now) {
-    return g_cfg.hostSave && !IsHost() && g_pawn && AcceptEnemies(now) && (g_peer.flags & kSyncEnemies);
+    return g_cfg.hostSave && !IsHost() && g_pawn && AcceptEnemies(now) && (g_peer.flags & kSyncEnemies) &&
+        !(g_peer.flags & kSeparated);
 }
 
 void ReleaseLocalAI() {
@@ -3912,6 +4165,12 @@ template <typename T> bool Remember(std::vector<T>& list, T item) {
     return true;
 }
 
+void ClearAmbientGenerator(UObject* generator) {
+    bool cleared = Call(generator, "ForceDespawnAll").setBool("resetSpawnedCount", false)
+        .setBool("resetToKilled", false).setBool("Delay", false).invoke();
+    Log("enemies: ambient generator %s despawn all=%d", Name(generator).c_str(), cleared);
+}
+
 // Returns a live AI pawn to its spawner the way the game does when the player rides away.
 void DespawnLocalAI(UObject* pawn, double now) {
     auto controller = Prop(pawn, "Controller");
@@ -3925,7 +4184,7 @@ void DespawnLocalAI(UObject* pawn, double now) {
         Log("enemies: pool flags read=%d masks 0x%02x/0x%02x", read, pooledMask, inUseMask);
     }
     if (read && pooled && !inUse) return; // parked in the pool, not in the world
-    if (!SharedEnemy(pawn, g_pawn)) return;
+    if (IsPartnerProxy(pawn) || g_kept.count(pawn) || !SharedEnemy(pawn, g_pawn)) return;
     auto [last, first] = g_suppress.despawned.try_emplace(controller, -100.0);
     if (now - last->second < 5) return;
     last->second = now;
@@ -3974,20 +4233,27 @@ void SuppressLocalAI(double now) {
         case 3:
             if (Remember(g_suppress.generators, o)) {
                 Call(o, "SetPaused").setBool("bPaused", true).invoke();
-                Call(o, "DestroyGeneratedCrowdMembers").invoke();
+                if (g_suppress.cleared) Call(o, "DestroyGeneratedCrowdMembers").invoke();
             }
             break;
         case 4:
             if (Remember(g_suppress.ambient, o)) {
                 bool limited = Call(o, "OverrideGlobalSpawnLimitNEW").set("newLimit", 0).invoke();
-                bool cleared = Call(o, "ForceDespawnAll").setBool("resetSpawnedCount", false)
-                    .setBool("resetToKilled", false).setBool("Delay", false).invoke();
-                Log("enemies: ambient generator %s spawn limit 0=%d despawn all=%d", Name(o).c_str(), limited, cleared);
+                Log("enemies: ambient generator %s spawn limit 0=%d", Name(o).c_str(), limited);
+                if (g_suppress.cleared) ClearAmbientGenerator(o);
             }
             break;
         }
     }
     g_suppress.cursor = end >= count ? 0 : end;
+    // Generated members may include enemies the guest kept, so spawners are cleared once those are released.
+    if (!g_suppress.cleared && g_kept.empty()) {
+        g_suppress.cleared = true;
+        for (auto g : g_suppress.generators)
+            if (IsLive(g)) Call(g, "DestroyGeneratedCrowdMembers").invoke();
+        for (auto g : g_suppress.ambient)
+            if (IsLive(g)) ClearAmbientGenerator(g);
+    }
     g_suppress.time += Now() - start;
 }
 
@@ -4314,7 +4580,8 @@ bool g_teleportAfterLoad = false;
 // sandbox is the host's, so an in-place reload loads it. Retried while the pins say it has not loaded.
 void LoadAdoptedSave(double now) {
     static double nextAttempt = 0;
-    if (!SaveGuardPinned() || !IsLive(g_pawn) || g_saveLoading || now < nextAttempt) return;
+    if (!SaveGuardPinned() || !IsLive(g_pawn) || g_saveLoading || g_loadVerificationPending || now < nextAttempt)
+        return;
     if (auto manager = FindWorldManager()) {
         Call cinematic(manager, "GetIsCinematicActive");
         if (cinematic.invoke() && cinematic.get<bool>("ReturnValue")) return;
@@ -4331,9 +4598,8 @@ bool CinematicActive() {
     return cinematic.invoke() && cinematic.get<bool>("ReturnValue");
 }
 
-// Story progress: every job the job manager knows (story and side jobs, in the game's order) with its
-// completion, activity, state and objective index, plus active or unlocked story missions and the episode.
-// Persisted objective transitions participate in the existing host-save resync path.
+// Story progress: every job the manager knows plus each active job's current objective states, active or
+// unlocked story missions, and the episode. Persisted changes participate in host-save resync.
 StorySignature ReadStory() {
     struct Array { UObject** data; int32_t count, capacity; };
     auto jobs = FindLive("BendJobManager");
@@ -4356,6 +4622,16 @@ StorySignature ReadStory() {
         hasher.Add(Name(job), done.invoke() && done.get<bool>("ReturnValue"),
                    static_cast<uint8_t>(state | (isActive ? 0x80 : 0)), objective);
     }
+    std::vector<research::ObjectiveProgress> objectives;
+    static bool objectiveSnapshotFailed = false;
+    if (!research::ReadActiveObjectiveProgress(objectives)) {
+        if (!objectiveSnapshotFailed) Log("story: active objective snapshot unavailable; story sync paused");
+        objectiveSnapshotFailed = true;
+        return {};
+    }
+    objectiveSnapshotFailed = false;
+    for (const auto& objective : objectives)
+        hasher.AddObjectiveState(objective.jobName, objective.identifier, objective.index, objective.state);
     Call episode(mission, "GetCurrentEpisode"), datas(mission, "GetAllActiveOrUnlockedMissionDatas");
     if (!episode.invoke()) return {};
     if (datas.invoke()) {
@@ -4450,11 +4726,17 @@ bool DivergeStory() {
 
 struct StoryState {
     StorySignature mine;
-    double sampledAt = -1e9, sentAt = -1e9, mismatchSince = -1;
-    uint32_t savedSignature = 0, saveSerial = 0, sequence = 0, lastResynced = 0, loggedHost = 0;
+    double sampledAt = -1e9, sentAt = -1e9, objectiveSentAt = -1e9, mismatchSince = -1;
+    uint32_t savedSignature = 0, saveSerial = 0, sequence = 0, lastResynced = 0, pendingResync = 0, loggedHost = 0;
     bool savePending = false, haveHost = false;
     StoryPacket host{};
 } g_story;
+
+struct ObjectiveProgressState {
+    uint32_t session = 0, sequence = 0;
+    bool havePacket = false, loggedFailure = false;
+    std::deque<ObjectiveProgressPacket> pending;
+} g_objectiveProgress;
 
 void ReceiveStory(const char* data, int len) {
     StoryPacket packet;
@@ -4462,6 +4744,32 @@ void ReceiveStory(const char* data, int len) {
     if (g_story.haveHost && !StoryPacketIsNewer(packet, g_story.host)) return;
     g_story.host = packet;
     g_story.haveHost = true;
+}
+
+void ReceiveObjectiveProgress(const char* data, int len) {
+    ObjectiveProgressPacket packet;
+    if (!g_cfg.missionObjectiveSync || !g_cfg.hostSave || !IsGuest() ||
+        !DecodeObjectiveProgress(data, len, packet) || packet.session != g_peer.session || !g_peer.session) return;
+    if (packet.session != g_objectiveProgress.session) {
+        g_objectiveProgress = {};
+        g_objectiveProgress.session = packet.session;
+    } else if (g_objectiveProgress.havePacket &&
+               !StorySequenceIsNewer(packet.sequence, g_objectiveProgress.sequence)) {
+        return;
+    }
+    g_objectiveProgress.sequence = packet.sequence;
+    g_objectiveProgress.havePacket = true;
+    for (const auto& pending : g_objectiveProgress.pending)
+        if (std::strcmp(pending.jobName, packet.jobName) == 0 &&
+            std::strcmp(pending.objectiveId, packet.objectiveId) == 0) return;
+    if (g_objectiveProgress.pending.size() >= 256) {
+        g_objectiveProgress.pending.pop_front();
+        if (!g_objectiveProgress.loggedFailure) {
+            Log("objective sync: pending packet queue full; older updates dropped, host resend and save resync remain available");
+            g_objectiveProgress.loggedFailure = true;
+        }
+    }
+    g_objectiveProgress.pending.push_back(packet);
 }
 
 void SampleStory(double now) {
@@ -4491,30 +4799,64 @@ void UpdateStory(double now) {
         return;
     }
     if (!IsGuest()) {
-        if (!g_cfg.hostSave || now - g_story.sentAt < kStoryInterval) return;
-        SampleStory(now);
-        if (!g_story.mine.valid) return;
-        g_story.sentAt = now;
-        if (++g_story.sequence == 0) ++g_story.sequence;
-        auto packet = EncodeStory(g_session, g_story.mine, g_story.savedSignature, g_story.saveSerial, g_story.sequence);
-        g_net->SendRaw(&packet, sizeof packet);
+        if (!g_cfg.hostSave) return;
+        if (g_cfg.missionObjectiveSync && now - g_story.objectiveSentAt >= kObjectiveProgressInterval) {
+            g_story.objectiveSentAt = now;
+            for (const auto& objective : research::CompletedObjectiveProgress()) {
+                if (++g_objectiveProgress.sequence == 0) ++g_objectiveProgress.sequence;
+                auto packet = EncodeObjectiveProgress(g_session, g_objectiveProgress.sequence,
+                                                      objective.jobName, objective.identifier, 2);
+                if (packet.magic == kObjectiveProgressMagic) g_net->SendRaw(&packet, sizeof packet);
+            }
+        }
+        if (now - g_story.sentAt >= kStoryInterval) {
+            SampleStory(now);
+            if (!g_story.mine.valid) return;
+            g_story.sentAt = now;
+            if (++g_story.sequence == 0) ++g_story.sequence;
+            auto packet = EncodeStory(g_session, g_story.mine, g_story.savedSignature, g_story.saveSerial, g_story.sequence);
+            g_net->SendRaw(&packet, sizeof packet);
+        }
         return;
     }
-    if (!g_story.haveHost || !SaveGuardAdopted() || SaveGuardPinned() || g_saveLoading) return;
+    if (g_story.pendingResync && !SaveGuardPinned() && !SaveTransferInProgress()) {
+        Log("story: host snapshot request for %08x ended without adoption; retrying",
+            g_story.pendingResync);
+        g_story.pendingResync = 0;
+    }
+    if (!SaveGuardAdopted() || SaveGuardPinned() || g_saveLoading || g_loadVerificationPending) return;
     SampleStory(now);
+    if (g_cfg.missionObjectiveSync) {
+        size_t applied = 0;
+        while (!g_objectiveProgress.pending.empty() && applied < kObjectiveProgressApplyPerTick) {
+            auto packet = g_objectiveProgress.pending.front();
+            g_objectiveProgress.pending.pop_front();
+            ++applied;
+            bool changed = false;
+            if (research::ApplyObjectiveProgress(packet.jobName, packet.objectiveId, changed)) {
+                if (changed)
+                    Log("objective sync: applied %s.%s from host", packet.jobName, packet.objectiveId);
+            } else if (!g_objectiveProgress.loggedFailure) {
+                Log("objective sync: could not apply %s.%s; host resend and save resync remain available",
+                    packet.jobName, packet.objectiveId);
+                g_objectiveProgress.loggedFailure = true;
+            }
+        }
+    }
+    if (!g_story.haveHost) return;
     if (g_story.host.savedSignature != g_story.loggedHost) {
         g_story.loggedHost = g_story.host.savedSignature;
         Log("story: host saved progress %08x (%u of %u complete); ours %08x (%u of %u)", g_story.host.savedSignature,
             g_story.host.completed, g_story.host.unlocked, g_story.mine.hash, g_story.mine.completed, g_story.mine.unlocked);
     }
-    if (!StoryNeedsResync(g_story.host, g_story.mine, g_story.lastResynced)) {
+    if (!StoryNeedsResync(g_story.host, g_story.mine, g_story.lastResynced, g_story.pendingResync)) {
         g_story.mismatchSince = -1;
         return;
     }
     if (g_story.mismatchSince < 0) g_story.mismatchSince = now;
     if (now - g_story.mismatchSince < kStoryResyncDelay || CinematicActive()) return;
     if (!SaveTransferResync()) return;
-    g_story.lastResynced = g_story.host.savedSignature;
+    g_story.pendingResync = g_story.host.savedSignature;
     g_story.mismatchSince = -1;
     Log("story: host progress %08x differs from ours %08x; fetching the host's save", g_story.host.savedSignature,
         g_story.mine.hash);
@@ -4546,6 +4888,8 @@ void ObserveSaveEvent(UObject* obj, UObject* fn, void* parms) {
         if (!g_saveLoading) {
             g_loadAfterAdopt = SaveGuardAdopted();
             g_loadStartedAt = Now();
+            g_loadExpectedSignature = g_story.pendingResync ? g_story.pendingResync :
+                (g_story.haveHost ? g_story.host.savedSignature : 0);
         }
         g_saveLoading = true;
         return;
@@ -4554,14 +4898,61 @@ void ObserveSaveEvent(UObject* obj, UObject* fn, void* parms) {
         bool adoptedLoad = g_saveLoading && g_loadAfterAdopt;
         g_saveLoading = g_loadAfterAdopt = false;
         if (adoptedLoad && SaveGuardPinned()) {
-            SaveGuardLoaded();
-            g_teleportAfterLoad = true;
+            g_loadVerificationPending = true;
+            g_loadVerificationAt = Now() + 1.0;
+            g_loadVerificationDeadline = Now() + 10.0;
         }
         return;
     }
     std::string name = Name(fn);
     unsigned type = name.starts_with("OnGameSaved") && parms ? *static_cast<const uint8_t*>(parms) : 255u;
     Log("save guard: game event %s.%s type=%u", Name(obj->cls).c_str(), name.c_str(), type);
+}
+
+void VerifyAdoptedSaveLoad(double now, double wall) {
+    if (!g_loadVerificationPending || wall < g_loadVerificationAt) return;
+    if (!SaveGuardPinned()) {
+        g_loadVerificationPending = false;
+        return;
+    }
+
+    StorySignature loaded = ReadStory();
+    if (!loaded.valid) {
+        if (wall >= g_loadVerificationDeadline) {
+            g_loadVerificationPending = false;
+            Log("save transfer: could not read story progress after loading; host save remains pinned");
+            ui::Notify("Theys Gone", "Couldn't verify the host save; return to the main menu and Continue");
+        } else {
+            g_loadVerificationAt = wall + 1.0;
+        }
+        return;
+    }
+
+    g_story.mine = loaded;
+    g_story.sampledAt = now;
+    uint32_t hostSignature = g_story.haveHost ? g_story.host.savedSignature : 0;
+    if (!g_loadExpectedSignature && !hostSignature && !g_story.pendingResync) {
+        g_loadVerificationPending = false;
+        SaveGuardLoaded();
+        g_teleportAfterLoad = true;
+        Log("save transfer: initial host save loaded without verification; no saved story signature is available");
+        return;
+    }
+    bool matches = StoryResyncMatches(g_loadExpectedSignature, loaded) ||
+                   StoryResyncMatches(hostSignature, loaded);
+    g_loadVerificationPending = false;
+    if (!matches) {
+        Log("save transfer: loaded progress %08x does not match expected host progress %08x; host save remains pinned",
+            loaded.hash, g_loadExpectedSignature);
+        ui::Notify("Theys Gone", "Host progress wasn't verified; return to the main menu and Continue");
+        return;
+    }
+
+    g_story.lastResynced = loaded.hash;
+    g_story.pendingResync = 0;
+    SaveGuardLoaded();
+    g_teleportAfterLoad = true;
+    Log("save transfer: verified loaded host progress %08x", loaded.hash);
 }
 
 void Tick(bool hudFrame) {
@@ -4644,6 +5035,13 @@ void Tick(bool hudFrame) {
         held = down;
     }
     if (g_cfg.hostSave && IsGuest() && !SaveGuardActive()) SaveGuardEnable();
+    if (g_saveLoading && wall - g_loadStartedAt >= 60.0) {
+        bool adoptedLoad = g_loadAfterAdopt;
+        g_saveLoading = g_loadAfterAdopt = false;
+        Log("save guard: %s load event timed out", adoptedLoad ? "adopted host" : "game");
+        if (adoptedLoad)
+            ui::Notify("Theys Gone", "Host save load timed out; return to the main menu and Continue");
+    }
     SaveTransferTick(TransferContext(now));
     static bool adopted = false;
     if (bool nowAdopted = SaveGuardAdopted(); nowAdopted != adopted) {
@@ -4651,6 +5049,7 @@ void Tick(bool hudFrame) {
         if (adopted) ui::TitleSavesChanged();
     }
     LoadAdoptedSave(now);
+    VerifyAdoptedSaveLoad(now, wall);
     UpdateStory(now);
     static double teleportAt = -1;
     if (g_teleportAfterLoad) {
@@ -4680,11 +5079,14 @@ void Tick(bool hudFrame) {
     }
     UpdateAvatar(g_pawn, now);
     UpdateGear(g_pawn, now);
+    UpdateHandoff(now);
     SendEnemies(g_pawn, now);
     UpdateEnemyReplicas(g_pawn, now);
     ResendEnemyHits(now);
     SuppressLocalAI(now);
-    UpdateGuestProxy(now);
+    UpdatePartnerProxy(now);
+    UpdatePartnerStreaming(now);
+    StepMoveBy(now);
     MenuOnline online;
     if (g_steam.Available()) {
         online.enabled = true;
@@ -4909,6 +5311,7 @@ Config LoadConfig(const std::wstring& ini) {
     c.playerName = IniString(ini, L"PlayerName", c.playerName.c_str());
     c.discovery = GetPrivateProfileIntW(L"Coop", L"Discovery", 0, ini.c_str()) != 0;
     c.missionDiscovery = GetPrivateProfileIntW(L"Coop", L"MissionDiscovery", 0, ini.c_str()) != 0;
+    c.missionObjectiveSync = GetPrivateProfileIntW(L"Coop", L"MissionObjectiveSync", 0, ini.c_str()) != 0;
     c.menuDiscovery = GetPrivateProfileIntW(L"Coop", L"MenuDiscovery", 0, ini.c_str()) != 0;
     c.hostSave = GetPrivateProfileIntW(L"Coop", L"HostSave", 1, ini.c_str()) != 0;
     c.debugTools = GetPrivateProfileIntW(L"Coop", L"DebugTools", 0, ini.c_str()) != 0;
@@ -4926,6 +5329,7 @@ Config LoadConfig(const std::wstring& ini) {
     if (!c.autoLan && transport != "menu") Log("config: unknown Transport '%s'; using menu", transport.c_str());
     c.lobbyVisibility = IniString(ini, L"Visibility", c.lobbyVisibility.c_str());
     c.steamPumpCallbacks = GetPrivateProfileIntW(L"Coop", L"SteamPumpCallbacks", 0, ini.c_str()) != 0;
+    c.freeRoam = GetPrivateProfileIntW(L"Coop", L"FreeRoam", 0, ini.c_str()) != 0;
     return c;
 }
 
@@ -4934,6 +5338,12 @@ bool Install(const std::wstring& basePath) {
     LogOpen(basePath + L".log");
     Log("Theys Gone %s starting (protocol v%u)", COOP_VERSION, static_cast<unsigned>(kProtocolVersion));
     g_cfg = LoadConfig(basePath + L".ini");
+    if (g_cfg.missionObjectiveSync && !g_cfg.hostSave) {
+        Log("config: MissionObjectiveSync requires HostSave=1; objective sync disabled");
+        g_cfg.missionObjectiveSync = false;
+    } else if (g_cfg.missionObjectiveSync) {
+        Log("objective sync: enabled; both peers must opt in, save resync remains the fallback");
+    }
     g_debugRequests.Initialize(GetPrivateProfileIntW(L"Debug", L"Request", 0, (basePath + L"-debug.ini").c_str()));
     if (BCryptGenRandom(nullptr, reinterpret_cast<PUCHAR>(&g_session), sizeof g_session,
                        BCRYPT_USE_SYSTEM_PREFERRED_RNG) < 0) {
@@ -4985,6 +5395,7 @@ bool Install(const std::wstring& basePath) {
     g.objectArray = reinterpret_cast<uint8_t*>(g.imageBase + kObjectArrayRva);
     if (!InstallHook(reinterpret_cast<uint8_t*>(g.imageBase + kProcessEventRva))) return false;
     Log("ProcessEvent hook installed");
+    if (g_cfg.freeRoam) streaming::Install(g.imageBase);
     StartOverlay();
     return true;
 }

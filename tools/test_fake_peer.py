@@ -1,5 +1,6 @@
 import math
 from pathlib import Path
+import re
 import socket
 import struct
 import subprocess
@@ -203,12 +204,98 @@ class ProtocolTest(unittest.TestCase):
                         break
                 else:
                     self.fail('peer never sent a pawn after receiving the game state')
+                for session, sequence in ((77, 9), (77, 9), (77, 8), (88, 1)):
+                    game.sendto(fake_peer.encode_story(session, 2, 0x12345678, 0x87654321,
+                                                       3, 4, 40, sequence), peer)
+                for session, sequence in ((77, 12), (77, 12), (77, 11), (88, 1)):
+                    game.sendto(fake_peer.encode_objective_progress(session, sequence, 'IND-JobData', 'IND3'), peer)
                 stdout, stderr = process.communicate(timeout=3)
                 self.assertEqual(process.returncode, 0, stdout + stderr)
+                self.assertEqual(stdout.count('story session=77 sequence=9'), 1, stdout)
+                self.assertNotIn('story session=77 sequence=8', stdout)
+                self.assertIn('story session=88 sequence=1', stdout)
+                self.assertEqual(stdout.count('objective session=77 sequence=12'), 1, stdout)
+                self.assertNotIn('objective session=77 sequence=11', stdout)
+                self.assertIn('objective session=88 sequence=1', stdout)
             finally:
                 if process.poll() is None:
                     process.kill()
                 process.communicate()
+
+
+class StoryProtocolTest(unittest.TestCase):
+    def test_story_version_matches_plugin(self):
+        header = Path(__file__).resolve().parents[1] / 'src' / 'coop' / 'story.hpp'
+        match = re.search(r'\bkStoryVersion\s*=\s*(\d+)\s*;', header.read_text(encoding='utf-8'))
+        self.assertIsNotNone(match)
+        self.assertEqual(fake_peer.STORY_VERSION, int(match.group(1)))
+
+    def test_wire_format_and_round_trip(self):
+        packet = fake_peer.encode_story(11, 2, 0x12345678, 0x87654321, 3, 4, 40, 9)
+        self.assertEqual(fake_peer.STORY_SIZE, 32)
+        self.assertEqual(packet[:4], b'DMST')
+        self.assertEqual(fake_peer.decode_story_datagram(packet), {
+            'episode': 2, 'session': 11, 'saved_signature': 0x12345678,
+            'live_signature': 0x87654321, 'save_serial': 3, 'completed': 4,
+            'unlocked': 40, 'sequence': 9,
+        })
+
+    def test_rejects_malformed_story_packets(self):
+        packet = fake_peer.encode_story(11, 2, 1, 2, 3, 4, 5, 6)
+        self.assertIsNone(fake_peer.decode_story_datagram(packet[:-1]))
+        for offset, format_, value in ((0, '<I', 0), (4, '<H', 1), (7, '<B', 1),
+                                       (8, '<I', 0), (24, '<H', 6), (28, '<I', 0)):
+            with self.subTest(offset=offset):
+                invalid = bytearray(packet)
+                struct.pack_into(format_, invalid, offset, value)
+                self.assertIsNone(fake_peer.decode_story_datagram(invalid))
+
+    def test_observer_rejects_stale_sequences_and_accepts_new_sessions(self):
+        observer = fake_peer.StoryObserver()
+        packet = lambda session, sequence: fake_peer.encode_story(session, 2, 1, 2, 3, 4, 5, sequence)
+        self.assertEqual(observer.accept(packet(11, 0xFFFFFFFE))['sequence'], 0xFFFFFFFE)
+        self.assertIsNone(observer.accept(packet(11, 0xFFFFFFFE)))
+        self.assertIsNone(observer.accept(packet(11, 0xFFFFFFFD)))
+        self.assertEqual(observer.accept(packet(11, 1))['sequence'], 1)
+        self.assertIsNone(observer.accept(packet(11, 0x80000001)))
+        self.assertEqual(observer.accept(packet(12, 1))['session'], 12)
+
+
+class ObjectiveProgressProtocolTest(unittest.TestCase):
+    def test_wire_format_and_round_trip(self):
+        packet = fake_peer.encode_objective_progress(11, 9, 'IND-JobData', 'IND3')
+        self.assertEqual(fake_peer.OBJECTIVE_PROGRESS_SIZE, 112)
+        self.assertEqual(packet[:4], b'DMOB')
+        self.assertEqual(fake_peer.decode_objective_progress_datagram(packet), {
+            'session': 11, 'sequence': 9, 'state': 2,
+            'job_name': 'IND-JobData', 'objective_id': 'IND3',
+        })
+
+    def test_rejects_malformed_objective_packets(self):
+        packet = fake_peer.encode_objective_progress(11, 9, 'IND-JobData', 'IND3')
+        self.assertIsNone(fake_peer.decode_objective_progress_datagram(packet[:-1]))
+        for offset, format_, value in ((0, '<I', 0), (4, '<H', 2), (6, '<B', 1), (7, '<B', 1),
+                                       (8, '<I', 0), (12, '<I', 0)):
+            with self.subTest(offset=offset):
+                invalid = bytearray(packet)
+                struct.pack_into(format_, invalid, offset, value)
+                self.assertIsNone(fake_peer.decode_objective_progress_datagram(invalid))
+        for offset, value in ((16, b'/' + packet[17:]), (64, b'A' * 48)):
+            with self.subTest(offset=offset):
+                invalid = bytearray(packet)
+                invalid[offset:offset + 48] = value
+                self.assertIsNone(fake_peer.decode_objective_progress_datagram(invalid))
+
+    def test_observer_rejects_stale_sequences_and_accepts_new_sessions(self):
+        observer = fake_peer.ObjectiveProgressObserver()
+        packet = lambda session, sequence: fake_peer.encode_objective_progress(
+            session, sequence, 'IND-JobData', 'IND3')
+        self.assertEqual(observer.accept(packet(11, 0xFFFFFFFE))['sequence'], 0xFFFFFFFE)
+        self.assertIsNone(observer.accept(packet(11, 0xFFFFFFFE)))
+        self.assertIsNone(observer.accept(packet(11, 0xFFFFFFFD)))
+        self.assertEqual(observer.accept(packet(11, 1))['sequence'], 1)
+        self.assertIsNone(observer.accept(packet(11, 0x80000001)))
+        self.assertEqual(observer.accept(packet(12, 1))['session'], 12)
 
 
 if __name__ == '__main__':

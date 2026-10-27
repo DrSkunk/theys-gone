@@ -49,7 +49,7 @@ SRWLOCK g_lock = SRWLOCK_INIT;
 std::set<std::wstring> g_deleted; // lower-case relative paths deleted during this session
 std::set<std::wstring> g_pinned;  // lower-case adopted names protected until the next load completes
 std::atomic<bool> g_installed{false}, g_active{false}, g_exclusive{false};
-std::atomic<int> g_notes{0};
+std::atomic<int> g_notes{0}, g_readNotes{0};
 
 struct Mapped {
     bool guarded = false;
@@ -103,6 +103,17 @@ void Note(const char* operation, const std::wstring& relative, const char* detai
         Log("save guard: further redirect messages suppressed");
 }
 
+void NotePinnedRead(const Mapped& mapped, DWORD access, DWORD disposition, HANDLE file, DWORD error) {
+    int count = ++g_readNotes;
+    if (count <= 128) {
+        Log("save guard: opened pinned save SaveGames\\%s -> %s (access=0x%08lx disposition=%lu opened=%d error=%lu)",
+            Narrow(mapped.relative).c_str(), Narrow(mapped.path).c_str(), access, disposition,
+            file != INVALID_HANDLE_VALUE, error);
+    } else if (count == 129) {
+        Log("save guard: further pinned-save reads suppressed");
+    }
+}
+
 // Maps a game path. Writes always land in the sandbox; reads use the sandbox copy if present, a
 // missing path if the file was deleted this session, otherwise the original. In exclusive mode (after
 // adopting the host's saves) reads never fall back to the original, and writes to pinned adopted files
@@ -150,7 +161,13 @@ HANDLE WINAPI HookCreateFileW(LPCWSTR name, DWORD access, DWORD share, LPSECURIT
     }
     if (mapped.guarded && write)
         Note("write", mapped.relative, mapped.path.starts_with(g_discard) ? " (discarded, host save pinned)" : "");
-    return real.createFileW(mapped.path.c_str(), access, share, security, disposition, flags, templateFile);
+    bool pinnedSaveRead = mapped.guarded && !write && !mapped.relative.empty() &&
+                          LowerCopy(mapped.relative).ends_with(L".sav") &&
+                          (access & (GENERIC_READ | FILE_READ_DATA)) != 0 && Pinned(mapped.relative);
+    HANDLE file = real.createFileW(mapped.path.c_str(), access, share, security, disposition, flags, templateFile);
+    DWORD error = file == INVALID_HANDLE_VALUE ? GetLastError() : ERROR_SUCCESS;
+    if (pinnedSaveRead) NotePinnedRead(mapped, access, disposition, file, error);
+    return file;
 }
 
 HANDLE WINAPI HookCreateFileA(LPCSTR name, DWORD access, DWORD share, LPSECURITY_ATTRIBUTES security,
@@ -412,6 +429,7 @@ bool SaveGuardAdopt(const std::vector<AdoptedFile>& files, std::string& error) {
     if (ok)
         for (const auto& file : files) g_pinned.insert(LowerCopy(file.name));
     g_exclusive = true; // even on failure, never fall back to the guest's own saves
+    g_readNotes = 0;
     ReleaseSRWLockExclusive(&g_lock);
     if (!ok && error.empty()) error = "cannot clear sandbox";
     Log("save guard: %s %u host save files; real SaveGames folder hidden%s", ok ? "adopted" : "FAILED to adopt",

@@ -4,6 +4,7 @@
 
 #include <string>
 #include <cstddef>
+#include <vector>
 
 namespace coop::research {
 
@@ -115,6 +116,19 @@ void MissionWatchTick(double now);
 // Writes the job/mission managers' functions, every job's state, the active jobs' properties and the live
 // job-script objects to path.
 bool MissionState(const std::wstring& path, std::string& summary);
+struct ObjectiveProgress {
+    std::string jobName;
+    std::string identifier;
+    uint16_t index = 0;
+    uint8_t state = 0;
+    bool unique = false;
+};
+// Reads every current objective entry from each active job. False means the snapshot is incomplete.
+bool ReadActiveObjectiveProgress(std::vector<ObjectiveProgress>& result);
+// Returns only completed objectives with a unique, wire-safe ID in each active job.
+std::vector<ObjectiveProgress> CompletedObjectiveProgress();
+// Applies a completed state idempotently; changed is true only if the game state changed.
+bool ApplyObjectiveProgress(const std::string& jobName, const std::string& identifier, bool& changed);
 // Invokes one function of BendJobManager/BendGameMission (or "<Class>.<Function>" on a live instance of that
 // class): spec = "<Function> [ObjectName|-] [Param=Value ...]". The first object parameter takes ObjectName;
 // Bool/Byte/Int/Float/Object parameters can be named. Logs the return value and the immediate state diff.

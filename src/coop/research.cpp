@@ -1,6 +1,7 @@
 #include "research.hpp"
 
 #include "log.hpp"
+#include "story.hpp"
 
 #include <windows.h>
 #ifdef GetProp
@@ -2546,6 +2547,144 @@ void DumpPropertyValues(FILE* file, UObject* obj) {
     }
 }
 
+UObject* PropertySubclassObject(UObject* property, const char* expectedClass) {
+    constexpr int kPropertySubclassOffset = 0x78;
+    if (!IsLive(property) ||
+        !ReadableMemory(reinterpret_cast<uint8_t*>(property) + kPropertySubclassOffset, sizeof(UObject*))) return nullptr;
+    UObject* value = nullptr;
+    std::memcpy(&value, reinterpret_cast<uint8_t*>(property) + kPropertySubclassOffset, sizeof value);
+    return IsLive(value) && IsLive(value->cls) && Name(value->cls) == expectedClass ? value : nullptr;
+}
+
+struct ObjectiveArrayView {
+    uint8_t* data = nullptr;
+    int32_t count = 0;
+    int stride = 0;
+    UObject* structure = nullptr;
+};
+
+bool ReadObjectiveArray(UObject* job, const char* name, ObjectiveArrayView& out, std::string& error) {
+    auto property = IsLive(job) ? FindChild(job->cls, name) : nullptr;
+    if (!IsLive(property) || Name(property->cls) != "ArrayProperty") {
+        error = "array property not found";
+        return false;
+    }
+    auto inner = PropertySubclassObject(property, "StructProperty");
+    if (!IsLive(inner)) {
+        error = "array inner struct property not found";
+        return false;
+    }
+    auto structure = PropertySubclassObject(inner, "ScriptStruct");
+    if (!IsLive(structure)) structure = PropertySubclassObject(inner, "UserDefinedStruct");
+    if (!IsLive(structure)) {
+        error = "struct metadata not found";
+        return false;
+    }
+    int offset = PropertyOffset(property), propertySize = ElementSize(property);
+    struct Array { uint8_t* data; int32_t count, capacity; } values{};
+    if (offset < 0 || propertySize != sizeof values ||
+        !ReadableMemory(reinterpret_cast<uint8_t*>(job) + offset, sizeof values)) {
+        error = "invalid array bounds";
+        return false;
+    }
+    std::memcpy(&values, reinterpret_cast<uint8_t*>(job) + offset, sizeof values);
+    int stride = ElementSize(inner);
+    if (values.count < 0 || values.count > 256 || values.capacity < values.count ||
+        stride <= 0 || stride > 1024 ||
+        (values.count && (!values.data ||
+         static_cast<size_t>(values.count) > SIZE_MAX / static_cast<size_t>(stride) ||
+         !ReadableMemory(values.data, static_cast<size_t>(values.count) * stride)))) {
+        error = "invalid array storage";
+        return false;
+    }
+    out = {values.data, values.count, stride, structure};
+    return true;
+}
+
+void DumpObjectiveList(FILE* file, UObject* job, const char* name) {
+    ObjectiveArrayView values;
+    std::string error;
+    if (!ReadObjectiveArray(job, name, values, error)) {
+        std::fprintf(file, "      OBJECTIVES %s unavailable: %s\n", name, error.c_str());
+        return;
+    }
+    std::fprintf(file, "      OBJECTIVES %s count=%d struct=%s stride=%d\n", name, values.count,
+                 Name(values.structure).c_str(), values.stride);
+    for (int32_t i = 0; i < values.count; ++i) {
+        const auto* element = values.data + static_cast<size_t>(i) * values.stride;
+        std::fprintf(file, "        [%d]", i);
+        int budget = 0;
+        for (auto c = values.structure; IsLive(c) && budget < 128; c = Super(c)) {
+            for (auto field = Children(c); field && budget < 128; field = Next(field), ++budget) {
+                if (!IsLive(field) || !IsLive(field->cls) || IsFunction(field)) continue;
+                int fieldOffset = PropertyOffset(field), fieldSize = ElementSize(field);
+                if (fieldOffset < 0 || fieldSize <= 0 || fieldOffset > values.stride ||
+                    fieldSize > values.stride - fieldOffset) continue;
+                std::fprintf(file, " %s=%s", Name(field).c_str(), Value(field, element).c_str());
+            }
+        }
+        std::fputc('\n', file);
+    }
+}
+
+UObject* FindActiveJobScript(const std::string& jobName) {
+    auto jobs = FindInstance("BendJobManager");
+    ObjectArray refs{};
+    if (!IsLive(jobs) || !ue::GetProp(jobs, "ActiveJobRefsInOrder", refs) ||
+        refs.count < 0 || refs.count > 256 ||
+        (refs.count && (!refs.data || !ReadableMemory(refs.data, static_cast<size_t>(refs.count) * sizeof(UObject*)))))
+        return nullptr;
+    for (int32_t i = 0; i < refs.count; ++i) {
+        auto job = refs.data[i];
+        if (!IsLive(job) || Name(job) != jobName) continue;
+        UObject* script = nullptr;
+        return ue::GetProp(job, "JobScriptReference", script) && IsLive(script) ? script : nullptr;
+    }
+    return nullptr;
+}
+
+bool ReadObjectiveState(UObject* script, const std::string& identifier, uint8_t& state) {
+    int32_t index = FindNameIndex(identifier.c_str());
+    if (!IsLive(script) || index < 0) return false;
+    FName name{index, 0};
+    Call get(script, "GetObjectiveState");
+    get.set("ObjIdentifier", name);
+    if (!get.invoke() || !get.has("CurrentState")) return false;
+    state = get.get<uint8_t>("CurrentState");
+    return state <= 2;
+}
+
+bool ReadJobObjectiveProgress(UObject* job, std::vector<ObjectiveProgress>& result) {
+    result.clear();
+    ObjectiveArrayView objectives;
+    std::string error;
+    if (!ReadObjectiveArray(job, "CurrentJobObjectiveList", objectives, error)) return false;
+    auto identifier = FindChild(objectives.structure, "ObjectiveIdentifier");
+    auto state = FindChild(objectives.structure, "ObjectiveState");
+    if (!IsLive(identifier) || !IsLive(state) || !IsLive(identifier->cls) || !IsLive(state->cls) ||
+        Name(identifier->cls) != "NameProperty" ||
+        Name(state->cls) != "ByteProperty" || ElementSize(identifier) != sizeof(FName) || ElementSize(state) != 1)
+        return false;
+    int identifierOffset = PropertyOffset(identifier), stateOffset = PropertyOffset(state);
+    if (identifierOffset < 0 || identifierOffset > objectives.stride - static_cast<int>(sizeof(FName)) ||
+        stateOffset < 0 || stateOffset >= objectives.stride) return false;
+    std::unordered_map<std::string, size_t> occurrences;
+    for (int32_t index = 0; index < objectives.count; ++index) {
+        const auto* element = objectives.data + static_cast<size_t>(index) * objectives.stride;
+        FName name{};
+        std::memcpy(&name, element + identifierOffset, sizeof name);
+        if (name.number != 0) continue;
+        std::string value = NameString(name.index);
+        uint8_t currentState = 0;
+        std::memcpy(&currentState, element + stateOffset, sizeof currentState);
+        result.push_back({Name(job), value, static_cast<uint16_t>(index), currentState, false});
+        ++occurrences[value];
+    }
+    for (auto& objective : result)
+        objective.unique = occurrences[objective.identifier] == 1;
+    return true;
+}
+
 std::vector<std::string> Split(const std::string& text) {
     std::vector<std::string> parts;
     size_t at = 0;
@@ -2571,6 +2710,67 @@ UObject* FindNamedInstance(const std::string& name) {
 }
 
 } // namespace
+
+bool ReadActiveObjectiveProgress(std::vector<ObjectiveProgress>& result) {
+    result.clear();
+    auto jobs = FindInstance("BendJobManager");
+    ObjectArray refs{};
+    if (!IsLive(jobs) || !ue::GetProp(jobs, "ActiveJobRefsInOrder", refs) ||
+        refs.count < 0 || refs.count > 256 ||
+        (refs.count && (!refs.data || !ReadableMemory(refs.data, static_cast<size_t>(refs.count) * sizeof(UObject*))))
+        )
+        return false;
+    for (int32_t i = 0; i < refs.count; ++i) {
+        auto job = refs.data[i];
+        if (!IsLive(job)) continue;
+        std::vector<ObjectiveProgress> objectives;
+        if (!ReadJobObjectiveProgress(job, objectives)) return false;
+        result.insert(result.end(), objectives.begin(), objectives.end());
+    }
+    return true;
+}
+
+std::vector<ObjectiveProgress> CompletedObjectiveProgress() {
+    std::vector<ObjectiveProgress> result;
+    auto jobs = FindInstance("BendJobManager");
+    ObjectArray refs{};
+    if (!IsLive(jobs) || !ue::GetProp(jobs, "ActiveJobRefsInOrder", refs) ||
+        refs.count < 0 || refs.count > 256 ||
+        (refs.count && (!refs.data || !ReadableMemory(refs.data, static_cast<size_t>(refs.count) * sizeof(UObject*)))))
+        return result;
+    for (int32_t i = 0; i < refs.count && result.size() < 128; ++i) {
+        auto job = refs.data[i];
+        if (!IsLive(job)) continue;
+        UObject* script = nullptr;
+        if (!ue::GetProp(job, "JobScriptReference", script) || !IsLive(script)) continue;
+        std::vector<ObjectiveProgress> objectives;
+        if (!ReadJobObjectiveProgress(job, objectives)) continue;
+        for (const auto& objective : objectives) {
+            if (objective.state == 2 && objective.unique && StoryNameIsValid(objective.identifier)) {
+                result.push_back({objective.jobName, objective.identifier});
+                if (result.size() == 128) break;
+            }
+        }
+    }
+    return result;
+}
+
+bool ApplyObjectiveProgress(const std::string& jobName, const std::string& identifier, bool& changed) {
+    changed = false;
+    auto script = FindActiveJobScript(jobName);
+    uint8_t state = 0;
+    if (!IsLive(script) || !ReadObjectiveState(script, identifier, state)) return false;
+    if (state == 2) return true;
+    if (state > 1) return false;
+    int32_t index = FindNameIndex(identifier.c_str());
+    if (index < 0) return false;
+    FName name{index, 0};
+    Call update(script, "UpdateJobObjectiveStatusAndProgression");
+    update.set("ObjIdentifier", name).set<uint8_t>("ObjState", 2);
+    if (!update.invoke() || !ReadObjectiveState(script, identifier, state) || state != 2) return false;
+    changed = true;
+    return true;
+}
 
 void MissionWatch(bool on) {
     g_missionWatch = on;
@@ -2651,6 +2851,8 @@ bool MissionState(const std::wstring& path, std::string& summary) {
             if (!IsLive(job)) continue;
             std::fprintf(file, "  %s\n", FullName(job).c_str());
             DumpPropertyValues(file, job);
+            DumpObjectiveList(file, job, "CurrentJobObjectiveList");
+            DumpObjectiveList(file, job, "DefaultJobObjectiveList");
             DumpFunctions(file, job->cls, seen);
         }
     }
@@ -2697,10 +2899,19 @@ bool MissionAct(const std::string& spec, bool allowed, std::string& summary) {
         function = function.substr(dot + 1);
         owners = {ownerName.c_str()};
     }
+    constexpr uint32_t kFuncStatic = 0x2000;
     for (auto owner : owners) {
         auto instance = FindInstance(owner);
+        bool defaults = false;
+        // Function libraries such as BendGameplayStatics have no instances; static functions run on the CDO.
+        if (!IsLive(instance)) {
+            instance = FindDefaultObject(owner);
+            defaults = true;
+        }
         if (!IsLive(instance)) continue;
         if (auto found = FindFunction(instance->cls, function.c_str())) {
+            uint32_t flags = *reinterpret_cast<uint32_t*>(reinterpret_cast<uint8_t*>(found) + off::FunctionFlags);
+            if (defaults && !(flags & kFuncStatic)) continue;
             target = instance;
             fn = found;
             break;
@@ -2790,6 +3001,7 @@ bool MissionAct(const std::string& spec, bool allowed, std::string& summary) {
     std::string result = "invoked";
     if (auto ret = FindChild(fn, "ReturnValue"))
         result = "returned " + Value(ret, parms.data());
+    Log("mission act: after %s", Parameters(fn, parms.data()).c_str());
     auto after = ReadMissionSnapshot();
     int changes = LogMissionDiff(before, after, "act", 0);
     if (g_missionWatch) g_missionLast = after;
