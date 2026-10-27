@@ -109,6 +109,8 @@ enum class Action : uint8_t {
     ToggleInfiniteStamina,
     RefuelRepairBike,
     TransferHost,
+    DismountPassenger,
+    TogglePassengers,
 };
 
 struct Row {
@@ -131,6 +133,8 @@ struct View {
     std::vector<std::string> lanHosts;
     bool godMode = false;
     bool infiniteStamina = false;
+    bool isPassenger = false;
+    bool passengers = true;
 };
 
 // Main menu rows 0-8 have native mouse targets; the pause list has ten entries.
@@ -160,11 +164,13 @@ inline std::vector<Row> BuildRows(Page page, const View& v) {
             if (v.host && v.connected) rows.push_back({"GIVE HOST TO PARTNER", Action::TransferHost});
         }
         if (v.inGame) {
+            if (v.isPassenger) rows.push_back({"DISMOUNT PASSENGER", Action::DismountPassenger});
             rows.push_back({"RECALL BIKE (GROUND)", Action::RecallBike});
             if (v.connected) rows.push_back({"TELEPORT TO PARTNER", Action::TeleportPartner});
             rows.push_back({std::string("GOD MODE: ") + (v.godMode ? "ENABLED" : "OFF"), Action::ToggleGodMode});
             rows.push_back({std::string("INFINITE STAMINA: ") + (v.infiniteStamina ? "ENABLED" : "OFF"), Action::ToggleInfiniteStamina});
             rows.push_back({"REPAIR & REFUEL BIKE", Action::RefuelRepairBike});
+            rows.push_back({std::string("ALLOW PASSENGERS: ") + (v.passengers ? "ENABLED" : "OFF"), Action::TogglePassengers});
         }
         rows.push_back({v.host ? "CLOSE SESSION" : "LEAVE SESSION", Action::Leave});
         rows.push_back({"BACK", Action::Back});

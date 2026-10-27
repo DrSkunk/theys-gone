@@ -1493,21 +1493,41 @@ void DestroyBike() {
 
 void FindLocalBike(UObject* pawn) {
     UObject* bike = nullptr;
-    Call riding(pawn, "GetVehicle");
-    if (riding.invoke()) bike = riding.get<UObject*>("ReturnValue");
+    if (IsLive(pawn)) {
+        Call riding(pawn, "GetVehicle");
+        if (riding.invoke()) bike = riding.get<UObject*>("ReturnValue");
+        if (!IsLive(bike)) {
+            Call assigned(pawn, "GetAssignedVehicle");
+            if (assigned.invoke()) bike = assigned.get<UObject*>("ReturnValue");
+        }
+        if (!IsLive(bike)) {
+            Call mode(C.statics, "GetGameMode");
+            if (mode.set("WorldContextObject", pawn).invoke()) {
+                auto gameMode = mode.get<UObject*>("ReturnValue");
+                if (auto vehicleClass = Prop(gameMode, "CurrentPlayerVehicle")) {
+                    Call vehicle(gameMode, "GetVehicle");
+                    if (vehicle.set("VehicleClass", vehicleClass).invoke())
+                        bike = vehicle.get<UObject*>("ReturnValue");
+                }
+            }
+        }
+    }
     if (!IsLive(bike)) {
-        Call mode(C.statics, "GetGameMode");
-        if (mode.set("WorldContextObject", pawn).invoke()) {
-            auto gameMode = mode.get<UObject*>("ReturnValue");
-            if (auto vehicleClass = Prop(gameMode, "CurrentPlayerVehicle")) {
-                Call vehicle(gameMode, "GetVehicle");
-                if (vehicle.set("VehicleClass", vehicleClass).invoke())
-                    bike = vehicle.get<UObject*>("ReturnValue");
+        static auto bikeClass = FindClass("BP_bike04Drifter_C");
+        if (!bikeClass) bikeClass = FindClass("BP_bike04Drifter_C");
+        if (bikeClass) {
+            int32_t n = ObjectCount();
+            for (int32_t i = 0; i < n; ++i) {
+                auto o = ObjectAt(i);
+                if (IsLive(o) && IsA(o, bikeClass) && !IsDefaultOrArchetype(o) && o != g_bike.actor) {
+                    bike = o;
+                    break;
+                }
             }
         }
     }
     bike = IsLive(bike) ? bike : nullptr;
-    if (g_localBike != bike) {
+    if (bike && g_localBike != bike) {
         Log("bike: local bike %s", FullName(bike).c_str());
         g_localBike = bike;
         DestroyBike();
@@ -1613,11 +1633,16 @@ void UpdateBike(UObject* pawn, double now) {
     Snapshot sample{};
     bool have = g_settings.motorcycles && pawn && now - g_lastRecv < PeerTimeout() &&
                 SampleRemote(now, sample) && (sample.flags & kHasBike);
-    if (!have || !IsLive(g_localBike)) {
-        if (IsLive(g_bike.actor)) DestroyBike();
+    if (!have) {
+        if (IsLive(g_bike.actor)) {
+            static double s_lastHaveBike = 0;
+            if (s_lastHaveBike == 0) s_lastHaveBike = now;
+            if (now - s_lastHaveBike > 3.0) {
+                Call(g_bike.actor, "SetActorHiddenInGame").setBool("bNewHidden", true).invoke();
+            }
+        }
         return;
     }
-    if (IsLive(g_bike.actor) && g_bike.source != Prop(Prop(g_localBike, "VehicleMesh"), "SkeletalMesh")) DestroyBike();
     FVector origin = WorldOrigin(pawn);
     FVector position{sample.bikePos.x - origin.x, sample.bikePos.y - origin.y, sample.bikePos.z - origin.z};
     if (!IsLive(g_bike.actor)) {
@@ -1625,10 +1650,15 @@ void UpdateBike(UObject* pawn, double now) {
         g_lastBikeSpawn = now;
         if (!SpawnBike(pawn, position)) return;
     }
+    Call(g_bike.actor, "SetActorHiddenInGame").setBool("bNewHidden", false).invoke();
     PoseFrame frame;
-    double poseDelay = std::max(g_motion.DelaySeconds(), 1.5 / g_cfg.poseRate);
-    bool streamed = g_bike.pose && now - g_lastBikePose < kPoseFresh &&
+    double poseDelay = 0.070;
+    static double lastValidBikePose = 0;
+    bool hasBikeSample = g_bike.pose && now - g_lastBikePose < kPoseFresh &&
         g_bikePoses.Sample(g_motion.SenderMs(poseDelay), frame) && g_bike.writer.Apply(frame);
+    if (hasBikeSample) lastValidBikePose = now;
+    // Hysteresis: smoothly hold chassis pose for up to 1.5s to prevent flashing/mesh flapping on jitter
+    bool streamed = g_bike.pose && (now - lastValidBikePose < 1.5);
     bool wasPosing = g_bike.posing;
     SetPosing(streamed, g_bike.posing, g_bike.pose, g_bike.component, MasteredBikeParts());
     if (wasPosing != g_bike.posing) {
@@ -2131,10 +2161,19 @@ bool EndPassenger(bool forced) {
     Call riding(g_passenger.pawn, "IsInVehicle");
     bool nativeVehicle = samePawn && riding.invoke() && riding.get<bool>("ReturnValue");
     bool safe = !g_passenger.positioned || nativeVehicle || (samePawn && PassengerExitPosition(destination));
-    if (!safe && !forced) {
-        g_settingsError = "No safe place to dismount; stop the motorcycle on level ground";
-        Log("passenger: dismount blocked because no safe ground was found");
-        return false;
+    if (!safe && samePawn) {
+        Call where(g_passenger.pawn, "K2_GetActorLocation"), right(g_passenger.pawn, "GetActorRightVector");
+        if (where.invoke() && right.invoke()) {
+            auto p = where.get<FVector>("ReturnValue");
+            auto r = right.get<FVector>("ReturnValue");
+            destination = {p.x + r.x * 150.f, p.y + r.y * 150.f, p.z};
+            FVector ground{};
+            if (TraceWorld({destination.x, destination.y, destination.z + 100.f},
+                           {destination.x, destination.y, destination.z - 800.f}, &ground) == 1) {
+                destination.z = ground.z + 96.f;
+            }
+            safe = true;
+        }
     }
     auto state = std::move(g_passenger);
     g_passenger = {};
@@ -2163,9 +2202,11 @@ bool EndPassenger(bool forced) {
     }
     if (state.collisionChanged && !nativeVehicle && IsLive(state.pawn) && Alive(state.pawn))
         restored = Call(state.pawn, "SetActorEnableCollision").setBool("bNewActorEnableCollision", state.collision).invoke() && restored;
-    if (state.movementChanged && !nativeVehicle && IsLive(state.movement) && IsLive(state.pawn) && Alive(state.pawn))
+    if (state.movementChanged && !nativeVehicle && IsLive(state.movement) && IsLive(state.pawn) && Alive(state.pawn)) {
+        Call(state.movement, "SetComponentTickEnabled").setBool("bEnabled", true).invoke();
         restored = Call(state.movement, "SetMovementMode").set("NewMovementMode", state.movementMode)
             .set("NewCustomMode", state.customMode).invoke() && restored;
+    }
     if (state.moveBlocked && IsLive(state.controller))
         restored = Call(state.controller, "SetIgnoreMoveInput").setBool("bNewMoveInput", false).invoke() && restored;
     if (state.saveChanged && IsLive(state.gameMode))
@@ -2290,9 +2331,9 @@ void TogglePassenger(double now) {
     state.savingBlocked = blocked.get<bool>("ReturnValue");
     state.collision = collision.get<bool>("ReturnValue");
     g_passenger = state;
+    Call(state.movement, "SetComponentTickEnabled").setBool("bEnabled", false).invoke();
     bool changed = SpawnAvatar(g_pawn, position, g_passengerAvatar) &&
         Call(g_passengerAvatar.component, "PlayAnimation").set("NewAnimToPlay", animation).setBool("bLooping", true).invoke() &&
-        Call(g_passengerAvatar.component, "Stop").invoke() &&
         (g_passenger.saveChanged = Call(state.gameMode, "SetSavingBlockedByBlueprint").setBool("SavingBlocked", true).invoke()) &&
         (g_passenger.moveBlocked = Call(state.controller, "SetIgnoreMoveInput").setBool("bNewMoveInput", true).invoke()) &&
         (g_passenger.movementChanged = Call(state.movement, "SetMovementMode").set("NewMovementMode", static_cast<uint8_t>(0))
@@ -2328,6 +2369,20 @@ void TogglePassenger(double now) {
 
 void UpdatePassenger(double now) {
     if (!g_passenger.pawn) return;
+    if (OwnWindowFocused()) {
+        bool dismountKey = (GetAsyncKeyState('E') & 0x8000) ||
+                           (GetAsyncKeyState(VK_SPACE) & 0x8000) ||
+                           (GetAsyncKeyState('F') & 0x8000) ||
+                           (GetAsyncKeyState('C') & 0x8000);
+        static bool s_dismountHeld = false;
+        if (dismountKey && !s_dismountHeld) {
+            Log("passenger: dismount key pressed; dismounting safely");
+            EndPassenger(true);
+            s_dismountHeld = true;
+            return;
+        }
+        s_dismountHeld = dismountKey;
+    }
     if (g_passenger.pawn != g_pawn || !IsLive(g_bike.component) || !IsLive(g_passengerAvatar.component) ||
         !Alive(g_pawn) || !g_settings.motorcycles ||
         now - g_lastRecv >= PeerTimeout() || !(g_peer.flags & kAcceptPassengers) || !(g_peer.flags & kAlive) ||
@@ -2820,7 +2875,7 @@ void UpdateAvatar(UObject* localPawn, double now) {
     }
     PoseFrame frame;
     static double lastValidPose = 0;
-    double poseDelay = std::max(g_motion.DelaySeconds(), 1.5 / g_cfg.poseRate);
+    double poseDelay = 0.070;
     bool hasSample = g_avatar.pose && now - g_lastBodyPose < kPoseFresh &&
         g_bodyPoses.Sample(g_motion.SenderMs(poseDelay), frame);
     if (hasSample && g_avatar.writer.Apply(frame)) {
@@ -3496,8 +3551,7 @@ void UpdateEnemyReplicas(UObject* pawn, double now) {
         return;
     }
     FVector origin = WorldOrigin(pawn);
-    double poseDelay = std::max(g_motion.DelaySeconds(), 1.5 / g_cfg.poseRate);
-    double senderMs = g_motion.SenderMs(poseDelay);
+    double senderMs = g_motion.SenderMs(0.070);
     for (auto it = g_enemyReplicas.begin(); it != g_enemyReplicas.end();) {
         auto& r = it->second;
         if (now - std::max(r.poses.LastArrival(), r.lastInfo) > kEnemyTimeout) {
@@ -4031,19 +4085,35 @@ void TeleportToPartner(UObject* pawn, double now) {
         g_settingsError = "Teleport failed; check the plugin log";
         return;
     }
-    if (!inVehicle && IsLive(g_localBike)) {
-        FVector bikeDest{dest.x - std::sin(yaw) * 220.f, dest.y + std::cos(yaw) * 220.f, dest.z};
-        FVector start{bikeDest.x, bikeDest.y, dest.z + 50.f};
-        FVector end{bikeDest.x, bikeDest.y, dest.z - 400.f};
-        FVector ground{};
-        if (TraceWorld(start, end, &ground) == 1) {
-            bikeDest.z = ground.z + 15.f;
-        } else {
-            bikeDest.z += 15.f;
+    if (!inVehicle) {
+        if (!IsLive(g_localBike)) FindLocalBike(pawn);
+        if (IsLive(g_localBike)) {
+            FVector bikeDest{dest.x - std::sin(yaw) * 220.f, dest.y + std::cos(yaw) * 220.f, dest.z};
+            FVector start{bikeDest.x, bikeDest.y, dest.z + 100.f};
+            FVector end{bikeDest.x, bikeDest.y, dest.z - 1000.f};
+            FVector ground{};
+            if (TraceWorld(start, end, &ground) == 1) {
+                bikeDest.z = ground.z + 20.f;
+            } else {
+                bikeDest.z += 20.f;
+            }
+            FRotator bikeRot{0.f, s.yaw, 0.f};
+            Call(g_localBike, "K2_SetActorLocationAndRotation")
+                .set("NewLocation", bikeDest)
+                .set("NewRotation", bikeRot)
+                .setBool("bSweep", false)
+                .setBool("bTeleport", true)
+                .invoke();
+            auto root = Prop(g_localBike, "RootComponent");
+            if (root) {
+                Call(root, "WakeRigidBody").invoke();
+                Call(root, "SetPhysicsLinearVelocity").set("NewVel", FVector{0,0,0}).setBool("bAddToCurrent", false).invoke();
+                Call(root, "SetPhysicsAngularVelocity").set("NewAngVel", FVector{0,0,0}).setBool("bAddToCurrent", false).invoke();
+            }
+            Log("bike: teleported alongside player to partner (%.0f, %.0f, %.0f)", bikeDest.x, bikeDest.y, bikeDest.z);
         }
-        Call(g_localBike, "K2_SetActorLocation").set("NewLocation", bikeDest).setBool("bSweep", true)
-            .setBool("bTeleport", true).invoke();
-        auto root = Prop(g_localBike, "RootComponent");
+    } else {
+        auto root = Prop(target, "RootComponent");
         if (root) Call(root, "WakeRigidBody").invoke();
     }
     Log("teleported to partner %s (mounted=%d)", g_remoteName.c_str(), inVehicle);
@@ -4076,7 +4146,12 @@ bool InGameplay(UObject* pawn) {
 }
 
 void RecallBikeToPlayer(UObject* pawn) {
-    if (!IsLive(pawn) || !IsLive(g_localBike) || !InGameplay(pawn)) return;
+    if (!IsLive(pawn)) return;
+    if (!IsLive(g_localBike)) FindLocalBike(pawn);
+    if (!IsLive(g_localBike) || !InGameplay(pawn)) {
+        Log("bike: recall aborted (bike=%p inGameplay=%d)", g_localBike, InGameplay(pawn));
+        return;
+    }
     Call riding(pawn, "IsInVehicle");
     if (riding.invoke() && riding.get<bool>("ReturnValue")) return;
     Call me(pawn, "K2_GetActorLocation"), facing(pawn, "K2_GetActorRotation");
@@ -4094,24 +4169,31 @@ void RecallBikeToPlayer(UObject* pawn) {
             dest.z = pos.z - 96.0f;
         }
 
-        FVector start{dest.x, dest.y, pos.z + 50.f};
-        FVector end{dest.x, dest.y, pos.z - 400.f};
+        FVector start{dest.x, dest.y, pos.z + 100.f};
+        FVector end{dest.x, dest.y, pos.z - 1000.f};
         FVector ground{};
         if (TraceWorld(start, end, &ground) == 1) {
-            dest.z = ground.z + 15.f;
+            dest.z = ground.z;
         } else {
-            dest.z += 15.f;
+            dest.z = pos.z - 96.f;
         }
 
         Call(g_localBike, "K2_SetActorLocationAndRotation")
             .set("NewLocation", dest)
             .set("NewRotation", rot)
-            .setBool("bSweep", true)
+            .setBool("bSweep", false)
             .setBool("bTeleport", true)
             .invoke();
 
+        Call(g_localBike, "Park").invoke();
+        Call(g_localBike, "LowerKickstand").invoke();
+
         auto root = Prop(g_localBike, "RootComponent");
-        if (root) Call(root, "WakeRigidBody").invoke();
+        if (root) {
+            Call(root, "WakeRigidBody").invoke();
+            Call(root, "SetPhysicsLinearVelocity").set("NewVel", FVector{0,0,0}).setBool("bAddToCurrent", false).invoke();
+            Call(root, "SetPhysicsAngularVelocity").set("NewAngVel", FVector{0,0,0}).setBool("bAddToCurrent", false).invoke();
+        }
 
         Log("bike: recalled to player ground (%.0f, %.0f, %.0f)", dest.x, dest.y, dest.z);
         g_events.Add("Recalled bike to player");
@@ -4246,6 +4328,10 @@ session::View SessionView(double now) {
     view.visibility = g_steam.Visibility();
     view.connected = PartnerConnected(now);
     view.partner = PartnerName();
+    view.godMode = g_settings.godMode;
+    view.infiniteStamina = g_settings.infiniteStamina;
+    view.isPassenger = g_passenger.pawn != nullptr;
+    view.passengers = g_settings.passengers;
     for (const auto& lobby : g_steam.Friends()) view.friends.push_back(lobby.name);
     for (const auto& lobby : g_steam.PublicLobbies()) view.publicLobbies.push_back(lobby.name);
     for (const auto& host : g_lan.Hosts()) view.lanHosts.push_back(LanHostLabel(host));
@@ -4286,6 +4372,46 @@ void RunMenuCommand(const ui::Command& command) {
     case Action::Refresh:
         if (ui::CurrentPage() == session::Page::Public) g_steam.RequestPublic();
         if (ui::CurrentPage() == session::Page::Lan) g_lan.Clear();
+        break;
+    case Action::DismountPassenger:
+        EndPassenger(true);
+        break;
+    case Action::TogglePassengers:
+        g_settings.passengers = !g_settings.passengers;
+        g_events.Add(std::string("Allow Passengers: ") + (g_settings.passengers ? "ENABLED" : "OFF"));
+        break;
+    case Action::RecallBike:
+        if (g_pawn) RecallBikeToPlayer(g_pawn);
+        break;
+    case Action::TeleportPartner:
+        if (g_pawn) TeleportToPartner(g_pawn, Now());
+        break;
+    case Action::ToggleGodMode:
+        g_settings.godMode = !g_settings.godMode;
+        g_events.Add(std::string("God Mode: ") + (g_settings.godMode ? "ENABLED" : "OFF"));
+        break;
+    case Action::ToggleInfiniteStamina:
+        g_settings.infiniteStamina = !g_settings.infiniteStamina;
+        g_events.Add(std::string("Infinite Stamina: ") + (g_settings.infiniteStamina ? "ENABLED" : "OFF"));
+        break;
+    case Action::RefuelRepairBike:
+        if (!IsLive(g_localBike) && g_pawn) FindLocalBike(g_pawn);
+        if (IsLive(g_localBike)) {
+            Call(g_localBike, "FillUpFuel").invoke();
+            Call(g_localBike, "SetFuelRemaining0To1").set("Fuel", 1.0f).invoke();
+            Call(g_localBike, "SetFuel").set("Fuel", 100.0f).invoke();
+            SetProp<float>(g_localBike, "Fuel", 100.0f);
+            Call(g_localBike, "ResetHealth").invoke();
+            Call(g_localBike, "RepairVehicle").invoke();
+            SetProp<float>(g_localBike, "Damage", 0.0f);
+            g_events.Add("Bike repaired & refueled 100%");
+            Log("bike: repaired and refueled 100%%");
+        } else {
+            g_events.Add("No motorcycle nearby");
+        }
+        break;
+    case Action::TransferHost:
+        if (g_steam.InLobby()) g_steam.TransferHost();
         break;
     default: break;
     }
@@ -4688,6 +4814,9 @@ void Tick(bool hudFrame) {
         }
     }
     auto pawn = g_controller ? Prop(g_controller, "Pawn") : nullptr;
+    if (pawn && C.character && !IsA(pawn, C.character)) {
+        pawn = g_pawn;
+    }
     pawn = IsLive(pawn) && InGameplay(pawn) ? pawn : nullptr;
     if (pawn != g_pawn) {
         Log("local pawn: %s", pawn ? FullName(pawn).c_str() : "none");
@@ -4757,17 +4886,78 @@ void Tick(bool hudFrame) {
     PollMelee();
     if (g_settings.godMode && IsLive(g_pawn)) {
         SetBoolProp(g_pawn, "bCanBeDamaged", false);
-        float maxHealth = 100.f;
-        GetProp(g_pawn, "MaxHealth", maxHealth);
-        if (maxHealth < 100.f) maxHealth = 100.f;
-        SetProp<float>(g_pawn, "Health", maxHealth);
+        Call(g_pawn, "ResetHealth").invoke();
+        Call(g_pawn, "RefreshHealth").invoke();
+        Call(g_pawn, "ReceiveSetNegateDamage").setBool("bNegate", true).invoke();
+        Call(g_pawn, "ReceiveSetNegateDamage").setBool("NegateDamage", true).invoke();
     }
     if (g_settings.infiniteStamina && IsLive(g_pawn)) {
-        float maxStamina = 100.f;
-        GetProp(g_pawn, "MaxStamina", maxStamina);
-        if (maxStamina < 100.f) maxStamina = 100.f;
-        SetProp<float>(g_pawn, "Stamina", maxStamina);
-        SetProp<float>(g_pawn, "Focus", 100.f);
+        Call(g_pawn, "SetStaminaToMax").invoke();
+        Call(g_pawn, "SetFocusToMax").invoke();
+    }
+    // In co-op, keep world live on pause/photo mode and remove survival wheel bullet-time
+    if (g_kind != session::Kind::None && PartnerConnected(now) && IsLive(g_controller)) {
+        static double lastUnpauseCheck = 0;
+        if (now - lastUnpauseCheck >= 0.05) {
+            lastUnpauseCheck = now;
+            Call paused(C.statics, "IsGamePaused");
+            if (paused.set("WorldContextObject", g_controller).invoke() && paused.get<bool>("ReturnValue")) {
+                Call(C.statics, "SetGamePaused").set("WorldContextObject", g_controller).setBool("bPaused", false).invoke();
+                Call(g_controller, "SetPause").setBool("bPause", false).invoke();
+            }
+        }
+        static double lastDilationCheck = 0;
+        if (now - lastDilationCheck >= 0.05) {
+            lastDilationCheck = now;
+            Call getDil(C.statics, "GetGlobalTimeDilation");
+            if (getDil.set("WorldContextObject", g_controller).invoke()) {
+                float d = getDil.get<float>("ReturnValue");
+                if (d >= 0.0f && d < 0.95f) {
+                    Call(C.statics, "SetGlobalTimeDilation").set("WorldContextObject", g_controller).set("TimeDilation", 1.0f).invoke();
+                }
+            }
+        }
+    }
+    // Instant in-game function keys with HUD notifications
+    if (OwnWindowFocused() && IsLive(g_pawn) && InGameplay(g_pawn)) {
+        static bool f4Held = false;
+        bool f4Down = (GetAsyncKeyState(VK_F4) & 0x8000) != 0;
+        if (f4Down && !f4Held) RecallBikeToPlayer(g_pawn);
+        f4Held = f4Down;
+
+        static bool f8Held = false;
+        bool f8Down = (GetAsyncKeyState(VK_F8) & 0x8000) != 0;
+        if (f8Down && !f8Held) {
+            g_settings.godMode = !g_settings.godMode;
+            ui::Notify("CO-OP CHEATS", std::string("God Mode: ") + (g_settings.godMode ? "ENABLED" : "OFF"));
+            Log("cheats: god mode %s", g_settings.godMode ? "ENABLED" : "OFF");
+        }
+        f8Held = f8Down;
+
+        static bool f9Held = false;
+        bool f9Down = (GetAsyncKeyState(VK_F9) & 0x8000) != 0;
+        if (f9Down && !f9Held) {
+            g_settings.infiniteStamina = !g_settings.infiniteStamina;
+            ui::Notify("CO-OP CHEATS", std::string("Infinite Stamina: ") + (g_settings.infiniteStamina ? "ENABLED" : "OFF"));
+            Log("cheats: infinite stamina %s", g_settings.infiniteStamina ? "ENABLED" : "OFF");
+        }
+        f9Held = f9Down;
+
+        static bool f10Held = false;
+        bool f10Down = (GetAsyncKeyState(VK_F10) & 0x8000) != 0;
+        if (f10Down && !f10Held) {
+            if (IsLive(g_localBike)) {
+                Call(g_localBike, "SetFuel").set("Fuel", 100.0f).invoke();
+                SetProp<float>(g_localBike, "Fuel", 100.0f);
+                Call(g_localBike, "RepairVehicle").invoke();
+                SetProp<float>(g_localBike, "Damage", 0.0f);
+                ui::Notify("CO-OP CHEATS", "Bike repaired and refueled 100%");
+                Log("cheats: bike repaired and refueled 100%%");
+            } else {
+                ui::Notify("CO-OP CHEATS", "No motorcycle nearby");
+            }
+        }
+        f10Held = f10Down;
     }
     bool shouldSend = hudFrame || (now >= g_nextSend);
     if (shouldSend) {
@@ -4975,9 +5165,32 @@ void HookedProcessEvent(UObject* obj, UObject* fn, void* parms) {
     }
     if (g_ready && g_cfg.hostSave && GetCurrentThreadId() == g_gameThread)
         ObserveSaveEvent(obj, fn, parms);
+    if (g_ready && fn && g_settings.godMode && IsLive(g_pawn)) {
+        static int s_idxTakeDamage = -1;
+        static int s_idxReceiveAnyDamage = -1;
+        static int s_idxReceivePointDamage = -1;
+        static int s_idxReceiveRadialDamage = -1;
+        static double s_lastDmgLookup = 0;
+        if (s_idxTakeDamage < 0 && Now() - s_lastDmgLookup >= 2.0) {
+            s_lastDmgLookup = Now();
+            s_idxTakeDamage = FindNameIndex("TakeDamage");
+            s_idxReceiveAnyDamage = FindNameIndex("ReceiveAnyDamage");
+            s_idxReceivePointDamage = FindNameIndex("ReceivePointDamage");
+            s_idxReceiveRadialDamage = FindNameIndex("ReceiveRadialDamage");
+        }
+        if (obj == g_pawn && (fn->name.index == s_idxTakeDamage ||
+                              fn->name.index == s_idxReceiveAnyDamage ||
+                              fn->name.index == s_idxReceivePointDamage ||
+                              fn->name.index == s_idxReceiveRadialDamage)) {
+            return;
+        }
+    }
     if (g_ready && fn && parms && g_kind != session::Kind::None && PartnerConnected(Now())) {
         static int s_idxSetGamePaused = -1;
         static int s_idxSetGlobalTimeDilation = -1;
+        static int s_idxSetPause = -1;
+        static int s_idxSetPauseWithCameraTick = -1;
+        static int s_idxSetPaused = -1;
         static int s_offsetPaused = -1;
         static int s_offsetDilation = -1;
         static double s_lastLookup = 0;
@@ -4985,14 +5198,26 @@ void HookedProcessEvent(UObject* obj, UObject* fn, void* parms) {
             s_lastLookup = Now();
             s_idxSetGamePaused = FindNameIndex("SetGamePaused");
             s_idxSetGlobalTimeDilation = FindNameIndex("SetGlobalTimeDilation");
+            s_idxSetPause = FindNameIndex("SetPause");
+            s_idxSetPauseWithCameraTick = FindNameIndex("SetPauseWithCameraTick");
+            s_idxSetPaused = FindNameIndex("SetPaused");
         }
-        if (fn->name.index == s_idxSetGamePaused) {
+        if (fn->name.index == s_idxSetGamePaused || fn->name.index == s_idxSetPaused || fn->name.index == s_idxSetPause) {
             if (s_offsetPaused < 0) {
                 auto prop = FindChild(fn, "bPaused");
+                if (!prop) prop = FindChild(fn, "bPause");
                 s_offsetPaused = prop ? PropertyOffset(prop) : 8;
             }
             if (s_offsetPaused >= 0) {
                 *reinterpret_cast<uint8_t*>(reinterpret_cast<uint8_t*>(parms) + s_offsetPaused) = 0;
+            }
+        } else if (fn->name.index == s_idxSetPauseWithCameraTick) {
+            auto prop = FindChild(fn, "bPause");
+            if (!prop) prop = FindChild(fn, "bPaused");
+            if (prop) {
+                *reinterpret_cast<uint8_t*>(reinterpret_cast<uint8_t*>(parms) + PropertyOffset(prop)) = 0;
+            } else {
+                return;
             }
         } else if (fn->name.index == s_idxSetGlobalTimeDilation) {
             if (s_offsetDilation < 0) {
@@ -5063,7 +5288,7 @@ Config LoadConfig(const std::wstring& ini) {
     c.animRun = IniString(ini, L"AnimRun", c.animRun.c_str());
     c.animSprint = IniString(ini, L"AnimSprint", c.animSprint.c_str());
     c.teleportKey = GetPrivateProfileIntW(L"Coop", L"TeleportKey", c.teleportKey, ini.c_str());
-    c.poseRate = std::clamp(static_cast<int>(GetPrivateProfileIntW(L"Coop", L"PoseRate", c.poseRate, ini.c_str())), 10, 120);
+    c.poseRate = std::clamp(static_cast<int>(GetPrivateProfileIntW(L"Coop", L"PoseRate", c.poseRate, ini.c_str())), 10, 30);
     c.poseFace = GetPrivateProfileIntW(L"Coop", L"PoseFace", 0, ini.c_str()) != 0;
     std::string transport = IniString(ini, L"Transport", "menu");
     std::transform(transport.begin(), transport.end(), transport.begin(),
