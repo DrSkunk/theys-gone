@@ -9,7 +9,7 @@
 
 namespace coop::steam {
 
-constexpr uint32_t kDaysGoneAppId = 1259420;
+constexpr uint32_t kDaysGoneAppId = 480;
 
 // Interface versions requested from the running Steam client.
 constexpr const char* kMatchmakingVersion = "SteamMatchMaking009";
@@ -35,7 +35,7 @@ constexpr int kRequestLobbyList = 4, kAddRequestLobbyListStringFilter = 5, kAddR
               kGetLobbyByIndex = 12, kSetLobbyType = 33;
 constexpr int kCreateLobby = 13, kJoinLobby = 14, kLeaveLobby = 15, kGetNumLobbyMembers = 17,
               kGetLobbyMemberByIndex = 18, kGetLobbyData = 19, kSetLobbyData = 20, kSetLobbyJoinable = 34,
-              kGetLobbyOwner = 35;
+              kGetLobbyOwner = 35, kSetLobbyOwner = 36;
 constexpr int kGetPersonaName = 0;
 constexpr int kGetFriendCount = 2, kGetFriendByIndex = 3, kGetFriendPersonaName = 6, kGetFriendGamePlayed = 7,
               kActivateGameOverlayInviteDialog = 32;

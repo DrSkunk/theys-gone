@@ -15,7 +15,7 @@ using namespace ue;
 
 namespace coop {
 namespace {
-constexpr int kBaseRows = 10; // settings and actions before the optional Steam rows and "Close"
+constexpr int kBaseRows = 15; // settings, debug tools and cheats before the optional Steam rows and "Close"
 constexpr int kOnlineRows = 3;
 using Color = OverlayColor;
 OverlayFrame pendingFrame;
@@ -124,7 +124,7 @@ MenuActions SettingsMenu::Update(UObject* controller, bool focused, MenuSettings
     MenuActions result;
     rows_ = kBaseRows + (online.enabled ? kOnlineRows : 0) + 1;
     if (selected_ >= rows_) selected_ = rows_ - 1;
-    bool toggle = Pressed(VK_F8);
+    bool toggle = Pressed(VK_F4) || Pressed(VK_F8);
     bool passenger = Pressed(VK_F9);
     bool back = Pressed(VK_ESCAPE);
     bool up = Pressed(VK_UP), down = Pressed(VK_DOWN);
@@ -205,6 +205,15 @@ MenuActions SettingsMenu::Update(UObject* controller, bool focused, MenuSettings
         result.changed = true;
     } else if (selected_ == 8 && accept) result.passenger = true;
     else if (selected_ == 9 && accept) result.teleport = true;
+    else if (selected_ == 10 && accept) result.recallBike = true;
+    else if (selected_ == 11) {
+        settings.godMode = !settings.godMode;
+        result.changed = true;
+    } else if (selected_ == 12) {
+        settings.infiniteStamina = !settings.infiniteStamina;
+        result.changed = true;
+    } else if (selected_ == 13 && accept) result.refuelRepairBike = true;
+    else if (selected_ == 14 && accept) result.transferHost = true;
     else if (online.enabled && selected_ == kBaseRows && accept) result.lobby = true;
     else if (online.enabled && selected_ == kBaseRows + 1 && accept) result.invite = true;
     else if (online.enabled && selected_ == kBaseRows + 2) {
@@ -221,10 +230,14 @@ void SettingsMenu::Draw(int width, int height, const MenuSettings& settings,
     renderWidth_ = width;
     renderHeight_ = height;
     std::vector<std::string> labels = {"Jacket color", "Trousers color", "Cap color", "Cap",
-        "Sync motorcycles", "Allow a passenger", "Friendly fire", "Sync host's enemies", "Join / leave partner's bike", "Teleport to partner"};
+        "Sync motorcycles", "Allow a passenger", "Friendly fire", "Sync host's enemies", "Join / leave partner's bike", "Teleport to partner",
+        "[Action] Recall bike to player", "[Cheat] God Mode", "[Cheat] Infinite Stamina & Focus", "[Cheat] Refuel & Repair Bike",
+        "[Host] Give host to partner"};
     std::vector<std::string> values = {PaletteName(settings.jacket), PaletteName(settings.trousers),
         PaletteName(settings.capColor), settings.cap ? "On" : "Off", settings.motorcycles ? "On" : "Off",
-        settings.passengers ? "On" : "Off", settings.friendlyFire ? "ON - LETHAL" : "Off", settings.enemies ? "On" : "Off", "", ""};
+        settings.passengers ? "On" : "Off", settings.friendlyFire ? "ON - LETHAL" : "Off", settings.enemies ? "On" : "Off", "", "",
+        "Snap to Ground", settings.godMode ? "ENABLED" : "Off", settings.infiniteStamina ? "ENABLED" : "Off",
+        "Refill 100%", (online.enabled && online.isHost && online.hasPartner) ? "Transfer" : "Unavailable"};
     if (online.enabled) {
         labels.insert(labels.end(), {"Steam lobby", "Invite a Steam friend", "Join a Steam friend"});
         values.insert(values.end(), {online.lobby, online.invite, online.join});
@@ -255,7 +268,7 @@ void SettingsMenu::Draw(int width, int height, const MenuSettings& settings,
          confirmDamage_ ? Color{1.f, 0.6f, 0.25f, 1.f} : muted, x + 28 * scale, footer + 27 * scale, 0.86f * scale);
     Text("D-pad / arrows: select     Left / right / A: change     B / Esc: close", muted,
          x + 28 * scale, footer + 67 * scale, 0.86f * scale);
-    Text("Open: F8 or View + Y     Appearance saves automatically", muted,
+    Text("Open: F4 / F8 or View + Y     Debug & Cheats / Co-Op Menu", muted,
          x + 28 * scale, footer + 96 * scale, 0.86f * scale);
     POINT cursor{};
     RECT client{};

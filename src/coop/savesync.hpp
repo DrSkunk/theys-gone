@@ -208,6 +208,7 @@ public:
     uint32_t Transfer() const { return transfer_; }
     float Progress() const { return have_.empty() ? 0.f : static_cast<float>(received_) / have_.size(); }
     const std::vector<uint8_t>& Bundle() const { return bundle_; }
+    const uint8_t* Sha() const { return sha_; }
 
 private:
     uint32_t transfer_ = 0;

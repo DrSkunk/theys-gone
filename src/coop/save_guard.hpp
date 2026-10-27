@@ -12,6 +12,7 @@ namespace coop {
 // Reads prefer sandbox copies and fall back to the real files. Both return false on failure.
 bool InstallSaveGuard(const std::wstring& sandboxRoot);
 bool SaveGuardEnable();
+void SaveGuardDisable();
 
 bool SaveGuardActive();
 
@@ -27,5 +28,6 @@ bool SaveGuardAdopt(const std::vector<AdoptedFile>& files, std::string& error);
 bool SaveGuardAdopted();
 bool SaveGuardPinned();
 void SaveGuardLoaded();
+const std::wstring& SaveGuardRoot();
 
 } // namespace coop

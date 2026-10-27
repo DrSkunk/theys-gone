@@ -15,12 +15,17 @@ struct MenuSettings {
     bool passengers = true;
     bool friendlyFire = false;
     bool enemies = true;
+    bool godMode = false;
+    bool infiniteStamina = false;
 };
 
 struct MenuActions {
     bool changed = false;
     bool passenger = false;
     bool teleport = false;
+    bool recallBike = false;
+    bool refuelRepairBike = false;
+    bool transferHost = false;
     bool lobby = false;  // host, or leave the current lobby
     bool invite = false;
     bool join = false;
@@ -30,6 +35,8 @@ struct MenuActions {
 // Extra rows shown when the experimental Steam transport is active.
 struct MenuOnline {
     bool enabled = false;
+    bool isHost = false;
+    bool hasPartner = false;
     std::string lobby;  // value on the lobby row, e.g. "Host" or "Leave"
     std::string invite; // value on the invite row
     std::string join;   // value on the join row, e.g. "< Alice >"

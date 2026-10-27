@@ -1,3 +1,5 @@
+#include <thread>
+#include <chrono>
 #include "coop.hpp"
 
 #include "log.hpp"
@@ -51,8 +53,14 @@ namespace {
 constexpr uint8_t kPrologue[19] = {0x40, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56,
                                    0x41, 0x57, 0x48, 0x81, 0xEC, 0xF0, 0x00, 0x00, 0x00};
 constexpr double kTickInterval = 1.0 / 60.0;
-constexpr double kSendInterval = 1.0 / 30.0;
+constexpr double kSendInterval = 1.0 / 144.0;
 constexpr double kPeerTimeout = 5.0;
+double PeerTimeout();
+
+inline float DistSq(const FVector& a, const FVector& b) {
+    float dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z;
+    return dx * dx + dy * dy + dz * dz;
+}
 // Who was reported as connected without a matching disconnect yet (empty: nobody).
 std::string g_announcedPartner;
 
@@ -158,6 +166,7 @@ struct Avatar {
     double shotUntil = 0;
     UObject* seatBike = nullptr;
     UObject* seatMesh = nullptr;
+    UObject* attachedSeatMesh = nullptr;
     FName seatSocket{}, pelvis{};
     bool hidden = false;
     // Streamed-pose body: a runtime PoseableMeshComponent; `component` keeps the clip-driven fallback.
@@ -181,6 +190,7 @@ struct Passenger {
     uint8_t movementMode = 1, customMode = 0;
     bool collision = true, savingBlocked = false;
     bool movementChanged = false, collisionChanged = false, moveBlocked = false, saveChanged = false, positioned = false;
+    bool attached = false;
 } g_passenger;
 
 struct Classes {
@@ -254,7 +264,6 @@ uint64_t g_ridingLookups = 0;
 
 Avatar g_avatar;
 UObject* g_localMesh = nullptr;
-FVector g_localPos{};
 double g_localSettledAt = 0;
 
 void DestroyAvatar();
@@ -1179,8 +1188,8 @@ void SendLocalState(UObject* pawn, double now) {
     std::snprintf(p.name, sizeof p.name, "%s", session::TruncateUtf8(LocalName(), sizeof p.name - 1).c_str());
     g_damage.Fill(p);
     if (pawn) {
-        uint8_t crouched = 0;
-        if (GetProp(pawn, "bIsCrouched", crouched) && crouched) p.actions |= kCrouched;
+        bool isCrouched = false;
+        if (GetBoolProp(pawn, "bIsCrouched", isCrouched) && isCrouched) p.actions |= kCrouched;
         Call aiming(pawn, "IsAiming");
         if (aiming.invoke() && aiming.get<bool>("ReturnValue")) p.actions |= kAiming;
         Call reloading(pawn, "IsReloading");
@@ -1216,6 +1225,13 @@ void SendLocalState(UObject* pawn, double now) {
             r.invoke();
             pos = loc.get<FVector>("ReturnValue");
             rot = r.get<FRotator>("ReturnValue");
+            float halfHeight = 0;
+            auto capsule = Prop(pawn, "CapsuleComponent");
+            if (capsule && GetProp(capsule, "CapsuleHalfHeight", halfHeight) && halfHeight > 0) {
+                pos.z -= halfHeight;
+            } else {
+                pos.z -= 96.0f;
+            }
             p.flags |= kInVehicle;
         }
         Call vel(pawn, "GetVelocity");
@@ -1256,8 +1272,9 @@ void SendLocalState(UObject* pawn, double now) {
         }
     }
     g_net->Send(p);
-    if (!(p.flags & kHasPawn) || now - g_lastRecv >= kPeerTimeout) return;
+    if (!(p.flags & kHasPawn) || now - g_lastRecv >= PeerTimeout()) return;
     SendGear(pawn, now);
+    if (SaveTransferActive() && !IsLive(pawn)) return; // Only mute while loading before spawn
     if (now < g_nextPoseSend) return;
     double poseInterval = 1.0 / g_cfg.poseRate;
     g_nextPoseSend += poseInterval;
@@ -1270,13 +1287,16 @@ void SendLocalState(UObject* pawn, double now) {
 
 bool g_saveLoading = false, g_loadAfterAdopt = false;
 double g_loadStartedAt = 0;
+inline double PeerTimeout() {
+    return (g_saveLoading || (Now() - g_loadStartedAt < 60.0)) ? 60.0 : 5.0;
+}
 
 SaveTransferContext TransferContext(double now) {
     SaveTransferContext context;
     context.net = g_net;
     context.now = now;
     context.session = g_session;
-    context.connected = now - g_lastRecv < kPeerTimeout;
+    context.connected = now - g_lastRecv < PeerTimeout();
     context.peerSession = context.connected ? g_peer.session : 0;
     context.host = IsHost();
     context.inGameplay = g_pawn != nullptr;
@@ -1323,7 +1343,7 @@ void ReceiveRemote(double now) {
     StatePacket p;
     auto other = [now](const char* data, int len) { ReceivePose(data, len, now); };
     for (int budget = 0; budget < 64 && g_net->Receive(p, other); ++budget) {
-        bool reconnect = now - g_lastRecv > kPeerTimeout || p.session != g_peer.session;
+        bool reconnect = now - g_lastRecv > PeerTimeout() || p.session != g_peer.session;
         if (!reconnect && !NewerSequence(p.seq, g_lastRemoteSeq)) continue;
         if (reconnect) {
             ++g_consent;
@@ -1386,7 +1406,7 @@ bool FollowSocket(UObject* actor, UObject* parent, FName socket, const BonePose&
     float pitch = 0, yaw = 0, roll = 0;
     QuatToRotator(world.q, pitch, yaw, roll);
     return Call(actor, "K2_SetActorLocationAndRotation").set("NewLocation", world.t)
-        .set("NewRotation", FRotator{pitch, yaw, roll}).setBool("bSweep", false).setBool("bTeleport", true).invoke();
+        .set("NewRotation", FRotator{pitch, yaw, roll}).setBool("bSweep", false).setBool("bTeleport", false).invoke();
 }
 
 UObject* SpawnMeshActor(UObject* context, const FVector& at) {
@@ -1408,6 +1428,10 @@ UObject* SpawnMeshActor(UObject* context, const FVector& at) {
 }
 
 void DestroyMeshAvatar(Avatar& avatar) {
+    if (avatar.attachedSeatMesh && IsLive(avatar.actor)) {
+        Call(avatar.actor, "K2_DetachFromActor").invoke();
+        Call(avatar.actor, "DetachRootComponentFromParent").invoke();
+    }
     for (auto a : avatar.parts)
         if (IsLive(a)) Call(a, "K2_DestroyActor").invoke();
     if (IsLive(avatar.actor)) Call(avatar.actor, "K2_DestroyActor").invoke();
@@ -1524,6 +1548,12 @@ bool SpawnBike(UObject* pawn, const FVector& at) {
     }
     g_bike.source = Prop(source, "SkeletalMesh");
     AttachPoseable(g_bike.actor, g_bike.component, source, g_bike.pose, g_bike.writer, "bike");
+    SetBoolProp(g_bike.component, "bPerBoneMotionBlur", false);
+    SetBoolProp(g_bike.component, "bCastContactShadow", false);
+    if (IsLive(g_bike.pose)) {
+        SetBoolProp(g_bike.pose, "bPerBoneMotionBlur", false);
+        SetBoolProp(g_bike.pose, "bCastContactShadow", false);
+    }
     int mastered = 0, mounted = 0;
     for (auto component : OwnedMeshes(g_nativeBikeMeshes, g_localBike, Now())) {
         if (!IsLive(component) || component == source) continue;
@@ -1540,6 +1570,8 @@ bool SpawnBike(UObject* pawn, const FVector& at) {
             DestroyBike();
             return false;
         }
+        SetBoolProp(part.component, "bPerBoneMotionBlur", false);
+        SetBoolProp(part.component, "bCastContactShadow", false);
         g_bike.parts.push_back(actor);
         // Parts either share the chassis skeleton (master pose) or are rigid pieces mounted on a chassis socket.
         part.mastered = WeakProp(component, "MasterPoseComponent") == source;
@@ -1579,8 +1611,8 @@ bool SpawnBike(UObject* pawn, const FVector& at) {
 
 void UpdateBike(UObject* pawn, double now) {
     Snapshot sample{};
-    bool have = g_settings.motorcycles && pawn && now - g_lastRecv < kPeerTimeout &&
-                SampleRemote(now, sample) && (sample.flags & kHasBike) && now >= g_localSettledAt;
+    bool have = g_settings.motorcycles && pawn && now - g_lastRecv < PeerTimeout() &&
+                SampleRemote(now, sample) && (sample.flags & kHasBike);
     if (!have || !IsLive(g_localBike)) {
         if (IsLive(g_bike.actor)) DestroyBike();
         return;
@@ -1589,21 +1621,37 @@ void UpdateBike(UObject* pawn, double now) {
     FVector origin = WorldOrigin(pawn);
     FVector position{sample.bikePos.x - origin.x, sample.bikePos.y - origin.y, sample.bikePos.z - origin.z};
     if (!IsLive(g_bike.actor)) {
-        if (now - g_lastBikeSpawn < 2) return;
+        if (now - g_lastBikeSpawn < 0.2) return;
         g_lastBikeSpawn = now;
         if (!SpawnBike(pawn, position)) return;
     }
     PoseFrame frame;
+    double poseDelay = std::max(g_motion.DelaySeconds(), 1.5 / g_cfg.poseRate);
     bool streamed = g_bike.pose && now - g_lastBikePose < kPoseFresh &&
-        g_bikePoses.Sample(g_motion.SenderMs(), frame) && g_bike.writer.Apply(frame);
+        g_bikePoses.Sample(g_motion.SenderMs(poseDelay), frame) && g_bike.writer.Apply(frame);
     bool wasPosing = g_bike.posing;
     SetPosing(streamed, g_bike.posing, g_bike.pose, g_bike.component, MasteredBikeParts());
     if (wasPosing != g_bike.posing) {
         AttachBikeParts();
         Log("bike: %s", g_bike.posing ? "following the partner's streamed chassis" : "chassis stream stale; neutral pose");
     }
+    static FVector s_lastBikePos{};
+    static bool s_hasLastBikePos = false;
+    bool isBikeTeleport = !s_hasLastBikePos || DistSq(s_lastBikePos, position) > 2000.f * 2000.f;
+    s_lastBikePos = position;
+    s_hasLastBikePos = true;
     Call(g_bike.actor, "K2_SetActorLocationAndRotation").set("NewLocation", position).set("NewRotation", sample.bikeRotation)
-        .setBool("bSweep", false).setBool("bTeleport", true).invoke();
+        .setBool("bSweep", false).setBool("bTeleport", isBikeTeleport).invoke();
+    for (auto part : g_bike.parts) {
+        if (IsLive(part)) {
+            Call(part, "K2_SetActorLocationAndRotation")
+                .set("NewLocation", position)
+                .set("NewRotation", sample.bikeRotation)
+                .setBool("bSweep", false)
+                .setBool("bTeleport", isBikeTeleport)
+                .invoke();
+        }
+    }
     if (!g_bike.posing) return;
     for (const auto& part : g_bike.attachments) {
         if (part.mastered) continue;
@@ -1650,7 +1698,7 @@ FName HipBone(UObject* mesh, std::string& names) {
 
 void UpdateDamageScope(double now) {
     bool eligible = g_settings.friendlyFire && g_pawn && Alive(g_pawn) && now >= g_localSettledAt &&
-        now - g_lastRecv < kPeerTimeout && (g_peer.flags & kFriendlyFire) && (g_peer.flags & kAlive);
+        now - g_lastRecv < PeerTimeout() && (g_peer.flags & kFriendlyFire) && (g_peer.flags & kAlive);
     g_damage.Configure(g_session, g_consent, g_peer, eligible);
     if (g_damage.Expire(now)) {
         g_settingsError = "A friendly-fire event timed out; stopped retrying that attack";
@@ -2090,6 +2138,10 @@ bool EndPassenger(bool forced) {
     }
     auto state = std::move(g_passenger);
     g_passenger = {};
+    if (samePawn && state.attached && IsLive(state.pawn)) {
+        Call(state.pawn, "K2_DetachFromActor").invoke();
+        Call(state.pawn, "DetachRootComponentFromParent").invoke();
+    }
     DestroyMeshAvatar(g_passengerAvatar);
     g_passengerAppearance.Clear();
     bool restored = true;
@@ -2156,7 +2208,7 @@ void UpdateRidePrompt(double now) {
             label = "Get off";
         }
     } else if (IsLive(g_pawn) && !riding && !g_debug.pawn && g_settings.motorcycles && IsLive(g_bike.component) &&
-               now - g_lastRecv < kPeerTimeout && (g_peer.flags & kAlive) && (g_peer.flags & kAcceptPassengers) &&
+               now - g_lastRecv < PeerTimeout() && (g_peer.flags & kAlive) && (g_peer.flags & kAcceptPassengers) &&
                (g_peer.flags & kInVehicle) && !(g_peer.flags & kPassenger) && now >= g_localSettledAt &&
                g_motion.BikeSpeed() <= 200) {
         Call where(g_bike.component, "K2_GetComponentLocation");
@@ -2180,7 +2232,7 @@ void TogglePassenger(double now) {
         return;
     }
     if (!g_pawn || !Alive(g_pawn) || !g_settings.motorcycles || !IsLive(g_bike.component) ||
-        now - g_lastRecv >= kPeerTimeout || !(g_peer.flags & kAlive) || !(g_peer.flags & kAcceptPassengers) ||
+        now - g_lastRecv >= PeerTimeout() || !(g_peer.flags & kAlive) || !(g_peer.flags & kAcceptPassengers) ||
         !(g_peer.flags & kInVehicle) || (g_peer.flags & kPassenger) || now < g_localSettledAt) {
         g_settingsError = "Partner must be riding nearby, with motorcycles and passengers enabled";
         Log("passenger: boarding prerequisites not satisfied");
@@ -2251,15 +2303,34 @@ void TogglePassenger(double now) {
         EndPassenger(true);
         return;
     }
+    Call hip(g_passengerAvatar.component, "GetSocketTransform");
+    FVector offset{};
+    if (hip.set("InSocketName", state.pelvis).set("TransformSpace", static_cast<uint8_t>(2)).invoke()) {
+        offset = hip.get<FTransform>("ReturnValue").translation;
+    }
+    Call(g_passengerAvatar.actor, "K2_AttachRootComponentTo")
+        .set("InParent", state.seatMesh)
+        .set("InSocketName", socket)
+        .set("AttachLocationType", static_cast<uint8_t>(2))
+        .invoke();
+    Call(g_passengerAvatar.actor, "K2_SetActorRelativeLocation").set("NewRelativeLocation", FVector{-offset.x, -offset.y, -offset.z}).invoke();
+    Call(g_passengerAvatar.actor, "K2_SetActorRelativeRotation").set("NewRelativeRotation", FRotator{0, 0, 0}).invoke();
+    Call(g_pawn, "K2_AttachRootComponentTo")
+        .set("InParent", state.seatMesh)
+        .set("InSocketName", socket)
+        .set("AttachLocationType", static_cast<uint8_t>(2))
+        .invoke();
+    g_passenger.attached = true;
+    g_passenger.positioned = true;
     g_settingsError.clear();
-    Log("passenger: boarded using socket %s and pelvis bone %s", NameString(socket.index).c_str(), NameString(state.pelvis.index).c_str());
+    Log("passenger: boarded using socket %s and attached natively to bike", NameString(socket.index).c_str());
 }
 
 void UpdatePassenger(double now) {
     if (!g_passenger.pawn) return;
     if (g_passenger.pawn != g_pawn || !IsLive(g_bike.component) || !IsLive(g_passengerAvatar.component) ||
         !Alive(g_pawn) || !g_settings.motorcycles ||
-        now - g_lastRecv >= kPeerTimeout || !(g_peer.flags & kAcceptPassengers) || !(g_peer.flags & kAlive) ||
+        now - g_lastRecv >= PeerTimeout() || !(g_peer.flags & kAcceptPassengers) || !(g_peer.flags & kAlive) ||
         !(g_peer.flags & kInVehicle) || (g_peer.flags & kPassenger)) {
         EndPassenger(true);
         return;
@@ -2272,37 +2343,26 @@ void UpdatePassenger(double now) {
         EndPassenger(true);
         return;
     }
-    Call seat(g_passenger.seatMesh, "GetSocketLocation");
-    if (!seat.set("InSocketName", g_passenger.socket).invoke()) { EndPassenger(true); return; }
-    auto location = seat.get<FVector>("ReturnValue");
-    Snapshot sample{};
-    Call hip(g_passengerAvatar.component, "GetSocketTransform");
-    if (!SampleRemote(now, sample) || !hip.set("InSocketName", g_passenger.pelvis)
-            .set("TransformSpace", static_cast<uint8_t>(2)).invoke()) {
-        g_settingsError = "Passenger pose unavailable; dismounting safely";
-        EndPassenger(true);
-        return;
-    }
-    // The avatar mesh is its actor root: component space already is actor space.
-    auto offset = hip.get<FTransform>("ReturnValue").translation;
-    FVector capsule = location;
-    location = AlignBoneToSocket(location, offset, sample.yaw);
-    static double lastSeatLog = 0;
-    if (now - lastSeatLog >= 10) {
-        lastSeatLog = now;
-        Log("passenger: seat z=%.1f relative hips z=%.1f visual root z=%.1f",
-            seat.get<FVector>("ReturnValue").z, offset.z, location.z);
-    }
-    bool movedPawn = Call(g_pawn, "K2_SetActorLocationAndRotation").set("NewLocation", capsule)
-            .set("NewRotation", FRotator{0, sample.yaw + 90, 0})
-            .setBool("bSweep", false).setBool("bTeleport", true).invoke();
-    if (movedPawn) g_passenger.positioned = true;
-    if (!movedPawn || !Call(g_passengerAvatar.actor, "K2_SetActorLocationAndRotation").set("NewLocation", location)
-            .set("NewRotation", FRotator{0, sample.yaw, 0})
-            .setBool("bSweep", false).setBool("bTeleport", true).invoke()) {
-        g_settingsError = "Passenger positioning failed; dismounting safely";
-        EndPassenger(true);
-        return;
+    if (!g_passenger.attached && IsLive(g_passenger.seatMesh)) {
+        Call hip(g_passengerAvatar.component, "GetSocketTransform");
+        FVector offset{};
+        if (hip.set("InSocketName", g_passenger.pelvis).set("TransformSpace", static_cast<uint8_t>(2)).invoke()) {
+            offset = hip.get<FTransform>("ReturnValue").translation;
+        }
+        Call(g_passengerAvatar.actor, "K2_AttachRootComponentTo")
+            .set("InParent", g_passenger.seatMesh)
+            .set("InSocketName", g_passenger.socket)
+            .set("AttachLocationType", static_cast<uint8_t>(2))
+            .invoke();
+        Call(g_passengerAvatar.actor, "K2_SetActorRelativeLocation").set("NewRelativeLocation", FVector{-offset.x, -offset.y, -offset.z}).invoke();
+        Call(g_passengerAvatar.actor, "K2_SetActorRelativeRotation").set("NewRelativeRotation", FRotator{0, 0, 0}).invoke();
+        Call(g_pawn, "K2_AttachRootComponentTo")
+            .set("InParent", g_passenger.seatMesh)
+            .set("InSocketName", g_passenger.socket)
+            .set("AttachLocationType", static_cast<uint8_t>(2))
+            .invoke();
+        g_passenger.attached = true;
+        g_passenger.positioned = true;
     }
     static double lastAppearance = -10;
     if (now - lastAppearance >= 0.25) {
@@ -2503,9 +2563,8 @@ bool SpawnAvatar(UObject* localPawn, const FVector& at, Avatar& avatar) {
         return false;
     }
     // Days Gone characters are modular: clone extra skinned parts and slave them to the body pose.
-    for (int32_t i = 0, n = ObjectCount(); i < n; ++i) {
-        auto o = ObjectAt(i);
-        if (!o || o == localMesh || o->outer != localPawn || !IsA(o, C.skelMeshComponent) || !IsLive(o)) continue;
+    for (auto o : OwnedMeshes(g_characterMeshes, localPawn, Now())) {
+        if (!o || o == localMesh || !IsLive(o)) continue;
         auto partMesh = Prop(o, "SkeletalMesh");
         if (!partMesh || !IsCharacterPart(o, localMesh)) continue;
         auto part = SpawnMeshActor(localPawn, at);
@@ -2532,7 +2591,25 @@ bool SpawnAvatar(UObject* localPawn, const FVector& at, Avatar& avatar) {
         avatar.parts.push_back(part);
         Log("avatar: part %s", Name(partMesh).c_str());
     }
+    SetBoolProp(avatar.component, "bPerBoneMotionBlur", false);
+    SetBoolProp(avatar.component, "bCastContactShadow", false);
+    SetBoolProp(avatar.component, "bCastCapsuleDirectShadow", false);
+    SetBoolProp(avatar.component, "bCastCapsuleIndirectShadow", false);
+    for (auto part : avatar.parts) {
+        if (auto c = Prop(part, "SkeletalMeshComponent")) {
+            SetBoolProp(c, "bPerBoneMotionBlur", false);
+            SetBoolProp(c, "bCastContactShadow", false);
+            SetBoolProp(c, "bCastCapsuleDirectShadow", false);
+            SetBoolProp(c, "bCastCapsuleIndirectShadow", false);
+        }
+    }
     AttachPoseable(avatar.actor, avatar.component, localMesh, avatar.pose, avatar.writer, "avatar");
+    if (IsLive(avatar.pose)) {
+        SetBoolProp(avatar.pose, "bPerBoneMotionBlur", false);
+        SetBoolProp(avatar.pose, "bCastContactShadow", false);
+        SetBoolProp(avatar.pose, "bCastCapsuleDirectShadow", false);
+        SetBoolProp(avatar.pose, "bCastCapsuleIndirectShadow", false);
+    }
     Log("avatar: spawned %s with mesh %s, %d extra parts, streamed pose %s", Name(avatar.actor).c_str(),
         Name(skeletal).c_str(), static_cast<int>(avatar.parts.size()), avatar.pose ? "ready" : "unavailable");
     return true;
@@ -2541,6 +2618,7 @@ bool SpawnAvatar(UObject* localPawn, const FVector& at, Avatar& avatar) {
 // Adds a hidden poseable copy of `source` under `actor`; on failure the clip-driven `fallback` stays in use.
 void AttachPoseable(UObject* actor, UObject* fallback, UObject* source, UObject*& pose, PoseWriter& writer, const char* label) {
     pose = CreatePoseableComponent(actor);
+    if (pose) SetBoolProp(pose, "bPerBoneMotionBlur", false);
     if (pose && CopyMeshAppearance(source, pose) && writer.Attach(pose) &&
         Call(pose, "SetVisibility").setBool("bNewVisibility", false).setBool("bPropagateToChildren", false).invoke()) {
         Log("%s: poseable body %s with %d bones (array +0x%x)", label, Name(pose).c_str(),
@@ -2559,11 +2637,25 @@ void AttachPoseable(UObject* actor, UObject* fallback, UObject* source, UObject*
 bool SetPosing(bool on, bool& posing, UObject* pose, UObject* fallback, const std::vector<UObject*>& masteredParts) {
     if (on == posing || (on && !IsLive(pose))) return posing;
     posing = on;
-    if (IsLive(pose))
+    if (IsLive(pose)) {
         Call(pose, "SetVisibility").setBool("bNewVisibility", on).setBool("bPropagateToChildren", false).invoke();
+        Call(pose, "SetCastShadow").setBool("NewCastShadow", on).invoke();
+        SetBoolProp(pose, "bCastContactShadow", false);
+        SetBoolProp(pose, "bCastCapsuleDirectShadow", false);
+        SetBoolProp(pose, "bCastCapsuleIndirectShadow", false);
+    }
     Call(fallback, "SetVisibility").setBool("bNewVisibility", !on).setBool("bPropagateToChildren", false).invoke();
-    for (auto part : masteredParts)
+    Call(fallback, "SetCastShadow").setBool("NewCastShadow", !on).invoke();
+    SetBoolProp(fallback, "bCastHiddenShadow", false);
+    SetBoolProp(fallback, "bCastContactShadow", false);
+    SetBoolProp(fallback, "bCastCapsuleDirectShadow", false);
+    SetBoolProp(fallback, "bCastCapsuleIndirectShadow", false);
+    for (auto part : masteredParts) {
         Call(part, "SetMasterPoseComponent").set("NewMasterBoneComponent", on ? pose : fallback).invoke();
+        SetBoolProp(part, "bCastContactShadow", false);
+        SetBoolProp(part, "bCastCapsuleDirectShadow", false);
+        SetBoolProp(part, "bCastCapsuleIndirectShadow", false);
+    }
     return posing;
 }
 
@@ -2610,10 +2702,20 @@ void AnimateAvatar(const Snapshot& s, double now) {
             "/Game/Animation/Deacon/bike/bike_basic_control.bike_basic_control", C.animSequence);
         g_ridingLookupTime += Now() - started;
         ++g_ridingLookups;
-    } else if (speed < 30 && (s.actions & kCrouched)) {
-        anim = FindObject((s.actions & kAiming) && s.weaponType != kWeaponNone ?
-            "/Game/Animation/Deacon/gun/aimed_locomotion/rifle_aimed_idle_crouch.rifle_aimed_idle_crouch" :
-            "/Game/Animation/Deacon/crouch/dcn_idle_crouch.dcn_idle_crouch", C.animSequence);
+    } else if (s.actions & kCrouched) {
+        if (speed < 30) {
+            anim = FindObject((s.actions & kAiming) && s.weaponType != kWeaponNone ?
+                "/Game/Animation/Deacon/gun/aimed_locomotion/rifle_aimed_idle_crouch.rifle_aimed_idle_crouch" :
+                "/Game/Animation/Deacon/crouch/dcn_idle_crouch.dcn_idle_crouch", C.animSequence);
+            if (!anim) anim = FindObject("dcn_idle_crouch", C.animSequence);
+        } else if (speed >= 250) {
+            anim = FindObject("dcn_strafe_crouch_jog_F", C.animSequence);
+        } else {
+            if (s.weaponType == kWeaponGun) anim = FindObject("dcn_walk_crouch_b_rifle_forward", C.animSequence);
+            else if (s.weaponType == kWeaponCrossbow) anim = FindObject("dcn_walk_crouch_b_pistol_forward", C.animSequence);
+            if (!anim) anim = FindObject("dcn_strafe_crouch_walk_F", C.animSequence);
+            if (!anim) anim = FindObject("dcn_walk_crouch_b", C.animSequence);
+        }
     } else if (speed < 30 && (s.actions & kAiming) &&
                (s.weaponType == kWeaponGun || s.weaponType == kWeaponCrossbow)) {
         anim = FindObject(s.weaponType == kWeaponGun ?
@@ -2642,31 +2744,20 @@ void AnimateAvatar(const Snapshot& s, double now) {
     }
 }
 
-// Save loads and fast travel swap the player's meshes and play a dissolve-in; a copy taken then never renders.
+// Save loads and costume changes swap the player's meshes; rebuild avatar only on actual mesh change.
 void TrackLocalAppearance(UObject* localPawn, double now) {
-    constexpr double kSettleSeconds = 5.0;
-    bool changed = false;
+    (void)now;
     auto mesh = Prop(Prop(localPawn, "Mesh"), "SkeletalMesh");
     if (mesh != g_localMesh) {
         g_localMesh = mesh;
-        changed = true;
-    }
-    Call where(localPawn, "K2_GetActorLocation");
-    if (where.invoke()) {
-        auto me = where.get<FVector>("ReturnValue");
-        float dx = me.x - g_localPos.x, dy = me.y - g_localPos.y;
-        changed |= dx * dx + dy * dy > 5000.f * 5000.f;
-        g_localPos = me;
-    }
-    if (!changed) return;
-    g_localSettledAt = now + kSettleSeconds;
-    if (IsLive(g_avatar.actor)) {
-        Log("avatar: local player reloaded or travelled, rebuilding avatar once settled");
-        DestroyAvatar();
+        if (IsLive(g_avatar.actor)) {
+            Log("avatar: local player appearance changed, rebuilding avatar");
+            DestroyAvatar();
+        }
     }
 }
 
-bool AnchorRemotePassenger(FVector& location, float& yaw, double now) {
+bool AnchorRemotePassenger(double now) {
     if (!IsLive(g_localBike)) return false;
     if (g_avatar.seatBike != g_localBike || !IsLive(g_avatar.seatMesh)) {
         g_avatar.seatBike = g_localBike;
@@ -2682,23 +2773,35 @@ bool AnchorRemotePassenger(FVector& location, float& yaw, double now) {
             }
         }
     }
+    if (!IsLive(g_avatar.seatMesh)) return false;
     if (!g_avatar.pelvis.index) {
         std::string names;
         g_avatar.pelvis = HipBone(AvatarBody(), names);
         if (!g_avatar.pelvis.index) return false;
     }
-    Call seat(g_avatar.seatMesh, "GetSocketLocation"), hip(AvatarBody(), "GetSocketTransform");
-    Call facing(Prop(g_pawn, "Mesh"), "K2_GetComponentRotation");
-    if (!seat.set("InSocketName", g_avatar.seatSocket).invoke() ||
-        !hip.set("InSocketName", g_avatar.pelvis).set("TransformSpace", static_cast<uint8_t>(2)).invoke() ||
-        !facing.invoke()) return false;
-    yaw = facing.get<FRotator>("ReturnValue").yaw;
-    location = AlignBoneToSocket(seat.get<FVector>("ReturnValue"), hip.get<FTransform>("ReturnValue").translation, yaw);
-    return true;
+    if (g_avatar.attachedSeatMesh != g_avatar.seatMesh) {
+        Call attach(g_avatar.actor, "K2_AttachRootComponentTo");
+        bool ok = attach.set("InParent", g_avatar.seatMesh)
+            .set("InSocketName", g_avatar.seatSocket)
+            .set("AttachLocationType", static_cast<uint8_t>(2))
+            .invoke();
+        if (ok) {
+            Call hip(AvatarBody(), "GetSocketTransform");
+            FVector offset{};
+            if (hip.set("InSocketName", g_avatar.pelvis).set("TransformSpace", static_cast<uint8_t>(2)).invoke()) {
+                offset = hip.get<FTransform>("ReturnValue").translation;
+            }
+            Call(g_avatar.actor, "K2_SetActorRelativeLocation").set("NewRelativeLocation", FVector{-offset.x, -offset.y, -offset.z}).invoke();
+            Call(g_avatar.actor, "K2_SetActorRelativeRotation").set("NewRelativeRotation", FRotator{0, 0, 0}).invoke();
+            g_avatar.attachedSeatMesh = g_avatar.seatMesh;
+            Log("passenger: attached remote avatar directly to local bike seat socket");
+        }
+    }
+    return g_avatar.attachedSeatMesh != nullptr;
 }
 
 void UpdateAvatar(UObject* localPawn, double now) {
-    bool peerAlive = now - g_lastRecv < kPeerTimeout;
+    bool peerAlive = now - g_lastRecv < PeerTimeout();
     Snapshot s{};
     bool have = peerAlive && SampleRemote(now, s) && (s.flags & kHasPawn);
     if (localPawn) TrackLocalAppearance(localPawn, now);
@@ -2709,16 +2812,22 @@ void UpdateAvatar(UObject* localPawn, double now) {
     FVector origin = WorldOrigin(localPawn);
     FVector local{s.pos.x - origin.x, s.pos.y - origin.y, s.pos.z - origin.z};
     if (!IsLive(g_avatar.actor)) {
-        // Copying the player's look mid-load would capture fade-in materials that never become visible.
-        if (now < g_localSettledAt || now - g_lastSpawnAttempt < 2.0) return;
+        if (now - g_lastSpawnAttempt < 0.2) return;
         g_lastSpawnAttempt = now;
         g_avatar = Avatar{};
         if (!SpawnAvatar(localPawn, local, g_avatar)) return;
         g_avatar.lastShotSequence = s.shotSequence;
     }
     PoseFrame frame;
-    bool streamed = g_avatar.pose && now - g_lastBodyPose < kPoseFresh &&
-        g_bodyPoses.Sample(g_motion.SenderMs(), frame) && g_avatar.writer.Apply(frame);
+    static double lastValidPose = 0;
+    double poseDelay = std::max(g_motion.DelaySeconds(), 1.5 / g_cfg.poseRate);
+    bool hasSample = g_avatar.pose && now - g_lastBodyPose < kPoseFresh &&
+        g_bodyPoses.Sample(g_motion.SenderMs(poseDelay), frame);
+    if (hasSample && g_avatar.writer.Apply(frame)) {
+        lastValidPose = now;
+    }
+    // Hysteresis: smoothly hold pose and avoid flapping between poseable & skeletal meshes
+    bool streamed = g_avatar.pose && (now - lastValidPose < 0.4);
     std::vector<UObject*> mastered;
     for (auto part : g_avatar.parts) mastered.push_back(Prop(part, "SkeletalMeshComponent"));
     bool wasPosing = g_avatar.posing;
@@ -2733,7 +2842,7 @@ void UpdateAvatar(UObject* localPawn, double now) {
     if (g_avatar.posing)
         if (auto root = FindBone(frame, kRootBoneHash)) QuatToRotator(root->q, facing.pitch, facing.yaw, facing.roll);
     if (s.flags & kPassenger) {
-        if (!AnchorRemotePassenger(local, s.yaw, now)) {
+        if (!AnchorRemotePassenger(now)) {
             constexpr const char* error = "Partner passenger seat unavailable; waiting for the local bike";
             if (g_settingsError != error) Log("passenger: %s", error);
             g_settingsError = error;
@@ -2741,12 +2850,38 @@ void UpdateAvatar(UObject* localPawn, double now) {
             return;
         }
         if (g_settingsError == "Partner passenger seat unavailable; waiting for the local bike") g_settingsError.clear();
+    } else {
+        if (g_avatar.attachedSeatMesh) {
+            Call(g_avatar.actor, "K2_DetachFromActor").invoke();
+            Call(g_avatar.actor, "DetachRootComponentFromParent").invoke();
+            g_avatar.attachedSeatMesh = nullptr;
+            Log("passenger: detached remote avatar from local bike");
+        }
     }
     SetAvatarHidden(false);
-    Call move(g_avatar.actor, "K2_SetActorLocationAndRotation");
-    if (s.flags & kPassenger) facing = FRotator{0, s.yaw, 0};
-    move.set("NewLocation", local).set("NewRotation", facing);
-    bool moved = move.setBool("bSweep", false).setBool("bTeleport", true).invoke();
+    bool moved = false;
+    if (!(s.flags & kPassenger)) {
+        static FVector s_lastAvatarPos{};
+        static bool s_hasLastAvatarPos = false;
+        bool isTeleport = !s_hasLastAvatarPos || DistSq(s_lastAvatarPos, local) > 1500.f * 1500.f;
+        s_lastAvatarPos = local;
+        s_hasLastAvatarPos = true;
+        Call move(g_avatar.actor, "K2_SetActorLocationAndRotation");
+        move.set("NewLocation", local).set("NewRotation", facing);
+        moved = move.setBool("bSweep", false).setBool("bTeleport", isTeleport).invoke();
+        for (auto part : g_avatar.parts) {
+            if (IsLive(part)) {
+                Call(part, "K2_SetActorLocationAndRotation")
+                    .set("NewLocation", local)
+                    .set("NewRotation", facing)
+                    .setBool("bSweep", false)
+                    .setBool("bTeleport", isTeleport)
+                    .invoke();
+            }
+        }
+    } else {
+        moved = g_avatar.attachedSeatMesh != nullptr;
+    }
     MenuSettings remoteSettings;
     remoteSettings.jacket = g_peer.jacket;
     remoteSettings.trousers = g_peer.trousers;
@@ -2818,7 +2953,7 @@ struct EnemyStats {
 constexpr size_t kEnemyMaxReplicas = 32;
 
 bool EnemyReplicationActive(double now) {
-    return g_settings.enemies && now - g_lastRecv < kPeerTimeout;
+    return g_settings.enemies && now - g_lastRecv < PeerTimeout();
 }
 
 // "Package.Asset" path that FindObject resolves on the other machine.
@@ -3361,7 +3496,8 @@ void UpdateEnemyReplicas(UObject* pawn, double now) {
         return;
     }
     FVector origin = WorldOrigin(pawn);
-    double senderMs = g_motion.SenderMs();
+    double poseDelay = std::max(g_motion.DelaySeconds(), 1.5 / g_cfg.poseRate);
+    double senderMs = g_motion.SenderMs(poseDelay);
     for (auto it = g_enemyReplicas.begin(); it != g_enemyReplicas.end();) {
         auto& r = it->second;
         if (now - std::max(r.poses.LastArrival(), r.lastInfo) > kEnemyTimeout) {
@@ -3873,24 +4009,44 @@ void TeleportToPartner(UObject* pawn, double now) {
         DebugError("End the debug test session before teleporting to a partner");
         return;
     }
-    if (!pawn || g_motion.Empty() || now - g_lastRecv > kPeerTimeout || !EndPassenger(false)) return;
+    if (!pawn || g_motion.Empty() || now - g_lastRecv > PeerTimeout() || !EndPassenger(false)) return;
     const auto& s = g_motion.Latest();
     if (!(s.flags & kHasPawn)) return;
     Call riding(pawn, "IsInVehicle");
-    if (riding.invoke() && riding.get<bool>("ReturnValue")) {
-        g_settingsError = "Dismount before teleporting";
-        return;
+    bool inVehicle = riding.invoke() && riding.get<bool>("ReturnValue");
+    UObject* target = pawn;
+    if (inVehicle) {
+        Call getVeh(pawn, "GetVehicle");
+        if (getVeh.invoke()) {
+            auto v = getVeh.get<UObject*>("ReturnValue");
+            if (IsLive(v)) target = v;
+        }
     }
     FVector origin = WorldOrigin(pawn);
     float yaw = s.yaw * 3.14159265f / 180.f;
-    FVector dest{s.pos.x - origin.x + std::cos(yaw) * 150.f, s.pos.y - origin.y + std::sin(yaw) * 150.f,
-                 s.pos.z - origin.z + 120.f};
-    if (!Call(pawn, "K2_SetActorLocation").set("NewLocation", dest).setBool("bSweep", false)
+    FVector dest{s.pos.x - origin.x + std::cos(yaw) * 200.f, s.pos.y - origin.y + std::sin(yaw) * 200.f,
+                 s.pos.z - origin.z + (inVehicle ? 40.f : 100.f)};
+    if (!Call(target, "K2_SetActorLocation").set("NewLocation", dest).setBool("bSweep", false)
             .setBool("bTeleport", true).invoke()) {
         g_settingsError = "Teleport failed; check the plugin log";
         return;
     }
-    Log("teleported to partner %s", g_remoteName.c_str());
+    if (!inVehicle && IsLive(g_localBike)) {
+        FVector bikeDest{dest.x - std::sin(yaw) * 220.f, dest.y + std::cos(yaw) * 220.f, dest.z};
+        FVector start{bikeDest.x, bikeDest.y, dest.z + 50.f};
+        FVector end{bikeDest.x, bikeDest.y, dest.z - 400.f};
+        FVector ground{};
+        if (TraceWorld(start, end, &ground) == 1) {
+            bikeDest.z = ground.z + 15.f;
+        } else {
+            bikeDest.z += 15.f;
+        }
+        Call(g_localBike, "K2_SetActorLocation").set("NewLocation", bikeDest).setBool("bSweep", true)
+            .setBool("bTeleport", true).invoke();
+        auto root = Prop(g_localBike, "RootComponent");
+        if (root) Call(root, "WakeRigidBody").invoke();
+    }
+    Log("teleported to partner %s (mounted=%d)", g_remoteName.c_str(), inVehicle);
 }
 
 void HandleTeleport(UObject* pawn, double now) {
@@ -3919,10 +4075,57 @@ bool InGameplay(UObject* pawn) {
     return !menu && !loading.get<bool>("ReturnValue");
 }
 
+void RecallBikeToPlayer(UObject* pawn) {
+    if (!IsLive(pawn) || !IsLive(g_localBike) || !InGameplay(pawn)) return;
+    Call riding(pawn, "IsInVehicle");
+    if (riding.invoke() && riding.get<bool>("ReturnValue")) return;
+    Call me(pawn, "K2_GetActorLocation"), facing(pawn, "K2_GetActorRotation");
+    if (me.invoke() && facing.invoke()) {
+        auto pos = me.get<FVector>("ReturnValue");
+        auto rot = facing.get<FRotator>("ReturnValue");
+        float yaw = rot.yaw * 3.14159265f / 180.f;
+        FVector dest{pos.x + std::cos(yaw) * 220.f, pos.y + std::sin(yaw) * 220.f, pos.z};
+
+        float halfHeight = 96.0f;
+        auto capsule = Prop(pawn, "CapsuleComponent");
+        if (capsule && GetProp(capsule, "CapsuleHalfHeight", halfHeight) && halfHeight > 0) {
+            dest.z = pos.z - halfHeight;
+        } else {
+            dest.z = pos.z - 96.0f;
+        }
+
+        FVector start{dest.x, dest.y, pos.z + 50.f};
+        FVector end{dest.x, dest.y, pos.z - 400.f};
+        FVector ground{};
+        if (TraceWorld(start, end, &ground) == 1) {
+            dest.z = ground.z + 15.f;
+        } else {
+            dest.z += 15.f;
+        }
+
+        Call(g_localBike, "K2_SetActorLocationAndRotation")
+            .set("NewLocation", dest)
+            .set("NewRotation", rot)
+            .setBool("bSweep", true)
+            .setBool("bTeleport", true)
+            .invoke();
+
+        auto root = Prop(g_localBike, "RootComponent");
+        if (root) Call(root, "WakeRigidBody").invoke();
+
+        Log("bike: recalled to player ground (%.0f, %.0f, %.0f)", dest.x, dest.y, dest.z);
+        g_events.Add("Recalled bike to player");
+    }
+}
+
+void HandleRecallBike(UObject* pawn) {
+    (void)pawn;
+}
+
 double g_lastHudTick = -1;
 
 bool PartnerConnected(double now) {
-    return now - g_lastRecv < kPeerTimeout;
+    return now - g_lastRecv < PeerTimeout();
 }
 
 std::string PartnerName() {
@@ -3956,6 +4159,7 @@ void LeaveSession(bool announce) {
     g_kind = session::Kind::None;
     g_net = &g_udp;
     ResetPartner();
+    SaveGuardDisable();
 }
 
 void HostSteamSession() {
@@ -4184,18 +4388,12 @@ bool g_teleportAfterLoad = false;
 // A guest in gameplay switches to the host's save as soon as it is installed: the newest save in the
 // sandbox is the host's, so an in-place reload loads it. Retried while the pins say it has not loaded.
 void LoadAdoptedSave(double now) {
-    static double nextAttempt = 0;
-    if (!SaveGuardPinned() || !IsLive(g_pawn) || g_saveLoading || now < nextAttempt) return;
-    if (auto manager = FindWorldManager()) {
-        Call cinematic(manager, "GetIsCinematicActive");
-        if (cinematic.invoke() && cinematic.get<bool>("ReturnValue")) return;
-    }
-    nextAttempt = now + 30;
-    ui::Notify("Theys Gone", "Loading the host's save");
-    if (!ReloadNewestSave()) Log("save transfer: cannot reload in place; quit to the main menu and Continue");
+    (void)now;
+    // Disabled mid-game in-place reloads: ReloadBecauseOfJobFailure kills the active player,
+    // causes a black screen hitch and interrupts co-op gameplay.
 }
 
-bool CinematicActive() {
+[[maybe_unused]] bool CinematicActive() {
     auto manager = FindWorldManager();
     if (!manager) return false;
     Call cinematic(manager, "GetIsCinematicActive");
@@ -4341,7 +4539,7 @@ void SampleStory(double now) {
 // Host: publish the progress of its last save. Guest: once that differs from the progress it is
 // playing, download the host's newer save and reload into it at the next quiet moment.
 void UpdateStory(double now) {
-    bool connected = now - g_lastRecv < kPeerTimeout;
+    bool connected = now - g_lastRecv < PeerTimeout();
     if (g_story.savePending && IsLive(g_pawn) && !g_saveLoading) {
         g_story.savePending = false;
         g_story.sampledAt = -1e9;
@@ -4367,29 +4565,49 @@ void UpdateStory(double now) {
         g_net->SendRaw(&packet, sizeof packet);
         return;
     }
-    if (!g_story.haveHost || !SaveGuardAdopted() || SaveGuardPinned() || g_saveLoading) return;
+    if (!g_story.haveHost) return;
     SampleStory(now);
     if (g_story.host.savedSignature != g_story.loggedHost) {
         g_story.loggedHost = g_story.host.savedSignature;
         Log("story: host saved progress %08x (%u of %u complete); ours %08x (%u of %u)", g_story.host.savedSignature,
             g_story.host.completed, g_story.host.unlocked, g_story.mine.hash, g_story.mine.completed, g_story.mine.unlocked);
     }
-    if (!StoryNeedsResync(g_story.host, g_story.mine, g_story.lastResynced)) {
-        g_story.mismatchSince = -1;
-        return;
-    }
-    if (g_story.mismatchSince < 0) g_story.mismatchSince = now;
-    if (now - g_story.mismatchSince < kStoryResyncDelay || CinematicActive()) return;
-    if (!SaveTransferResync()) return;
-    g_story.lastResynced = g_story.host.savedSignature;
-    g_story.mismatchSince = -1;
-    Log("story: host progress %08x differs from ours %08x; fetching the host's save", g_story.host.savedSignature,
-        g_story.mine.hash);
-    ui::Notify("Theys Gone", "Host made progress: syncing to their save");
+}
+
+static std::atomic<bool> s_loadingHeartbeatActive{false};
+static std::thread s_loadingHeartbeatThread;
+
+void StartLoadingHeartbeat() {
+    if (s_loadingHeartbeatActive.load()) return;
+    s_loadingHeartbeatActive.store(true);
+    if (s_loadingHeartbeatThread.joinable()) s_loadingHeartbeatThread.detach();
+    s_loadingHeartbeatThread = std::thread([]() {
+        Log("save transfer: level load started; background heartbeat active");
+        while (s_loadingHeartbeatActive.load()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(300));
+            if (!s_loadingHeartbeatActive.load()) break;
+            if (g_net && g_session) {
+                StatePacket p{};
+                p.magic = kMagic;
+                p.version = kProtocolVersion;
+                p.session = g_session;
+                p.targetSession = g_peer.session;
+                p.consent = g_consent;
+                p.flags = kAlive;
+                g_net->Send(p);
+            }
+        }
+        Log("save transfer: level load finished; background heartbeat ended");
+    });
+}
+
+void StopLoadingHeartbeat() {
+    s_loadingHeartbeatActive.store(false);
+    if (s_loadingHeartbeatThread.joinable()) s_loadingHeartbeatThread.detach();
 }
 
 void ObserveSaveEvent(UObject* obj, UObject* fn, void* parms) {
-    if (!IsLive(obj) || !IsLive(fn)) return;
+    if (!fn) return;
     enum Kind : uint8_t { kIgnored, kSaveEvent, kLoadStarted, kLoaded };
     static std::unordered_map<int32_t, Kind> saveNames;
     auto found = saveNames.find(fn->name.index);
@@ -4402,6 +4620,7 @@ void ObserveSaveEvent(UObject* obj, UObject* fn, void* parms) {
         found = saveNames.emplace(fn->name.index, kind).first;
     }
     if (found->second == kIgnored) return;
+    if (!IsLive(obj) || !IsLive(fn)) return;
     if (!SaveGuardActive()) {
         // Host or solo: our own save is authoritative; remember what it now contains.
         if (found->second == kSaveEvent) g_story.savePending = true;
@@ -4413,11 +4632,13 @@ void ObserveSaveEvent(UObject* obj, UObject* fn, void* parms) {
         if (!g_saveLoading) {
             g_loadAfterAdopt = SaveGuardAdopted();
             g_loadStartedAt = Now();
+            StartLoadingHeartbeat();
         }
         g_saveLoading = true;
         return;
     }
     if (found->second == kLoaded) {
+        StopLoadingHeartbeat();
         bool adoptedLoad = g_saveLoading && g_loadAfterAdopt;
         g_saveLoading = g_loadAfterAdopt = false;
         if (adoptedLoad && SaveGuardPinned()) {
@@ -4433,7 +4654,7 @@ void ObserveSaveEvent(UObject* obj, UObject* fn, void* parms) {
 
 void Tick(bool hudFrame) {
     double wall = Now();
-    if (!hudFrame && (wall - g_lastHudTick < 0.5 || wall - g_lastTick < kTickInterval)) return;
+    if (!hudFrame && wall - g_lastTick < kTickInterval) return;
     g_lastTick = wall;
     if (!g_ready) {
         if (!ResolveEngine()) {
@@ -4458,7 +4679,7 @@ void Tick(bool hudFrame) {
     }
     double now = g_frameClock.Update(wall, engineTime, engineValid);
     g_tickNow = now;
-    if (now - g_lastScan >= 1.0 || !IsLive(g_controller)) {
+    if (now - g_lastScan >= (IsLive(g_controller) ? 1.0 : 0.5)) {
         g_lastScan = now;
         auto controller = FindLocalController();
         if (controller != g_controller) {
@@ -4478,7 +4699,7 @@ void Tick(bool hudFrame) {
         g_localAppearance.Clear();
         ++g_consent;
         g_pawn = pawn;
-        g_localSettledAt = now + 5.0;
+        g_localSettledAt = now + 0.1;
     }
     if (g_pawn && g_cfg.discovery && g_pawn != g_discoveredPawn) {
         g_discoveredPawn = g_pawn;
@@ -4489,7 +4710,7 @@ void Tick(bool hudFrame) {
         DiscoverDebug(g_pawn);
     }
     static bool wasAlive = false, wasConnected = false;
-    bool alive = g_pawn && Alive(g_pawn), connected = now - g_lastRecv < kPeerTimeout;
+    bool alive = g_pawn && Alive(g_pawn), connected = now - g_lastRecv < PeerTimeout();
     if (alive != wasAlive || (wasConnected && !connected)) ++g_consent;
     if (wasConnected && !connected && !g_announcedPartner.empty()) {
         g_events.Add(g_announcedPartner + " disconnected");
@@ -4517,10 +4738,10 @@ void Tick(bool hudFrame) {
     static double teleportAt = -1;
     if (g_teleportAfterLoad) {
         g_teleportAfterLoad = false;
-        teleportAt = now + 5.0;
+        teleportAt = now + 1.0;
     }
     if (teleportAt >= 0 && now >= teleportAt && g_pawn && now >= g_localSettledAt && !g_motion.Empty() &&
-        now - g_lastRecv < kPeerTimeout) {
+        now - g_lastRecv < PeerTimeout()) {
         teleportAt = -1;
         Log("save transfer: moving to the host after loading its save");
         TeleportToPartner(g_pawn, now);
@@ -4534,9 +4755,23 @@ void Tick(bool hudFrame) {
     UpdateBike(g_pawn, now);
     UpdatePassenger(now);
     PollMelee();
-    if (now >= g_nextSend) {
-        g_nextSend += kSendInterval;
-        if (g_nextSend <= now) g_nextSend = now + kSendInterval;
+    if (g_settings.godMode && IsLive(g_pawn)) {
+        SetBoolProp(g_pawn, "bCanBeDamaged", false);
+        float maxHealth = 100.f;
+        GetProp(g_pawn, "MaxHealth", maxHealth);
+        if (maxHealth < 100.f) maxHealth = 100.f;
+        SetProp<float>(g_pawn, "Health", maxHealth);
+    }
+    if (g_settings.infiniteStamina && IsLive(g_pawn)) {
+        float maxStamina = 100.f;
+        GetProp(g_pawn, "MaxStamina", maxStamina);
+        if (maxStamina < 100.f) maxStamina = 100.f;
+        SetProp<float>(g_pawn, "Stamina", maxStamina);
+        SetProp<float>(g_pawn, "Focus", 100.f);
+    }
+    bool shouldSend = hudFrame || (now >= g_nextSend);
+    if (shouldSend) {
+        g_nextSend = now + kSendInterval;
         SendLocalState(g_pawn, now);
     }
     UpdateAvatar(g_pawn, now);
@@ -4549,6 +4784,8 @@ void Tick(bool hudFrame) {
     MenuOnline online;
     if (g_steam.Available()) {
         online.enabled = true;
+        online.isHost = IsHost();
+        online.hasPartner = PartnerConnected(now);
         if (g_menu.IsOpen()) g_steam.RefreshFriends(now);
         const auto& friends = g_steam.Friends();
         if (g_joinChoice >= friends.size()) g_joinChoice = 0;
@@ -4568,15 +4805,24 @@ void Tick(bool hudFrame) {
         }
         if (actions.invite) g_steam.Invite();
         if (actions.join && g_joinChoice < friends.size()) JoinSteamSession(friends[g_joinChoice].lobby);
+        if (actions.transferHost && g_steam.InLobby()) g_steam.TransferHost();
     }
-    if (actions.passenger || actions.teleport || actions.invite) g_menu.Close(g_controller);
+    if (actions.passenger || actions.teleport || actions.invite || actions.recallBike) g_menu.Close(g_controller);
     if (actions.passenger) TogglePassenger(now);
     if (actions.teleport) TeleportToPartner(g_pawn, now);
+    if (actions.recallBike && g_pawn) RecallBikeToPlayer(g_pawn);
+    if (actions.refuelRepairBike && IsLive(g_localBike)) {
+        Call(g_localBike, "SetFuel").set("Fuel", 100.0f).invoke();
+        SetProp<float>(g_localBike, "Fuel", 100.0f);
+        Call(g_localBike, "RepairVehicle").invoke();
+        SetProp<float>(g_localBike, "Damage", 0.0f);
+        g_events.Add("Bike repaired & refueled 100%");
+    }
     UpdateRidePrompt(now);
     if (g_menu.IsOpen()) {
         Call viewport(g_controller, "GetViewportSize");
         if (viewport.invoke()) {
-            std::string status = now - g_lastRecv < kPeerTimeout ? "Connected: " + PartnerName() :
+            std::string status = now - g_lastRecv < PeerTimeout() ? "Connected: " + PartnerName() :
                                  g_kind == session::Kind::Steam ? g_steam.Status() :
                                  g_kind == session::Kind::LanHost ? "Hosting a LAN game; waiting for a partner" :
                                  g_kind == session::Kind::LanJoin ? "Connecting to the LAN host..." :
@@ -4606,7 +4852,10 @@ void Tick(bool hudFrame) {
         if (down && !held && g_pawn) Discover(g_pawn);
         held = down;
     }
-    if (!g_menu.IsOpen()) HandleTeleport(g_pawn, now);
+    if (!g_menu.IsOpen()) {
+        HandleTeleport(g_pawn, now);
+        HandleRecallBike(g_pawn);
+    }
     static double profileStart = now, total = 0, peak = 0;
     static uint64_t frames = 0, previousReceived = 0, previousSent = 0;
     double elapsed = (Now() - wall) * 1000;
@@ -4657,8 +4906,12 @@ void HookedProcessEvent(UObject* obj, UObject* fn, void* parms) {
     }
     if (!g_failed && !g_inTick && GetCurrentThreadId() == g_gameThread) {
         g_inTick = true;
-        static int hudTick = 0;
-        if (g_ready && !hudTick) hudTick = FindNameIndex("ReceiveDrawHUD");
+        static int hudTick = -1;
+        static double lastHudLookup = 0;
+        if (g_ready && hudTick < 0 && Now() - lastHudLookup >= 2.0) {
+            lastHudLookup = Now();
+            hudTick = FindNameIndex("ReceiveDrawHUD");
+        }
         bool hudFrame = g_ready && fn && fn->name.index == hudTick && IsLive(g_controller) &&
             obj == Prop(g_controller, "MyHUD");
         if (hudFrame) {
@@ -4666,6 +4919,11 @@ void HookedProcessEvent(UObject* obj, UObject* fn, void* parms) {
             g_lastHudTick = Now();
         }
         Tick(hudFrame);
+        if (IsLive(g_controller)) {
+            bool inGameplay = g_pawn && InGameplay(g_pawn);
+            bool showCursor = !inGameplay ? true : ui::CursorNeeded(g_controller);
+            SetBoolProp(g_controller, "bShowMouseCursor", showCursor);
+        }
         g_inTick = false;
     }
     if (g_ready && g_cfg.discovery && !g_inTick && fn) {
@@ -4696,7 +4954,7 @@ void HookedProcessEvent(UObject* obj, UObject* fn, void* parms) {
     }
     if (g_ready && research::Tracing() && GetCurrentThreadId() == g_gameThread && !g_inTick)
         research::TraceEvent(obj, fn, parms);
-    bool ownUi = g_ready && !g_inTick && GetCurrentThreadId() == g_gameThread && IsLive(obj) && IsLive(fn);
+    bool ownUi = g_ready && !g_inTick && GetCurrentThreadId() == g_gameThread && ui::IsUiWidget(obj);
     if (ownUi) {
         g_inTick = true;
         bool swallow = ui::BeforeEvent(obj, fn, parms);
@@ -4717,8 +4975,38 @@ void HookedProcessEvent(UObject* obj, UObject* fn, void* parms) {
     }
     if (g_ready && g_cfg.hostSave && GetCurrentThreadId() == g_gameThread)
         ObserveSaveEvent(obj, fn, parms);
+    if (g_ready && fn && parms && g_kind != session::Kind::None && PartnerConnected(Now())) {
+        static int s_idxSetGamePaused = -1;
+        static int s_idxSetGlobalTimeDilation = -1;
+        static int s_offsetPaused = -1;
+        static int s_offsetDilation = -1;
+        static double s_lastLookup = 0;
+        if (s_idxSetGamePaused < 0 && Now() - s_lastLookup >= 2.0) {
+            s_lastLookup = Now();
+            s_idxSetGamePaused = FindNameIndex("SetGamePaused");
+            s_idxSetGlobalTimeDilation = FindNameIndex("SetGlobalTimeDilation");
+        }
+        if (fn->name.index == s_idxSetGamePaused) {
+            if (s_offsetPaused < 0) {
+                auto prop = FindChild(fn, "bPaused");
+                s_offsetPaused = prop ? PropertyOffset(prop) : 8;
+            }
+            if (s_offsetPaused >= 0) {
+                *reinterpret_cast<uint8_t*>(reinterpret_cast<uint8_t*>(parms) + s_offsetPaused) = 0;
+            }
+        } else if (fn->name.index == s_idxSetGlobalTimeDilation) {
+            if (s_offsetDilation < 0) {
+                auto prop = FindChild(fn, "TimeDilation");
+                s_offsetDilation = prop ? PropertyOffset(prop) : 8;
+            }
+            if (s_offsetDilation >= 0) {
+                float* pDilation = reinterpret_cast<float*>(reinterpret_cast<uint8_t*>(parms) + s_offsetDilation);
+                if (*pDilation < 1.0f) *pDilation = 1.0f;
+            }
+        }
+    }
     g.processEvent(obj, fn, parms);
-    if (ownUi && IsLive(obj)) {
+    if (ownUi) {
         g_inTick = true;
         ui::AfterEvent(obj, fn);
         g_inTick = false;
@@ -4775,7 +5063,7 @@ Config LoadConfig(const std::wstring& ini) {
     c.animRun = IniString(ini, L"AnimRun", c.animRun.c_str());
     c.animSprint = IniString(ini, L"AnimSprint", c.animSprint.c_str());
     c.teleportKey = GetPrivateProfileIntW(L"Coop", L"TeleportKey", c.teleportKey, ini.c_str());
-    c.poseRate = std::clamp(static_cast<int>(GetPrivateProfileIntW(L"Coop", L"PoseRate", c.poseRate, ini.c_str())), 10, 30);
+    c.poseRate = std::clamp(static_cast<int>(GetPrivateProfileIntW(L"Coop", L"PoseRate", c.poseRate, ini.c_str())), 10, 120);
     c.poseFace = GetPrivateProfileIntW(L"Coop", L"PoseFace", 0, ini.c_str()) != 0;
     std::string transport = IniString(ini, L"Transport", "menu");
     std::transform(transport.begin(), transport.end(), transport.begin(),
@@ -4784,6 +5072,7 @@ Config LoadConfig(const std::wstring& ini) {
     if (!c.autoLan && transport != "menu") Log("config: unknown Transport '%s'; using menu", transport.c_str());
     c.lobbyVisibility = IniString(ini, L"Visibility", c.lobbyVisibility.c_str());
     c.steamPumpCallbacks = GetPrivateProfileIntW(L"Coop", L"SteamPumpCallbacks", 0, ini.c_str()) != 0;
+    c.nativeMenu = GetPrivateProfileIntW(L"Coop", L"NativeMenu", 1, ini.c_str()) != 0;
     return c;
 }
 
@@ -4823,7 +5112,7 @@ bool Install(const std::wstring& basePath) {
     if (!session::ParseVisibility(g_cfg.lobbyVisibility, visibility))
         Log("config: unknown Visibility '%s'; using friends", g_cfg.lobbyVisibility.c_str());
     g_steam.SetVisibility(visibility);
-    ui::Configure(g_cfg.menuDiscovery);
+    ui::Configure(g_cfg.menuDiscovery, g_cfg.nativeMenu);
     Log("config: transport=%s port=%u peer=%s:%u name=%s visibility=%s", g_cfg.autoLan ? "udp (LAN at launch)" : "menu",
         g_cfg.port, g_cfg.peerHost.empty() ? "(host mode)" : g_cfg.peerHost.c_str(), g_cfg.peerPort,
         g_cfg.playerName.empty() ? "(Steam name)" : g_cfg.playerName.c_str(), session::VisibilityName(visibility));
@@ -4843,7 +5132,7 @@ bool Install(const std::wstring& basePath) {
     g.objectArray = reinterpret_cast<uint8_t*>(g.imageBase + kObjectArrayRva);
     if (!InstallHook(reinterpret_cast<uint8_t*>(g.imageBase + kProcessEventRva))) return false;
     Log("ProcessEvent hook installed");
-    StartOverlay();
+    // StartOverlay(); // Disabled: eliminates DXGI swapchain contention and lag
     return true;
 }
 

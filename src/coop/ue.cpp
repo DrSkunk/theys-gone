@@ -17,20 +17,38 @@ constexpr int kNamesPerChunk = 16384;
 constexpr int kNameChunks = 128;
 constexpr int kNameEntryString = 0x12; // Bend adds a 16-bit field before the string (stock 4.10: 0x10)
 
+struct MemoryRegion {
+    uintptr_t base = 0;
+    uintptr_t limit = 0;
+    bool readable = false;
+};
+constexpr size_t kRegionCacheSize = 256;
+static MemoryRegion s_regionCache[kRegionCacheSize]{};
+
 bool Readable(const void* p, size_t len) {
-    static uintptr_t lo = 0, hi = 0;
     auto a = reinterpret_cast<uintptr_t>(p);
     if (a < 0x10000 || a > 0x7ffffffffff0) return false;
-    if (a >= lo && a + len <= hi) return true;
+    size_t slot = (a >> 12) & (kRegionCacheSize - 1);
+    const auto& cached = s_regionCache[slot];
+    if (a >= cached.base && a + len <= cached.limit) return cached.readable;
+
     MEMORY_BASIC_INFORMATION mbi{};
-    if (!VirtualQuery(p, &mbi, sizeof(mbi)) || mbi.State != MEM_COMMIT) return false;
-    if (mbi.Protect & (PAGE_GUARD | PAGE_NOACCESS)) return false;
-    if (!(mbi.Protect & (PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_READ |
-                         PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY)))
+    if (!VirtualQuery(p, &mbi, sizeof(mbi)) || mbi.State != MEM_COMMIT) {
+        uintptr_t base = reinterpret_cast<uintptr_t>(mbi.BaseAddress);
+        s_regionCache[slot] = {base, base + (mbi.RegionSize ? mbi.RegionSize : 4096), false};
         return false;
-    lo = reinterpret_cast<uintptr_t>(mbi.BaseAddress);
-    hi = lo + mbi.RegionSize;
-    return a + len <= hi;
+    }
+    if (mbi.Protect & (PAGE_GUARD | PAGE_NOACCESS)) {
+        uintptr_t base = reinterpret_cast<uintptr_t>(mbi.BaseAddress);
+        s_regionCache[slot] = {base, base + mbi.RegionSize, false};
+        return false;
+    }
+    bool ok = (mbi.Protect & (PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_READ |
+                             PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY)) != 0;
+    uintptr_t lo = reinterpret_cast<uintptr_t>(mbi.BaseAddress);
+    uintptr_t hi = lo + mbi.RegionSize;
+    s_regionCache[slot] = {lo, hi, ok};
+    return ok && (a + len <= hi);
 }
 
 const uint8_t* EntryAt(const uint8_t* names, int32_t index) {
@@ -55,8 +73,13 @@ bool EntryIs(const uint8_t* names, int32_t index, const char* text) {
 
 int32_t NameCount() { return *reinterpret_cast<const int32_t*>(g.names + kNameChunks * 8); }
 
-std::unordered_map<std::string, int32_t>& NameCache() {
-    static std::unordered_map<std::string, int32_t> cache;
+struct CachedName {
+    int32_t index = -1;
+    ULONGLONG retryAt = 0;
+};
+
+std::unordered_map<std::string, CachedName>& NameCache() {
+    static std::unordered_map<std::string, CachedName> cache;
     return cache;
 }
 
@@ -138,17 +161,23 @@ std::string NameString(int32_t index) {
 }
 
 int32_t FindNameIndex(const char* s) {
+    if (!s || !*s) return -1;
     auto& cache = NameCache();
-    if (auto it = cache.find(s); it != cache.end()) return it->second;
+    ULONGLONG now = GetTickCount64();
+    if (auto it = cache.find(s); it != cache.end()) {
+        if (it->second.index >= 0) return it->second.index;
+        if (now < it->second.retryAt) return -1;
+    }
     int32_t n = NameCount();
     for (int32_t i = 0; i < n; ++i) {
         auto e = EntryAt(g.names, i);
         if (e && !(*reinterpret_cast<const int32_t*>(e) & 1) &&
             std::strcmp(reinterpret_cast<const char*>(e + kNameEntryString), s) == 0) {
-            cache[s] = i;
+            cache[s] = {i, 0};
             return i;
         }
     }
+    cache[s] = {-1, now + 3000};
     return -1;
 }
 
@@ -213,8 +242,9 @@ std::string Name(const UObject* obj) {
 std::string FullName(const UObject* obj) {
     if (!obj) return "None";
     std::string path = Name(obj);
-    for (auto o = obj->outer; o; o = o->outer) path = Name(o) + "." + path;
-    return Name(obj->cls) + " " + path;
+    int depth = 0;
+    for (auto o = obj->outer; o && ++depth < 32; o = o->outer) path = Name(o) + "." + path;
+    return (obj->cls ? Name(obj->cls) : "InvalidClass") + " " + path;
 }
 
 UObject* Super(const UObject* s) {
@@ -223,7 +253,8 @@ UObject* Super(const UObject* s) {
 
 bool IsA(const UObject* obj, const UObject* cls) {
     if (!obj || !cls) return false;
-    for (auto c = obj->cls; c; c = Super(c))
+    int depth = 0;
+    for (auto c = obj->cls; c && ++depth < 32; c = Super(c))
         if (c == cls) return true;
     return false;
 }
@@ -234,6 +265,7 @@ bool IsDefaultOrArchetype(const UObject* obj) {
 
 // Accepts a short object name or "Outer.Name" (e.g. "/Game/Animation/Deacon/run/run.Run").
 UObject* FindObject(const char* name, const UObject* cls) {
+    if (!name || !*name) return nullptr;
     static std::unordered_map<std::string, std::unordered_map<const UObject*, CachedLookup>> cache;
     auto& entry = cache[name][cls];
     if (auto object = entry.Get()) return object;
@@ -316,6 +348,20 @@ bool GetBoolProp(UObject* obj, const char* name, bool& out, uint8_t* maskOut) {
     auto value = *(reinterpret_cast<const uint8_t*>(obj) + PropertyOffset(property) + byteOffset);
     out = (value & byteMask) != 0;
     if (maskOut) *maskOut = byteMask;
+    return true;
+}
+
+bool SetBoolProp(UObject* obj, const char* name, bool in) {
+    if (!IsLive(obj)) return false;
+    auto property = FindChild(obj->cls, name);
+    if (!property) return false;
+    auto fields = reinterpret_cast<const uint8_t*>(property) + 0x78;
+    if (!ReadableMemory(fields, 4)) return false;
+    uint8_t fieldSize = fields[0], byteOffset = fields[1], byteMask = fields[2];
+    if (!fieldSize || fieldSize > 8 || byteOffset >= fieldSize || !byteMask) return false;
+    auto ptr = reinterpret_cast<uint8_t*>(obj) + PropertyOffset(property) + byteOffset;
+    if (in) *ptr |= byteMask;
+    else *ptr &= ~byteMask;
     return true;
 }
 

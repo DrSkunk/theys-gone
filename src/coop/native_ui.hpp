@@ -14,7 +14,8 @@ struct Command {
 
 // Native Days Gone menus: a CO-OP row on the title menu, a CO-OP category in the pause menu, the session
 // pages rendered into the game's own widgets, and HUD notifications for session events.
-void Configure(bool trace);
+void Configure(bool trace, bool nativeMenu = true);
+bool IsUiWidget(ue::UObject* obj);
 // Before the original ProcessEvent; true swallows the event (the game never sees it).
 bool BeforeEvent(ue::UObject* obj, ue::UObject* fn, void* parms);
 // After the original ProcessEvent.
@@ -25,6 +26,7 @@ std::vector<Command> TakeCommands();
 // The page the open CO-OP menu shows (Root when closed).
 session::Page CurrentPage();
 bool MenuOpen();
+bool CursorNeeded(ue::UObject* controller);
 // Shows a native HUD notification; false when no HUD is available (title menu, loading).
 bool Notify(const std::string& title, const std::string& body);
 // A centred HUD caption above the native interact prompt; empty hides it.

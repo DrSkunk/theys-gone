@@ -30,6 +30,7 @@ public:
     void Join(uint64_t lobby);
     void Leave();
     void Invite();
+    bool TransferHost();
     void RefreshFriends(double now);
     // Applies to the current lobby when this player owns it, and to the next hosted lobby.
     void SetVisibility(session::Visibility visibility);

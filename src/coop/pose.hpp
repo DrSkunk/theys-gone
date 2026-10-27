@@ -391,7 +391,13 @@ public:
             if (Offset(senderMs, f.timeMs) >= 0) before = &f;
             else if (!after) after = &f;
         }
-        if (!before && !after) return false;
+        if (!before && !after) {
+            if (auto latest = Latest()) {
+                out = *latest;
+                return true;
+            }
+            return false;
+        }
         if (!before || !after) {
             out = before ? *before : *after;
             return true;

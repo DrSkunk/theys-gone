@@ -360,8 +360,7 @@ bool SaveGuardEnable() {
     if (!g_installed) return false;
     std::error_code error;
     std::filesystem::remove_all(g_discard, error);
-    std::filesystem::remove_all(g_root, error);
-    std::filesystem::create_directories(g_discard, error);
+        std::filesystem::create_directories(g_discard, error);
     if (!error) std::filesystem::create_directories(g_root, error);
     if (error) {
         Log("save guard: cannot prepare sandbox %s (%s)", Narrow(g_root).c_str(), error.message().c_str());
@@ -371,6 +370,18 @@ bool SaveGuardEnable() {
     Log("save guard: guest save sandbox active until restart; SaveGames writes go to %s", Narrow(g_root).c_str());
     return true;
 }
+
+void SaveGuardDisable() {
+    AcquireSRWLockExclusive(&g_lock);
+    g_active.store(false);
+    g_exclusive.store(false);
+    g_pinned.clear();
+    g_deleted.clear();
+    ReleaseSRWLockExclusive(&g_lock);
+    Log("save guard: disabled; original saves restored for solo play");
+}
+
+const std::wstring& SaveGuardRoot() { return g_root; }
 
 bool SaveGuardActive() { return g_active; }
 bool SaveGuardAdopted() { return g_exclusive; }
