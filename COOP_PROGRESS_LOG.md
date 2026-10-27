@@ -345,3 +345,39 @@ flowchart LR
 
 
 
+
+
+---
+
+### [October 27, 2026] — Milestone 4: Passenger Ride Prompt Crash Fix (`0xC0000005`)
+- **Symptom:** Aziz's game crashed with a fatal access violation (`0xC0000005`) at `18:01:16` whenever approaching or boarding SlouMa's motorcycle.
+- **Root Cause:**
+  - `ride_prompt.cpp`: `SetText()` converted `"Ride with SlouMa"` into a stack-allocated `std::wstring wide`. As soon as `SetText()` returned, the string was destructed. When Slate rendered the 3D interact prompt, it read deallocated stack memory, causing an access violation.
+  - Rapid Actor Churn: `BP_BasicInteractBase_C` was being spawned and destroyed 10-20 times per second when motorcycle speeds hovered around 200.
+  - Proximity Check Missing: `UpdateRidePrompt` attempted to evaluate and spawn prompts even from across the map.
+- **Resolution:**
+  - Replaced stack strings with persistent static buffers (`s_wide`, `s_empty`).
+  - Switched from rapid spawn/destroy to persistent actor toggling via `SetActorHiddenInGame(true/false)` and `EnableOrDisableInteraction(true/false)`.
+  - Added strict 400 cm proximity guard (`distSq <= 400.0f * 400.0f`).
+  - Added clean lifecycle destruction in `DestroyBike()`.
+- **Status:** **Verified Fixed & Deployed.**
+
+---
+
+### [October 27, 2026] — Milestone 5: Smart Merge (Upstream v0.5.1 + Phase 1 Engine + Spacewar)
+- **Symptom:** Testing upstream v0.5.1 raw resulted in a 19.65-second game freeze (`peak=19650ms`) on Aziz's PC due to missing GNames/VirtualQuery caches. Additionally, uncapped HUD-tick network sending flooded Steam P2P with 180+ packets/sec (88-120 kB/s), causing severe ping latency and buffer bloat.
+- **Resolution:**
+  - Merged DrSkunk v0.5.1 features into isolated branch `feat/merge-v0.5.1`:
+    - Gradual enemy ownership handoff and dynamic free-roam support (`FreeRoam=1`).
+    - Sequenced objective progress synchronization (`MissionObjectiveSync=1`).
+    - Title and main-menu branding pak (`pakchunk99-TheysGone_Brand_P.pak`).
+  - Preserved all Phase 1 stability systems:
+    - 256-slot `Readable` memory cache and negative `FindNameIndex` exponential retry cache.
+    - Single-shot save adoption caching (eliminates 3.5 MB loop).
+    - Steam Spacewar (AppID 480 + `steam_spacewar.dll`) runtime auto-init and invite clipboard URL generation.
+    - Motorcycle ground snapping (`Park` + `LowerKickstand`) and passenger safety routines.
+    - Native pause menu CO-OP category, cheats GUI, and instant hotkeys.
+  - **Latency & Bandwidth Elimination:**
+    - Decoupled network transmission from 144 Hz HUD rendering: capped state packets to clean 60 Hz (`kSendInterval = 1.0 / 60.0`).
+    - Reduced `kEnemyMaxReplicas` from 32 to 10 closest enemies, cutting packet flood by ~70% and completely eliminating Steam Networking socket buffer latency.
+- **Status:** **Verified Fixed, Compiled (2,861,056 bytes, SHA-256: `000FEB1A...`), and Deployed to Host & Aziz.**
