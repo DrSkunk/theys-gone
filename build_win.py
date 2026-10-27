@@ -25,7 +25,7 @@ cmd = [
     "-shared",
     "-static",
     "-s",
-    '-DCOOP_VERSION="0.4.0-spacewar"',
+    '-DCOOP_VERSION="0.5.2"',
     f"-I{source}",
     "-o", "package/TheysGone.asi",
     *cpp_files,

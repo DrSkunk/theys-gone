@@ -111,6 +111,7 @@ enum class Action : uint8_t {
     TransferHost,
     DismountPassenger,
     TogglePassengers,
+    ToggleEnemies,
 };
 
 struct Row {
@@ -135,6 +136,7 @@ struct View {
     bool infiniteStamina = false;
     bool isPassenger = false;
     bool passengers = true;
+    bool enemies = true;
 };
 
 // Main menu rows 0-8 have native mouse targets; the pause list has ten entries.
@@ -167,6 +169,7 @@ inline std::vector<Row> BuildRows(Page page, const View& v) {
             if (v.isPassenger) rows.push_back({"DISMOUNT PASSENGER", Action::DismountPassenger});
             rows.push_back({"RECALL BIKE (GROUND)", Action::RecallBike});
             if (v.connected) rows.push_back({"TELEPORT TO PARTNER", Action::TeleportPartner});
+            rows.push_back({std::string("ENEMY SYNC: ") + (v.enemies ? "ENABLED" : "OFF"), Action::ToggleEnemies});
             rows.push_back({std::string("GOD MODE: ") + (v.godMode ? "ENABLED" : "OFF"), Action::ToggleGodMode});
             rows.push_back({std::string("INFINITE STAMINA: ") + (v.infiniteStamina ? "ENABLED" : "OFF"), Action::ToggleInfiniteStamina});
             rows.push_back({"REPAIR & REFUEL BIKE", Action::RefuelRepairBike});

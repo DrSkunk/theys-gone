@@ -3291,6 +3291,7 @@ struct EnemyReplica {
     std::vector<std::string> paths;
     double lastInfo = -10, lastSpawnAttempt = -10;
     bool missingLogged = false, alive = false;
+    bool hidden = false;
     FVector at{}; // feet, in local engine coordinates
 };
 std::vector<EnemySource> g_enemySources;
@@ -3301,7 +3302,7 @@ struct EnemyStats {
     uint64_t sent = 0, bytes = 0, infos = 0, reads = 0, applied = 0, rejected = 0;
     double readTime = 0;
 } g_enemyStats;
-constexpr size_t kEnemyMaxReplicas = 10;
+constexpr size_t kEnemyMaxReplicas = 8;
 
 bool EnemyReplicationActive(double now) {
     return g_settings.enemies && now - g_lastRecv < PeerTimeout();
@@ -3769,7 +3770,11 @@ void SendEnemies(UObject* pawn, double now) {
         if (!pawn) g_enemyScan.kinds.clear();
         return;
     }
-    StepEnemyScan(pawn);
+    static double lastScanStep = 0;
+    if (now - lastScanStep >= 0.033) {
+        lastScanStep = now;
+        StepEnemyScan(pawn);
+    }
     if (now < g_nextEnemySend) return;
     g_nextEnemySend += kEnemySendInterval;
     if (g_nextEnemySend <= now) g_nextEnemySend = now + kEnemySendInterval;
@@ -3783,6 +3788,7 @@ void DestroyReplica(EnemyReplica& r) {
     r.actor = r.pose = nullptr;
     r.parts.clear();
     r.writer.Reset();
+    r.hidden = false;
 }
 
 void DestroyEnemyReplicas() {
@@ -3858,6 +3864,7 @@ bool SpawnReplica(UObject* context, EnemyReplica& r, uint32_t entity, const FVec
     }
     Log("enemies: replica %u %s with %d bones and %d parts", entity, Name(assets[0]).c_str(),
         static_cast<int>(r.writer.Table().names.size()), static_cast<int>(r.parts.size()));
+    r.hidden = false;
     return true;
 }
 
@@ -3870,10 +3877,19 @@ void UpdateEnemyReplicas(UObject* pawn, double now) {
     double senderMs = g_motion.SenderMs(0.070);
     for (auto it = g_enemyReplicas.begin(); it != g_enemyReplicas.end();) {
         auto& r = it->second;
-        if (now - std::max(r.poses.LastArrival(), r.lastInfo) > kEnemyTimeout) {
+        double age = now - std::max(r.poses.LastArrival(), r.lastInfo);
+        if (age > kEnemyTimeout) {
             if (IsLive(r.actor)) Log("enemies: replica %u expired", it->first);
             DestroyReplica(r);
             it = g_enemyReplicas.erase(it);
+            continue;
+        }
+        if (age > 1.2) {
+            if (IsLive(r.actor) && !r.hidden) {
+                Call(r.actor, "SetActorHiddenInGame").setBool("bNewHidden", true).invoke();
+                r.hidden = true;
+            }
+            ++it;
             continue;
         }
         PoseFrame frame;
@@ -3887,6 +3903,10 @@ void UpdateEnemyReplicas(UObject* pawn, double now) {
             SpawnReplica(pawn, r, it->first, at);
         }
         if (IsLive(r.actor)) {
+            if (r.hidden) {
+                Call(r.actor, "SetActorHiddenInGame").setBool("bNewHidden", false).invoke();
+                r.hidden = false;
+            }
             FRotator facing{0, frame.yaw, 0};
             if (auto root = FindBone(frame, kRootBoneHash)) QuatToRotator(root->q, facing.pitch, facing.yaw, facing.roll);
             Call move(r.actor, "K2_SetActorLocationAndRotation");
@@ -4401,6 +4421,9 @@ void SuppressLocalAI(double now) {
         ReleaseLocalAI();
         return;
     }
+    static double lastSuppress = 0;
+    if (now - lastSuppress < 0.05) return; // 20 Hz max
+    lastSuppress = now;
     static UObject* aiClass = FindClass("BendAIPawn");
     static UObject* areaClass = FindClass("BendAmbientSpawnArea");
     static UObject* crowdClass = FindClass("BendCrowdGenerator");
@@ -4733,6 +4756,7 @@ session::View SessionView(double now) {
     view.infiniteStamina = g_settings.infiniteStamina;
     view.isPassenger = g_passenger.pawn != nullptr;
     view.passengers = g_settings.passengers;
+    view.enemies = g_settings.enemies;
     for (const auto& lobby : g_steam.Friends()) view.friends.push_back(lobby.name);
     for (const auto& lobby : g_steam.PublicLobbies()) view.publicLobbies.push_back(lobby.name);
     for (const auto& host : g_lan.Hosts()) view.lanHosts.push_back(LanHostLabel(host));
@@ -4780,6 +4804,15 @@ void RunMenuCommand(const ui::Command& command) {
     case Action::TogglePassengers:
         g_settings.passengers = !g_settings.passengers;
         g_events.Add(std::string("Allow Passengers: ") + (g_settings.passengers ? "ENABLED" : "OFF"));
+        break;
+    case Action::ToggleEnemies:
+        g_settings.enemies = !g_settings.enemies;
+        SaveSettings();
+        if (!g_settings.enemies) {
+            DestroyEnemyReplicas();
+        }
+        g_events.Add(std::string("Enemy Sync: ") + (g_settings.enemies ? "ENABLED" : "OFF"));
+        ui::Notify("CO-OP SETTINGS", std::string("Enemy Sync: ") + (g_settings.enemies ? "ENABLED" : "OFF"));
         break;
     case Action::RecallBike:
         if (g_pawn) RecallBikeToPlayer(g_pawn);
@@ -5459,7 +5492,6 @@ void Tick(bool hudFrame) {
             Call paused(C.statics, "IsGamePaused");
             if (paused.set("WorldContextObject", g_controller).invoke() && paused.get<bool>("ReturnValue")) {
                 Call(C.statics, "SetGamePaused").set("WorldContextObject", g_controller).setBool("bPaused", false).invoke();
-                Call(g_controller, "SetPause").setBool("bPause", false).invoke();
             }
         }
         static double lastDilationCheck = 0;
@@ -5514,6 +5546,19 @@ void Tick(bool hudFrame) {
             }
         }
         f10Held = f10Down;
+
+        static bool f11Held = false;
+        bool f11Down = (GetAsyncKeyState(VK_F11) & 0x8000) != 0;
+        if (f11Down && !f11Held) {
+            g_settings.enemies = !g_settings.enemies;
+            SaveSettings();
+            if (!g_settings.enemies) {
+                DestroyEnemyReplicas();
+            }
+            ui::Notify("CO-OP SETTINGS", std::string("Enemy Sync: ") + (g_settings.enemies ? "ENABLED" : "OFF"));
+            Log("settings: enemy sync toggled %s", g_settings.enemies ? "ENABLED" : "OFF");
+        }
+        f11Held = f11Down;
     }
     bool shouldSend = (now >= g_nextSend);
     if (shouldSend) {
