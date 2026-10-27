@@ -217,8 +217,9 @@ camp rally).
    Deacon rides on Boozer's. While a story NPC uses the host's pillion, the
    guest must not be offered *Ride with*. **Implemented:** a driver whose
    running mission has the pillion flag stops offering the seat
-   ([`mission_policy.hpp`](../src/coop/mission_policy.hpp)); checked on one PC
-   with `OBR`, not yet in a paired session. `BIP`, `MBF1`, `CLO5` and `IYK`
+   ([`mission_policy.hpp`](../src/coop/mission_policy.hpp)); verified on one PC
+   with a simulated partner across `OBR` and the chained `OBT`, not yet in a
+   paired session. `BIP`, `MBF1`, `CLO5` and `IYK`
    are flagged from cutscene bikes and the walkthrough, not from objective
    text. Other ride-alongs use the companion's own bike
    (`boozerbike`, `rikkibike`, `skizzobike`, `mikebike`, `kouribike` in the
@@ -264,7 +265,8 @@ by starting `OBR`); the per-mission table is
 [`mission_policy.hpp`](../src/coop/mission_policy.hpp), covered by
 `tools/test_protocol.cpp`; the passenger-seat rule (§4.2) uses it.
 
-1. Validate the passenger-seat rule in a paired session.
+1. Validate the partner's side of the passenger-seat rule (hidden prompt,
+   forced dismount) in a paired session.
 2. Live-test the stealth risk (§4.3): it is the only gap that can fail the
    host's mission. If confirmed, limit proxy awareness in `kMissionStealth`
    missions.

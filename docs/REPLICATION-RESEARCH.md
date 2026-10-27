@@ -3443,3 +3443,24 @@ screenshot are in `run1/logs/policy-20261027/`.
 Not tested: no partner was connected, so the cleared `kAcceptPassengers` bit,
 the hidden prompt and the forced dismount were not observed; the mission was
 not completed, so returning to `mission=''` afterwards was not observed.
+
+### Passenger seat with a simulated partner (2026-10-27, single PC)
+
+Backup in `run1/before-onepc-seat-20261027` (28 files); the isolated INI was
+pointed at `fake_peer.py --speed 0` on `127.0.0.1:27778`, and the PR build
+(`172aefb7…7dac`) staged. The fake peer logged the game's state flags
+(`kAcceptPassengers` is bit 32):
+
+| Moment | Game log | Flags seen by the peer | Seat offered |
+|---|---|---|---|
+| Gameplay, no mission | `mission='' missionFlags=0x000` | 737 | yes |
+| `StartMissionFromID` 3 | `mission: active 'OBR' (policy flags 0x023)` | 709 | **no** |
+| `FinishEndingMission` | `mission: active 'OBT' (policy flags 0x001)` (chained) | 739 | yes |
+
+During `OBR` the screen showed Deacon riding behind Boozer, the case the
+pillion flag describes. `StartEndingMission` alone did not end the mission.
+The game was stopped, the backup and INI restored and every hash verified;
+the game log, peer log and screenshot are in `run1/logs/onepc-seat-20261027/`.
+
+Not tested: the guest-side reaction (hidden *Ride with* prompt, forced
+dismount) needs a second game; it uses the existing permission-removal path.
