@@ -56,7 +56,7 @@ namespace {
 constexpr uint8_t kPrologue[19] = {0x40, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56,
                                    0x41, 0x57, 0x48, 0x81, 0xEC, 0xF0, 0x00, 0x00, 0x00};
 constexpr double kTickInterval = 1.0 / 60.0;
-constexpr double kSendInterval = 1.0 / 144.0;
+constexpr double kSendInterval = 1.0 / 60.0;
 constexpr double kPeerTimeout = 5.0;
 constexpr size_t kObjectiveProgressApplyPerTick = 16;
 double PeerTimeout();
@@ -3301,7 +3301,7 @@ struct EnemyStats {
     uint64_t sent = 0, bytes = 0, infos = 0, reads = 0, applied = 0, rejected = 0;
     double readTime = 0;
 } g_enemyStats;
-constexpr size_t kEnemyMaxReplicas = 32;
+constexpr size_t kEnemyMaxReplicas = 10;
 
 bool EnemyReplicationActive(double now) {
     return g_settings.enemies && now - g_lastRecv < PeerTimeout();
@@ -5515,7 +5515,7 @@ void Tick(bool hudFrame) {
         }
         f10Held = f10Down;
     }
-    bool shouldSend = hudFrame || (now >= g_nextSend);
+    bool shouldSend = (now >= g_nextSend);
     if (shouldSend) {
         g_nextSend = now + kSendInterval;
         SendLocalState(g_pawn, now);
