@@ -144,6 +144,36 @@ inline uint32_t GameAppId(uint64_t gameId) {
     return static_cast<uint32_t>(gameId & 0xFFFFFF);
 }
 
+// Which Steam app the transport runs as. Lobbies are per app: players only find each other on the same one.
+// Spacewar (480) is Valve's public test app, reached through a second copy of steam_api64.dll.
+enum class SteamApp : uint8_t { DaysGone, Spacewar };
+constexpr uint32_t kSpacewarAppId = 480;
+constexpr const wchar_t* kSpacewarDll = L"steam_spacewar.dll";
+
+inline uint32_t AppId(SteamApp app) {
+    return app == SteamApp::Spacewar ? kSpacewarAppId : kDaysGoneAppId;
+}
+
+inline const char* SteamAppName(SteamApp app) {
+    return app == SteamApp::Spacewar ? "spacewar" : "daysgone";
+}
+
+// Case-insensitive "daysgone" or "spacewar"; leaves `out` unchanged otherwise.
+inline bool ParseSteamApp(std::string_view text, SteamApp& out) {
+    auto is = [text](std::string_view name) {
+        if (text.size() != name.size()) return false;
+        for (size_t i = 0; i < text.size(); ++i) {
+            char c = text[i] >= 'A' && text[i] <= 'Z' ? static_cast<char>(text[i] - 'A' + 'a') : text[i];
+            if (c != name[i]) return false;
+        }
+        return true;
+    };
+    if (is("daysgone")) out = SteamApp::DaysGone;
+    else if (is("spacewar")) out = SteamApp::Spacewar;
+    else return false;
+    return true;
+}
+
 // Steam launches a game with "+connect_lobby <64-bit lobby id>" when a friend accepts an invite
 // while the game is not running. Returns 0 when absent or malformed.
 inline uint64_t ParseConnectLobby(std::string_view commandLine) {

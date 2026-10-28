@@ -1,6 +1,7 @@
 #pragma once
 #include "net.hpp"
 #include "session.hpp"
+#include "steam_abi.hpp"
 
 #include <cstdint>
 #include <deque>
@@ -16,10 +17,10 @@ struct SteamFriendLobby {
 };
 
 // Two-player Steam lobby (invite only, friends only or public) for discovery and Steam Networking for traffic.
-// Uses the game's own steam_api64.dll; nothing from the Steamworks SDK is bundled.
+// Uses the game's own steam_api64.dll, or a user-supplied copy for Spacewar; nothing from the Steamworks SDK is bundled.
 class SteamPeer final : public Transport {
 public:
-    bool Open(const std::string& playerName, bool pumpCallbacks, std::string& diag);
+    bool Open(const std::string& playerName, bool pumpCallbacks, steam::SteamApp app, std::string& diag);
     void SendRaw(const void* data, int size) override;
     bool Receive(StatePacket& out, const std::function<void(const char*, int)>& other = {}) override;
     bool HasPeer() const override { return partner_ != 0; }
@@ -55,6 +56,7 @@ public:
 private:
     enum class Pending { None, Create, Join };
     bool ready_ = false, pump_ = false, messages_ = false;
+    steam::SteamApp app_ = steam::SteamApp::DaysGone;
     std::string name_;
     double nextResolve_ = 0, nextMembers_ = 0, nextFriends_ = 0, pendingSince_ = 0;
     uint64_t self_ = 0, lobby_ = 0, owner_ = 0, partner_ = 0, connectLobby_ = 0;
