@@ -3464,3 +3464,40 @@ the game log, peer log and screenshot are in `run1/logs/onepc-seat-20261027/`.
 
 Not tested: the guest-side reaction (hidden *Ride with* prompt, forced
 dismount) needs a second game; it uses the existing permission-removal path.
+
+### Passenger seat in a paired session on one PC (2026-10-28)
+
+Two games on cachy, each a disposable reflink clone of `run1` in its own
+headless gamescope (`tools/lab/lab.sh`, introduced with the test lab). The
+host used the desktop Steam client; the guest ran in a bubblewrap sandbox
+with a second Steam client signed in to another account. They paired over
+loopback UDP (`127.0.0.1:27777` / `27778`) and each showed the other's
+avatar. This build adds a guest-side log line when the partner's seat offer
+changes.
+
+1. Guest log on connect: `passenger: partner offers the passenger seat`.
+2. Host mounted its bike (`E`); the guest saw **Ride with Host**, held F9 and
+   logged `passenger: boarded using socket SOCKET_PassengerSeat`.
+3. Host `StartMissionFromID` 3 (*I Say We Head North*): host
+   `09:13:01.942 mission: active 'OBR' (policy flags 0x023)`; guest
+   `09:13:01.944 passenger: partner no longer offers the passenger seat` and
+   `09:13:01.951 passenger: dismounted; native body, movement, collision, and
+   saving restored`. The dismount followed the withdrawn offer, before any
+   cutscene moved the host.
+4. Guest F9 during the mission: `passenger: boarding prerequisites not
+   satisfied`.
+
+**Side finding: the guest follows the host into the mission.** Starting the
+mission made the host write its mission-start save (`story: saved progress
+aace70ce`). Six seconds later the guest logged `host progress aace70ce
+differs from ours fa97ef49; fetching the host's save`, reloaded, and reported
+`mission: active 'OBR'`; both screens then played the same OBR cutscene, each
+with its own Boozer. The existing story resync therefore mirrors mission
+starts that save, and each player gets a local copy of the mission and its
+companions. Logs and screenshots are in
+`~/TheysGone-lab/archive/paired-seat-20261028/` on cachy.
+
+Not tested: a mission whose pillion character joins mid-mission (Lisa in
+`RBC`), the guest-side policy (the guest applied the same flags, but only the
+driver's matter for the seat), and whether two local copies of a mission stay
+consistent through its objectives.

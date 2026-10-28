@@ -206,9 +206,11 @@ camp rally).
 
 ## 4. Co-op problems
 
-1. **Mission content exists only on the host.** The guest does not run the
-   mission, so it lacks the mission sublevel's props and blockers, its NPCs
-   and its forced weather. Companions are excluded from enemy streaming, so
+1. **Mission content is not shared live.** Missions that save at their start
+   reach the guest through the story resync: in a paired test the guest
+   reloaded the host's mission-start save and ran its own copy of `OBR`, with
+   its own Boozer. Between saves, the two copies of a mission (its NPCs,
+   sublevel props, forced weather and objectives) run independently. Companions are excluded from enemy streaming, so
    the guest sees the host riding or walking next to nobody. Fix: stream
    non-hostile mission actors (companions, their bikes, mission trucks) as
    display-only, non-colliding replicas, and send mission weather.
@@ -217,9 +219,8 @@ camp rally).
    Deacon rides on Boozer's. While a story NPC uses the host's pillion, the
    guest must not be offered *Ride with*. **Implemented:** a driver whose
    running mission has the pillion flag stops offering the seat
-   ([`mission_policy.hpp`](../src/coop/mission_policy.hpp)); verified on one PC
-   with a simulated partner across `OBR` and the chained `OBT`, not yet in a
-   paired session. `BIP`, `MBF1`, `CLO5` and `IYK`
+   ([`mission_policy.hpp`](../src/coop/mission_policy.hpp)); verified in a
+   paired session: a riding guest was let off when the host started `OBR`. `BIP`, `MBF1`, `CLO5` and `IYK`
    are flagged from cutscene bikes and the walkthrough, not from objective
    text. Other ride-alongs use the companion's own bike
    (`boozerbike`, `rikkibike`, `skizzobike`, `mikebike`, `kouribike` in the
@@ -265,8 +266,9 @@ by starting `OBR`); the per-mission table is
 [`mission_policy.hpp`](../src/coop/mission_policy.hpp), covered by
 `tools/test_protocol.cpp`; the passenger-seat rule (§4.2) uses it.
 
-1. Validate the partner's side of the passenger-seat rule (hidden prompt,
-   forced dismount) in a paired session.
+1. Decide how two local copies of a mission should behave: test whether
+   they stay consistent through objectives, or keep the guest out of the
+   mission and stream the host's companions instead (§4.1).
 2. Live-test the stealth risk (§4.3): it is the only gap that can fail the
    host's mission. If confirmed, limit proxy awareness in `kMissionStealth`
    missions.

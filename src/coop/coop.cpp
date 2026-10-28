@@ -1369,6 +1369,8 @@ void ReceiveRemote(double now) {
         ++g_receivedStates;
         g_lastRemoteSeq = p.seq;
         g_remoteName = g_kind == session::Kind::Steam ? g_steam.PartnerName() : std::string(p.name);
+        if ((p.flags ^ g_peer.flags) & kAcceptPassengers)
+            Log("passenger: partner %s the passenger seat", p.flags & kAcceptPassengers ? "offers" : "no longer offers");
         g_peer = p;
         UpdateDamageScope(now);
         g_damage.Acknowledge(p);

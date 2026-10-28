@@ -261,9 +261,7 @@ stand on.
 
 During story missions where a character rides on the driver's bike (Lisa,
 Sarah, Boozer) or the driver rides on theirs, the seat is kept for the story:
-the prompt does not appear, and a partner already riding is let off. The
-driver's side was checked against a simulated partner; the partner's side
-has not been tested in a two-player session yet.
+the prompt does not appear, and a partner already riding is let off.
 
 ## Configuration reference
 
