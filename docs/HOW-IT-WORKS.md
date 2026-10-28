@@ -406,6 +406,15 @@ captures movement mode, visibility, collision and the save-block flag, and
 restores each of them on exit, dismount, permission removal or disconnect. A
 manual exit is checked with ground and capsule traces.
 
+Each game reads its running story mission once a second from
+`BendGameMission.ActiveMissionData` (a `BendMissionData` asset such as
+`OBR-MissionData`) and looks its code up in
+[`mission_policy.hpp`](../src/coop/mission_policy.hpp). While the mission
+puts a story character on the passenger seat, or Deacon on theirs, the driver
+stops sending `kAcceptPassengers`, which hides the prompt and ends an active
+ride through the existing permission-removal path. See
+[STORY-COOP.md](STORY-COOP.md) for the mission categories.
+
 ### 5.4 Appearance
 
 Garment material slots are found by following material `Parent` chains.

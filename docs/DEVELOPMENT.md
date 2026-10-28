@@ -62,6 +62,13 @@ or its meaning must bump `kProtocolVersion` in `protocol.hpp`, or the
 datagram's own version constant, and update `tools/test_protocol.cpp` and
 `tools/fake_peer.py`. Mark such commits as breaking (`feat!:`).
 
+## Headless test lab
+
+[`tools/lab/lab.sh`](../tools/lab/lab.sh) runs two real games on one Linux
+PC for paired tests: disposable reflink clones of an isolated copy, each in
+its own headless gamescope, the guest in a bubblewrap sandbox with a second
+Steam account. See [`tools/lab/README.md`](../tools/lab/README.md).
+
 ## Simulated partner
 
 [`tools/fake_peer.py`](../tools/fake_peer.py) speaks the protocol, so you can
@@ -135,7 +142,7 @@ poetry run python tools/debug_control.py --game-dir "/path/to/BendGame/Binaries/
 | `god-on` / `god-off` | Make the player invulnerable / vulnerable |
 | `spawn-single` | Spawn one swarmer with its native AI, about 6 m ahead |
 | `spawn-pack` | Spawn eight independent swarmers (at most 16 owned at a time) |
-| `status` | Log player and enemy health, controllers and movement |
+| `status` | Log player and enemy health, controllers and movement, and the running story mission code and policy flags |
 | `continue-title` | In-game bot: run the visible title splash's native button animation, or invoke Continue only when it is the first visible title-menu row |
 | `ui-probe` | Log native startup/menu objects, visibility, option counts, first label, cached versus freshly queried save availability, and every `Image` in an on-screen widget with its brush texture; does not activate a menu action |
 | `probe-player` / `probe-enemy` | Apply 5 base damage and check the health change |
@@ -164,7 +171,7 @@ poetry run python tools/debug_control.py --game-dir "/path/to/BendGame/Binaries/
 | `net-walk` | Experimental: feed `AddMovementInput` to the local controller's pawn every frame for 3 s and log the distance moved plus movement telemetry (velocity, acceleration, desiredSpeed, root motion) every 0.5 s. With `[Research] WalkTarget=remote` the host walks the pawn of the remote guest's controller instead |
 | `trace-on` / `trace-off` | Record every distinct ProcessEvent call with sample parameters to `TheysGone-trace.txt` (`OnRep_*`, `ReceiveBeginPlay` and `ClientRestart` are counted per object) |
 | `mission-watch-on` / `mission-watch-off` | Mission lab: log mission/job ProcessEvent calls with parameter values, poll job state (done, active, state, objective index, tracked job, episode) every 0.5 s and log each change; `off` prints per-function call counts |
-| `mission-state` | Read-only mission lab: write every job and mission row, the tracked job, the episode and active job objects to `TheysGone-missions.txt`; objective arrays include reflected struct fields and values. Does not require a gameplay pawn if the job manager is loaded |
+| `mission-state` | Read-only mission lab: write every job and mission row, the tracked job, the episode and active job objects to `TheysGone-missions.txt`; objective arrays include reflected struct fields and values. A catalog section lists every job (row name, display name, act, objective texts) and every story mission from `BendGameMission.GetMissionDataFromIDNew` (display name, act, map, prerequisites, objectives), plus the chapter names. Does not require a gameplay pawn if the job manager is loaded |
 | `mission-act` | Mission lab, **changes the story**: call one mission function from `--arg "<Function> [ObjectName\|-] [Param=Value ...]"` and log the return value and the immediate state change. Use `Class.Function` when targeting a class. Requires `[Research] MissionActions=1`; back up saves first, because the game may autosave the result |
 | `stream-focus` | Free roam: with `--arg "<east m> <north m>"`, add a debug second streaming focus at that offset from the local pawn (more than 150 m away); `--arg off` clears it. Needs `FreeRoam=1` at launch and the streaming hook installed |
 | `stream-probe` | Free roam: log the separation state, the second focus, the last tile-merge counts, loaded levels, ground at the focus and AI within 150 m of it |

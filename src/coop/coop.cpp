@@ -6,6 +6,7 @@
 #include "save_guard.hpp"
 #include "save_transfer.hpp"
 #include "story.hpp"
+#include "mission_policy.hpp"
 #include "streaming.hpp"
 #include "streaming_hook.hpp"
 #include "menu.hpp"
@@ -63,6 +64,12 @@ std::string g_announcedPartner;
 std::wstring g_basePath;
 Config g_cfg;
 MenuSettings g_settings;
+struct ActiveMission {
+    double sampledAt = -1e9;
+    std::string code;
+    uint16_t flags = 0;
+} g_mission;
+constexpr double kMissionSampleInterval = 1.0;
 SettingsMenu g_menu;
 std::atomic<DWORD> g_gameThread{0};
 bool g_inTick = false;
@@ -1187,7 +1194,7 @@ void SendLocalState(UObject* pawn, double now) {
     if (g_settings.motorcycles) p.flags |= kSyncBikes;
     if (g_settings.enemies) p.flags |= kSyncEnemies;
     if (IsHost() && g_separated) p.flags |= kSeparated;
-    if (g_settings.passengers) p.flags |= kAcceptPassengers;
+    if (PassengerSeatOffered(g_settings.passengers, g_mission.flags)) p.flags |= kAcceptPassengers;
     std::snprintf(p.name, sizeof p.name, "%s", session::TruncateUtf8(LocalName(), sizeof p.name - 1).c_str());
     g_damage.Fill(p);
     if (pawn) {
@@ -1362,6 +1369,8 @@ void ReceiveRemote(double now) {
         ++g_receivedStates;
         g_lastRemoteSeq = p.seq;
         g_remoteName = g_kind == session::Kind::Steam ? g_steam.PartnerName() : std::string(p.name);
+        if ((p.flags ^ g_peer.flags) & kAcceptPassengers)
+            Log("passenger: partner %s the passenger seat", p.flags & kAcceptPassengers ? "offers" : "no longer offers");
         g_peer = p;
         UpdateDamageScope(now);
         g_damage.Acknowledge(p);
@@ -1943,8 +1952,8 @@ void DebugStatus() {
         DebugError("The player's native health could not be inspected");
         return;
     }
-    Log("debug: status active=%d playerHealth=%.3f owned=%llu", g_debug.pawn != nullptr, health,
-        static_cast<unsigned long long>(g_debug.enemies.size()));
+    Log("debug: status active=%d playerHealth=%.3f owned=%llu mission='%s' missionFlags=0x%03x", g_debug.pawn != nullptr,
+        health, static_cast<unsigned long long>(g_debug.enemies.size()), g_mission.code.c_str(), g_mission.flags);
     auto origin = IsLive(g_pawn) ? WorldOrigin(g_pawn) : FVector{};
     for (const auto& enemy : g_debug.enemies) {
         auto pawn = enemy.pawn.get(), controller = enemy.controller.get();
@@ -4778,6 +4787,21 @@ void SampleStory(double now) {
     g_story.mine = ReadStory();
 }
 
+// The story mission this game is running, from BendGameMission.ActiveMissionData.
+void UpdateActiveMission(double now) {
+    if (now - g_mission.sampledAt < kMissionSampleInterval) return;
+    g_mission.sampledAt = now;
+    std::string code;
+    UObject* data = nullptr;
+    if (auto mission = FindLive("BendGameMission"); mission && GetProp(mission, "ActiveMissionData", data) && IsLive(data))
+        code = std::string(MissionCode(Name(data)));
+    if (code == g_mission.code) return;
+    g_mission.code = code;
+    g_mission.flags = MissionFlags(code);
+    Log("mission: active '%s' (policy flags 0x%03x)%s", code.c_str(), g_mission.flags,
+        g_mission.flags & kMissionPillion ? "; passenger seat reserved for the story" : "");
+}
+
 // Host: publish the progress of its last save. Guest: once that differs from the progress it is
 // playing, download the host's newer save and reload into it at the next quiet moment.
 void UpdateStory(double now) {
@@ -5051,6 +5075,7 @@ void Tick(bool hudFrame) {
     LoadAdoptedSave(now);
     VerifyAdoptedSaveLoad(now, wall);
     UpdateStory(now);
+    UpdateActiveMission(now);
     static double teleportAt = -1;
     if (g_teleportAfterLoad) {
         g_teleportAfterLoad = false;

@@ -2556,6 +2556,72 @@ UObject* PropertySubclassObject(UObject* property, const char* expectedClass) {
     return IsLive(value) && IsLive(value->cls) && Name(value->cls) == expectedClass ? value : nullptr;
 }
 
+struct FTextRaw { uint8_t bytes[24]; };
+
+// Diagnostics only: the engine string returned by Conv_TextToString is leaked. Not for the ProcessEvent hook.
+std::string TextValue(const uint8_t* at) {
+    static UObject* library = nullptr;
+    if (!IsLive(library)) library = FindDefaultObject("KismetTextLibrary");
+    FTextRaw text;
+    void* shared = nullptr;
+    if (!library || !ReadableMemory(at, sizeof text)) return {};
+    std::memcpy(&text, at, sizeof text);
+    std::memcpy(&shared, text.bytes, sizeof shared);
+    if (!shared) return {};
+    Call call(library, "Conv_TextToString");
+    if (!call.set("InText", text).invoke()) return {};
+    struct { const wchar_t* data; int32_t num, max; } value{};
+    value = call.get<decltype(value)>("ReturnValue");
+    if (!value.data || value.num <= 1 || value.num > 4096 || !ReadableMemory(value.data, value.num * sizeof(wchar_t)))
+        return {};
+    int length = value.num - 1;
+    int n = WideCharToMultiByte(CP_UTF8, 0, value.data, length, nullptr, 0, nullptr, nullptr);
+    std::string out(static_cast<size_t>(std::max(n, 0)), '\0');
+    if (n > 0) WideCharToMultiByte(CP_UTF8, 0, value.data, length, out.data(), n, nullptr, nullptr);
+    for (auto& c : out)
+        if (c == '\n' || c == '\r') c = ' ';
+    return out;
+}
+
+// Value() plus localized text, for report files written outside the ProcessEvent hook.
+std::string DisplayValue(UObject* property, const uint8_t* data) {
+    int offset = PropertyOffset(property), size = ElementSize(property);
+    if (Name(property->cls) == "TextProperty" && offset >= 0 && size == sizeof(FTextRaw))
+        return "\"" + TextValue(data + offset) + "\"";
+    return Value(property, data);
+}
+
+std::string FieldValue(UObject* obj, UObject* structure, const uint8_t* data, const char* name) {
+    auto property = FindChild(structure ? structure : obj->cls, name);
+    return IsLive(property) ? DisplayValue(property, data ? data : reinterpret_cast<const uint8_t*>(obj)) : "?";
+}
+
+// Names of an object or byte (enum ID) array property, or an empty string.
+std::string ArrayValue(UObject* obj, const char* name) {
+    auto property = FindChild(obj->cls, name);
+    if (!IsLive(property) || Name(property->cls) != "ArrayProperty") return {};
+    auto objects = PropertySubclassObject(property, "ObjectProperty");
+    auto bytes = objects ? nullptr : PropertySubclassObject(property, "ByteProperty");
+    struct { uint8_t* data; int32_t count, capacity; } values{};
+    auto at = reinterpret_cast<uint8_t*>(obj) + PropertyOffset(property);
+    if ((!objects && !bytes) || !ReadableMemory(at, sizeof values)) return {};
+    std::memcpy(&values, at, sizeof values);
+    size_t stride = objects ? sizeof(UObject*) : 1;
+    if (values.count <= 0 || values.count > 64 || !values.data || !ReadableMemory(values.data, values.count * stride))
+        return {};
+    std::string out;
+    for (int32_t i = 0; i < values.count; ++i) {
+        if (!out.empty()) out += ',';
+        if (objects) {
+            UObject* item = reinterpret_cast<UObject**>(values.data)[i];
+            out += IsLive(item) ? Name(item) : "?";
+        } else {
+            out += std::to_string(values.data[i]);
+        }
+    }
+    return out;
+}
+
 struct ObjectiveArrayView {
     uint8_t* data = nullptr;
     int32_t count = 0;
@@ -2620,7 +2686,7 @@ void DumpObjectiveList(FILE* file, UObject* job, const char* name) {
                 int fieldOffset = PropertyOffset(field), fieldSize = ElementSize(field);
                 if (fieldOffset < 0 || fieldSize <= 0 || fieldOffset > values.stride ||
                     fieldSize > values.stride - fieldOffset) continue;
-                std::fprintf(file, " %s=%s", Name(field).c_str(), Value(field, element).c_str());
+                std::fprintf(file, " %s=%s", Name(field).c_str(), DisplayValue(field, element).c_str());
             }
         }
         std::fputc('\n', file);
@@ -2816,6 +2882,86 @@ void MissionWatchTick(double) {
     g_missionLast = std::move(snapshot);
 }
 
+void DescribeMission(FILE* file, UObject* data, int lookupId) {
+    std::fprintf(file, "mission %s lookup=%d id=%s act=%s state=%s category=%s storyline=%s storylines=[%s] name=%s\n",
+                 Name(data).c_str(), lookupId, FieldValue(data, nullptr, nullptr, "MissionID").c_str(),
+                 FieldValue(data, nullptr, nullptr, "MissionsAct").c_str(),
+                 FieldValue(data, nullptr, nullptr, "CurrentMissionState").c_str(),
+                 FieldValue(data, nullptr, nullptr, "MissionCategory").c_str(),
+                 FieldValue(data, nullptr, nullptr, "PrimaryStoryLine").c_str(), ArrayValue(data, "StoryLines").c_str(),
+                 FieldValue(data, nullptr, nullptr, "MissionNameText").c_str());
+    std::fprintf(file, "    map=%s weather=%s lastInEpisode=%s newEpisode=%s chain=%s refuel=%s ambient=%s deprecated=%s\n",
+                 FieldValue(data, nullptr, nullptr, "MissionMap").c_str(),
+                 FieldValue(data, nullptr, nullptr, "WeatherMap").c_str(),
+                 FieldValue(data, nullptr, nullptr, "IsLastMissionInEpisode").c_str(),
+                 FieldValue(data, nullptr, nullptr, "NewEpisodeUnlocked").c_str(),
+                 FieldValue(data, nullptr, nullptr, "MissionToChainTo").c_str(),
+                 FieldValue(data, nullptr, nullptr, "CanRefuelRepairBikeDuringMission").c_str(),
+                 FieldValue(data, nullptr, nullptr, "AllowAmbientEvents").c_str(),
+                 FieldValue(data, nullptr, nullptr, "Deprecated").c_str());
+    std::fprintf(file, "    prereqMissions=[%s] prereqMissionData=[%s] prereqJobs=[%s]\n",
+                 ArrayValue(data, "PreReqMissions").c_str(), ArrayValue(data, "PreReqMissionsData").c_str(),
+                 ArrayValue(data, "PreReqJobs").c_str());
+    std::fprintf(file, "    description=%s\n    comments=%s\n",
+                 FieldValue(data, nullptr, nullptr, "MissionDescriptionText").c_str(),
+                 FieldValue(data, nullptr, nullptr, "DeveloperComments").c_str());
+    DumpObjectiveList(file, data, "MissionObjectivesData");
+}
+
+// Display names, acts and objective texts for every job and story mission, to map internal codes
+// (OBR1-MissionData, IND-JobData) to the names the game shows.
+void DumpCatalog(FILE* file, UObject* jobs, UObject* mission, int& jobCount, int& missionCount) {
+    std::fprintf(file, "\n# job catalog\n");
+    ObjectArray refs{};
+    if (ue::GetProp(jobs, "JobRefsInOrder", refs) && refs.data && refs.count > 0 && refs.count < 4096) {
+        for (int32_t i = 0; i < refs.count; ++i) {
+            UObject* job = refs.data[i];
+            if (!IsLive(job)) continue;
+            ++jobCount;
+            auto stored = FindChild(job->cls, "StoredJobData");
+            auto structure = IsLive(stored) ? PropertySubclassObject(stored, "ScriptStruct") : nullptr;
+            const uint8_t* row = structure ? reinterpret_cast<const uint8_t*>(job) + PropertyOffset(stored) : nullptr;
+            auto rowField = [&](const char* name) { return row ? FieldValue(job, structure, row, name) : std::string("?"); };
+            std::fprintf(file, "job %s row=%s act=%s type=%s category=%s storyline=%s name=%s missions=[%s]\n",
+                         Name(job).c_str(), FieldValue(job, nullptr, nullptr, "StoredRowName").c_str(),
+                         rowField("JobsAct").c_str(), rowField("JobsType").c_str(), rowField("JobCategory").c_str(),
+                         rowField("PrimaryStoryLine").c_str(), rowField("JobNameText").c_str(),
+                         ArrayValue(job, "MissionDataRefs").c_str());
+            DumpObjectiveList(file, job, "DefaultJobObjectiveList");
+        }
+    }
+    std::fprintf(file, "\n# mission catalog\n");
+    if (!IsLive(mission)) {
+        std::fprintf(file, "no live BendGameMission\n");
+        return;
+    }
+    std::fprintf(file, "active=%s tracked=%s\n", FieldValue(mission, nullptr, nullptr, "ActiveMissionData").c_str(),
+                 FieldValue(mission, nullptr, nullptr, "CurrentTrackedMission").c_str());
+    for (int act = 0; act < 10; ++act) {
+        Call chapter(mission, "GetChapterNameFromEpisode");
+        if (!chapter.set<uint8_t>("Act", static_cast<uint8_t>(act)).invoke()) break;
+        auto text = chapter.get<FTextRaw>("ReturnValue");
+        std::fprintf(file, "chapter %d \"%s\"\n", act, TextValue(text.bytes).c_str());
+    }
+    std::unordered_set<UObject*> listed;
+    for (int id = 0; id < 256; ++id) {
+        Call lookup(mission, "GetMissionDataFromIDNew");
+        if (!lookup.set<uint8_t>("MissionID", static_cast<uint8_t>(id)).invoke()) break;
+        auto data = lookup.get<UObject*>("ReturnValue");
+        if (!IsLive(data) || !listed.insert(data).second) continue;
+        ++missionCount;
+        DescribeMission(file, data, id);
+    }
+    // Loaded mission data the ID lookup does not return (DLC, arcade, deprecated).
+    auto missionClass = FindClass("BendMissionData");
+    for (int32_t i = 0, n = ObjectCount(); missionClass && i < n; ++i) {
+        auto obj = ObjectAt(i);
+        if (!IsLive(obj) || IsDefaultOrArchetype(obj) || !IsA(obj, missionClass) || !listed.insert(obj).second) continue;
+        ++missionCount;
+        DescribeMission(file, obj, -1);
+    }
+}
+
 bool MissionState(const std::wstring& path, std::string& summary) {
     auto jobs = FindInstance("BendJobManager");
     auto mission = FindInstance("BendGameMission");
@@ -2870,10 +3016,14 @@ bool MissionState(const std::wstring& path, std::string& summary) {
         std::fprintf(file, "  %s\n", FullName(obj).c_str());
         DumpFunctions(file, obj->cls, seen);
     }
+    int catalogJobs = 0, catalogMissions = 0;
+    DumpCatalog(file, jobs, mission, catalogJobs, catalogMissions);
     std::fclose(file);
-    char text[160];
-    std::snprintf(text, sizeof text, "%d jobs/missions (%d active, %d done), tracked '%s', %d script objects",
-                  static_cast<int>(snapshot.rows.size()), active, done, snapshot.tracked.c_str(), scripts);
+    char text[200];
+    std::snprintf(text, sizeof text,
+                  "%d jobs/missions (%d active, %d done), tracked '%s', %d script objects, catalog %d jobs %d missions",
+                  static_cast<int>(snapshot.rows.size()), active, done, snapshot.tracked.c_str(), scripts, catalogJobs,
+                  catalogMissions);
     summary = text;
     return true;
 }
