@@ -3501,3 +3501,35 @@ Not tested: a mission whose pillion character joins mid-mission (Lisa in
 `RBC`), the guest-side policy (the guest applied the same flags, but only the
 driver's matter for the seat), and whether two local copies of a mission stay
 consistent through its objectives.
+
+## Stealth missions and the partner stand-in (2026-10-28, paired, one PC)
+
+Question: does the host's hidden partner stand-in alert enemies in stealth
+missions? Every 0.5 s the host calls `SetAwarenessOfPawn(stand-in, 1)` and
+`SetFactionValueOfPawn` for streamed hostile AI within 40 m that is nearer
+the partner than the host, whether or not anyone has been seen.
+
+Setup: lab pair (host on the desktop Steam, guest in the `wh1tebird`
+sandbox, UDP over loopback), fresh clones per run. The host started `AON1`
+(*I Kept My Name*, Ripper compound, detection fails the checkpoint) with
+`StartMissionFromID 59`; the guest followed through the mission-start save
+and stood about 3 m from the host. Neither player moved after the escape
+began.
+
+| Run | Build | Rippers streamed | Reports with Rippers targeting the partner |
+|---|---|---|---|
+| Control | main (`0192238c…a933`) | 13 | 10 of 10, each `13 living streamed enemies target the partner 9, the local player 0` |
+| Fix | stealth rule (`c8c59a14…2caa`) | 13 | 0 of 9, each `target the partner 0`, with `225 awareness updates for the partner withheld from enemies that are not fighting` |
+
+In the control run nine Rippers hunted the invisible stand-in for over a
+minute although nobody had been seen. Within that window neither player left
+the starting room, and the host's checkpoint did not reload. With the fix,
+enemies in `kMissionStealth` missions are only told about the stand-in once
+they already have a target. Logs and screenshots are in
+`~/TheysGone-lab/archive/stealth-control-20261028/` and
+`~/TheysGone-lab/archive/stealth-fix-20261028/` on cachy.
+
+Not tested: a full mission failure caused by the stand-in (the control run
+shows alerted enemies, not the fail screen); enemies that are already
+fighting picking the partner as a target in a stealth mission; the enemies'
+native sight of the stand-in, which the fix does not change.

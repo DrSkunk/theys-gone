@@ -230,9 +230,10 @@ camp rally).
    of the hidden `SwarmerPawn_C` following the guest
    (`SetAwarenessOfPawn`). In S missions (`NBE`, `FIN`, `OBF`, `SFN`,
    `OJ1`–`OJ3`, `NRS1`, `TLL2`, `PBC2`–`PBC4`, `AON1`, `ANM3`, `AHB5`) the
-   guest can probably get the host detected and fail the mission. Needs a
-   live test; candidate policy: in S missions only enemies already in combat
-   are made aware of the proxy.
+   guest can get the host detected. **Confirmed and fixed:** in a paired
+   `AON1` test nine of 13 Rippers targeted the stand-in while nobody moved;
+   with the fix, enemies in S missions are told about the stand-in only once
+   they are already fighting, and none targeted it.
 4. **Guard objectives (G).** "Keep Boozer Alive" (`MBF1`), "Protect Rikki"
    (`LBL1`), "Protect Boozer From Rippers" (`BBD4`), escorting Sarah
    (`AHB5`). These suit co-op if guest hits apply on the host's enemies,
@@ -269,9 +270,8 @@ by starting `OBR`); the per-mission table is
 1. Decide how two local copies of a mission should behave: test whether
    they stay consistent through objectives, or keep the guest out of the
    mission and stream the host's companions instead (§4.1).
-2. Live-test the stealth risk (§4.3): it is the only gap that can fail the
-   host's mission. If confirmed, limit proxy awareness in `kMissionStealth`
-   missions.
+2. Check whether enemies that are already fighting still switch to the
+   partner in stealth missions (§4.3).
 3. Send the host's active mission code to the guest (a protocol change), so
    the guest can apply the flashback, capture and cutscene policies.
 4. Stream companions and mission vehicles as display-only replicas (§4.1).
