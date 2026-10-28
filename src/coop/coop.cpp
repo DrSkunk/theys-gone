@@ -3864,6 +3864,7 @@ struct PartnerProxy {
     std::vector<Resend> resend;
     EnemyHitDedupe dedupe; // peer side
     bool failedLogged = false;
+    uint32_t stealthSkipped = 0; // awareness updates withheld in stealth missions since the last report
 } g_proxy;
 constexpr float kProxyMaxStrike = 400.f; // larger drops are engine resets, not hits
 
@@ -3985,6 +3986,14 @@ void UpdatePartnerProxy(double now) {
             FVector p = loc.get<FVector>("ReturnValue");
             if (Distance(p, at) >= Distance(p, localAt) || Distance(p, at) > 4000) continue;
             auto controller = Prop(e.pawn, "Controller");
+            if (g_mission.flags & kMissionStealth) {
+                Call target(controller, "GetCurrentTargetPawn");
+                bool fighting = target.invoke() && target.get<UObject*>("ReturnValue") != nullptr;
+                if (!ProxyAwarenessAllowed(g_mission.flags, fighting)) {
+                    ++g_proxy.stealthSkipped;
+                    continue;
+                }
+            }
             Call aware(controller, "SetAwarenessOfPawn"), faction(controller, "SetFactionValueOfPawn");
             aware.set("awarePawn", g_proxy.pawn).set("AwarenessLevel", 1.f).invoke();
             faction.set("targetPawn", g_proxy.pawn).set("Value", 1.f).invoke();
@@ -4009,6 +4018,11 @@ void UpdatePartnerProxy(double now) {
         if (total || dead)
             Log("enemies: %d living streamed enemies target the partner %d, the local player %d (%d dead)",
                 total, onProxy, onHost, dead);
+        if (g_proxy.stealthSkipped) {
+            Log("enemies: stealth mission '%s': %u awareness updates for the partner withheld from enemies "
+                "that are not fighting", g_mission.code.c_str(), g_proxy.stealthSkipped);
+            g_proxy.stealthSkipped = 0;
+        }
     }
 }
 

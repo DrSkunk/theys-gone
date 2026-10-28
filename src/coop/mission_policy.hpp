@@ -149,4 +149,10 @@ inline bool PassengerSeatOffered(bool allowPassengerSetting, uint16_t activeMiss
     return allowPassengerSetting && !(activeMissionFlags & kMissionPillion);
 }
 
+// The partner's stand-in is normally announced to nearby enemies so they fight it. In stealth missions
+// that would alert enemies nobody has been seen by, so only enemies already fighting are told.
+inline bool ProxyAwarenessAllowed(uint16_t activeMissionFlags, bool enemyHasTarget) {
+    return !(activeMissionFlags & kMissionStealth) || enemyHasTarget;
+}
+
 } // namespace coop
