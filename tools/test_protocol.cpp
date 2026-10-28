@@ -790,6 +790,18 @@ void TestSteamAbi() {
     assert(!ParseConnectLobby("+connect_lobby 18446744073709551616"));
     assert(ParseConnectLobby("+connect_lobby 18446744073709551615") == 18446744073709551615ull);
     assert(coop::steam::GameAppId(0x010000000013379Cull) == coop::steam::kDaysGoneAppId);
+    using coop::steam::SteamApp;
+    SteamApp app = SteamApp::DaysGone;
+    assert(coop::steam::ParseSteamApp("spacewar", app) && app == SteamApp::Spacewar);
+    assert(coop::steam::ParseSteamApp("DaysGone", app) && app == SteamApp::DaysGone);
+    assert(coop::steam::ParseSteamApp("SPACEWAR", app) && app == SteamApp::Spacewar);
+    for (auto text : {"", "480", "space war", "spacewar ", "daysgone2", "steam"}) {
+        SteamApp unchanged = SteamApp::Spacewar;
+        assert(!coop::steam::ParseSteamApp(text, unchanged) && unchanged == SteamApp::Spacewar);
+    }
+    assert(coop::steam::AppId(SteamApp::DaysGone) == 1259420 && coop::steam::AppId(SteamApp::Spacewar) == 480);
+    assert(std::string(coop::steam::SteamAppName(SteamApp::Spacewar)) == "spacewar");
+    assert(std::string(coop::steam::SteamAppName(SteamApp::DaysGone)) == "daysgone");
     std::puts("steam abi ok");
 }
 

@@ -63,6 +63,7 @@ std::string g_announcedPartner;
 
 std::wstring g_basePath;
 Config g_cfg;
+steam::SteamApp g_steamApp = steam::SteamApp::DaysGone;
 MenuSettings g_settings;
 struct ActiveMission {
     double sampledAt = -1e9;
@@ -411,7 +412,7 @@ bool ResolveEngine() {
         Log("animation slot %d '%s' -> %s", i, names[i]->c_str(), g_anims[i] ? "found" : "not loaded yet");
     }
     std::string net;
-    g_steam.Open(g_cfg.playerName, g_cfg.steamPumpCallbacks, net);
+    g_steam.Open(g_cfg.playerName, g_cfg.steamPumpCallbacks, g_steamApp, net);
     Log("network: %s", net.c_str());
     g_udpOpen = g_udp.Open(g_cfg.port, net);
     Log("network: %s%s", net.c_str(), g_udpOpen ? "" : "; LAN play is unavailable");
@@ -5375,6 +5376,7 @@ Config LoadConfig(const std::wstring& ini) {
     if (!c.autoLan && transport != "menu") Log("config: unknown Transport '%s'; using menu", transport.c_str());
     c.lobbyVisibility = IniString(ini, L"Visibility", c.lobbyVisibility.c_str());
     c.steamPumpCallbacks = GetPrivateProfileIntW(L"Coop", L"SteamPumpCallbacks", 0, ini.c_str()) != 0;
+    c.steamApp = IniString(ini, L"SteamApp", c.steamApp.c_str());
     c.freeRoam = GetPrivateProfileIntW(L"Coop", L"FreeRoam", 0, ini.c_str()) != 0;
     return c;
 }
@@ -5421,10 +5423,13 @@ bool Install(const std::wstring& basePath) {
     if (!session::ParseVisibility(g_cfg.lobbyVisibility, visibility))
         Log("config: unknown Visibility '%s'; using friends", g_cfg.lobbyVisibility.c_str());
     g_steam.SetVisibility(visibility);
+    if (!steam::ParseSteamApp(g_cfg.steamApp, g_steamApp))
+        Log("config: unknown SteamApp '%s'; using daysgone", g_cfg.steamApp.c_str());
     ui::Configure(g_cfg.menuDiscovery);
-    Log("config: transport=%s port=%u peer=%s:%u name=%s visibility=%s", g_cfg.autoLan ? "udp (LAN at launch)" : "menu",
+    Log("config: transport=%s port=%u peer=%s:%u name=%s visibility=%s steam=%s", g_cfg.autoLan ? "udp (LAN at launch)" : "menu",
         g_cfg.port, g_cfg.peerHost.empty() ? "(host mode)" : g_cfg.peerHost.c_str(), g_cfg.peerPort,
-        g_cfg.playerName.empty() ? "(Steam name)" : g_cfg.playerName.c_str(), session::VisibilityName(visibility));
+        g_cfg.playerName.empty() ? "(Steam name)" : g_cfg.playerName.c_str(), session::VisibilityName(visibility),
+        steam::SteamAppName(g_steamApp));
     if (g_cfg.missionDiscovery)
         Log("mission discovery: read-only signature tracing enabled; parameter values are not logged");
 
