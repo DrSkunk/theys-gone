@@ -62,6 +62,13 @@ or its meaning must bump `kProtocolVersion` in `protocol.hpp`, or the
 datagram's own version constant, and update `tools/test_protocol.cpp` and
 `tools/fake_peer.py`. Mark such commits as breaking (`feat!:`).
 
+## Headless test lab
+
+[`tools/lab/lab.sh`](../tools/lab/lab.sh) runs two real games on one Linux
+PC for paired tests: disposable reflink clones of an isolated copy, each in
+its own headless gamescope, the guest in a bubblewrap sandbox with a second
+Steam account. See [`tools/lab/README.md`](../tools/lab/README.md).
+
 ## Simulated partner
 
 [`tools/fake_peer.py`](../tools/fake_peer.py) speaks the protocol, so you can
