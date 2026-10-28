@@ -27,6 +27,7 @@ threads); see [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md#prerequisites). Run
 | Build, source layout, debug tools, releases | [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) |
 | Current state, environment, gotchas, code map | [docs/REPLICATION-HANDOFF.md](docs/REPLICATION-HANDOFF.md) |
 | Evidence log for every live test | [docs/REPLICATION-RESEARCH.md](docs/REPLICATION-RESEARCH.md) |
+| Paired tests on one PC (headless lab) | [tools/lab/README.md](tools/lab/README.md) |
 | User-facing behavior and settings | [README.md](README.md) |
 | Story phases, companions, co-op policy per mission type | [docs/STORY-COOP.md](docs/STORY-COOP.md) |
 
