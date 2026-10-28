@@ -2,9 +2,9 @@
 
 **Architecture Target:** Unreal Engine 4.11 (Bend Game Custom Engine Fork)  
 **Transport Protocol:** Steamworks P2P (AppID `480` - Spacewar)  
-**Current Active Binary:** `TheysGone.asi` (2,643,968 bytes)  
-**Active Hash (SHA-256):** `EB9645F18A9A292ACC27EA2B871E56388B4F51DBA4B187D82FE222CCB2017256`  
-**Last Updated:** October 27, 2026 (Afternoon Session)
+**Current Active Binary:** `TheysGone.asi` (2,857,984 bytes)  
+**Active Hash (SHA-256):** `FF7B4444038E8240FD67E0094D28931128FDDA197638BE2A806B54B83BA62217`  
+**Last Updated:** October 28, 2026 (Noon Session)
 
 ---
 
@@ -381,3 +381,80 @@ flowchart LR
     - Decoupled network transmission from 144 Hz HUD rendering: capped state packets to clean 60 Hz (`kSendInterval = 1.0 / 60.0`).
     - Reduced `kEnemyMaxReplicas` from 32 to 10 closest enemies, cutting packet flood by ~70% and completely eliminating Steam Networking socket buffer latency.
 - **Status:** **Verified Fixed, Compiled (2,861,056 bytes, SHA-256: `000FEB1A...`), and Deployed to Host & Aziz.**
+
+---
+
+### [October 27–28, 2026] — Milestone 6: Post-Merge Stability, Animation Restoration & Bandwidth Optimization
+
+#### Fix 6.1: Steam P2P Result 25 Throttling & Host-Side Movement Rubberbanding
+- **Symptom:** Host experienced severe partner movement delays ("retard" / stuttering) and periodic packet drops. Log output recorded frequent `result 25 k_EResultLimitExceeded` socket saturation warnings.
+- **Root Cause:**
+  - Upstream v0.5.1 pose streaming serialized all 528 skeletal bones per frame, including ~350 micro-facial deformation bones.
+  - This flooded Steamworks P2P with 136 packets/sec (~90 kB/s), exceeding Valve's internal socket buffer queue and forcing packet throttling.
+- **Resolution:**
+  - In `pose.hpp`: Implemented an essential kinematic bone whitelist (`IsEssentialBodyBone`), selectively streaming ~140 kinematic bones (spine, head, limbs, twist bones, hands, fingers, weapon sockets) while skipping facial deformations.
+  - Dropped pose packet rate from 136 pkt/s to ~30 pkt/s, completely eliminating `result 25` socket buffer bloat and restoring smooth movement sync.
+- **Status:** **Verified Fixed & Deployed.**
+
+#### Fix 6.2: Aiming & Motorcycle Riding Mesh Distortion / Broken Animation Poses
+- **Symptom:** Whenever a player aimed a weapon or rode the motorcycle, their skeletal mesh collapsed or distorted into unnatural, broken poses.
+- **Root Cause:**
+  - Full local-space bone translation transforms were overriding UE4's procedural inverse kinematics (IK) and socket attachments.
+- **Resolution:**
+  - In `pose.hpp`: Preserved root and pelvis positional translations while streaming pure rotational quaternions for child kinematic joints, allowing UE4's procedural IK to correctly align limbs with handlebars and weapon sights.
+- **Status:** **Verified Fixed & Deployed.**
+
+---
+
+### [October 28, 2026] — Milestone 7: Native UI Overhaul, Menu Layout Deconfliction & Debounce
+
+#### Fix 7.1: Title Menu "HOST ONLINE GAME" and "JOIN A FRIEND" Instant Bounce
+- **Symptom:** Clicking "HOST ONLINE GAME" or "JOIN A FRIEND" immediately bounced the player back to the main title menu instead of remaining on the lobby page to allow clicking "START GAME".
+- **Root Cause:**
+  - In `native_ui.cpp`'s `Navigate()`, the handlers for `HostSteam`, `HostLan`, and `JoinFriend` fell through into `return true;`, which triggered `MainClose(true)`.
+- **Resolution:**
+  - Restored `break;` so `Navigate()` returns `false`, keeping the menu open to show "START GAME".
+- **Status:** **Verified Fixed & Deployed.**
+
+#### Fix 7.2: In-Game Pause Menu Slot Overflow & Invisible Text
+- **Symptom:** In-game pause menu options were invisible / failed to show when a partner was connected, while cheats fired blindly on click.
+- **Root Cause:**
+  - `session::BuildRows` produced 11 items when partner was connected, exceeding UE4's `OptionsCategoryWidget` hard cap of 10 slots. The engine aborted entry rendering when `labels.size() <= entries->num` failed.
+- **Resolution:**
+  - Clamped maximum renderable entries to 10 in `PauseRender`, ensuring `BACK` is always preserved, and restructured the layout.
+- **Status:** **Verified Fixed & Deployed.**
+
+#### Fix 7.3: Dedicated Cheats Submenu & Root Menu Slot Optimization
+- **Symptom:** Cheats cluttered the root gameplay menu and pushed vital options out of the 10-slot limit.
+- **Resolution:**
+  - In `session.hpp`: Created a dedicated `CHEATS` submenu (`Page::Cheats`) containing:
+    - `GOD MODE: ENABLED/OFF`
+    - `INFINITE STAMINA: ENABLED/OFF`
+    - `REPAIR & REFUEL BIKE`
+    - `BACK`
+  - Retained `GIVE HOST TO PARTNER` on the root menu alongside `INVITE FRIENDS`, `RECALL BIKE`, `TELEPORT TO PARTNER`, `ENEMY SYNC`, `ALLOW PASSENGERS`, and `CLOSE SESSION`. Reduced root gameplay menu to 9 entries, safely below the 10-slot limit.
+- **Status:** **Verified Fixed & Deployed.**
+
+#### Fix 7.4: In-Game Pause Menu Rapid-Fire Clicking Loop & Accidental Session Drops
+- **Symptom:** Opening the CO-OP pause menu caused repetitive rapid-fire clicking sound loops and frequently dropped or terminated the session unexpectedly.
+- **Root Cause:**
+  - Unreal Engine's Slate framework already dispatches mouse click events via `OnSelectionModified` in `PauseBefore`. Concurrently, `PauseUpdate` polled `GetAsyncKeyState(VK_LBUTTON)`. Because composite widgets returned false for hover checks, it defaulted to the bottom slot (`CLOSE SESSION`), repeatedly triggering clicks and closing the lobby.
+- **Resolution:**
+  - In `native_ui.cpp`: Removed duplicate `GetAsyncKeyState(VK_LBUTTON)` polling in `PauseUpdate` and instituted a strict 350ms input debounce latch (`g_pause.handledAt`) across pause menu activations.
+- **Status:** **Verified Fixed & Deployed.**
+
+---
+
+### [October 28, 2026] — Milestone 8: Multi-Channel Steam Friend Invite & Overlay Fallback Pipeline
+
+#### Fix 8.1: Silent Failure of Steam In-Game Overlay (`ActivateGameOverlayInviteDialog`)
+- **Symptom:** Clicking "INVITE FRIENDS" produced no visible result; the Steam in-game overlay failed to open on screen.
+- **Root Cause:**
+  - Because `DaysGone.exe` is run outside the Steam client (as a standalone executable), Steam never injected its graphics hook (`GameOverlayRenderer64.dll`). Consequently, any internal overlay calls (`ActivateGameOverlayInviteDialog` / `Shift+Tab`) were silently ignored by Steam.
+- **Resolution:**
+  - In `steam.cpp` and `steam_abi.hpp`: Engineered a multi-channel fallback invite architecture in `SteamPeer::Invite()`:
+    1. **Direct Steam Lobby Invite (`InviteUserToLobby`):** Automatically dispatches an official Steam game invite popup to the previous partner (`lastPartner_`) or any online friend running App 480. The recipient sees a native Steam notification with "Click to Join".
+    2. **Desktop Steam Friends Window:** Dispatches `steam://open/friends` via `ShellExecuteA`, automatically bringing up the native desktop Steam Friends list on the player's screen.
+    3. **Clipboard Join Link:** Places `steam://joinlobby/480/<LobbyID>/<SteamID>` onto the Windows clipboard for instant pasting (`Ctrl+V`) into chats.
+    4. **Overlay Passthrough:** Retains `ActivateGameOverlayInviteDialog` and `ActivateGameOverlay("friends")` for players who launch Days Gone via Steam.
+- **Status:** **Verified Fixed, Compiled (2,857,984 bytes, SHA-256: `FF7B4444038E8240FD67E0094D28931128FDDA197638BE2A806B54B83BA62217`), and Deployed to Host & Aziz.**

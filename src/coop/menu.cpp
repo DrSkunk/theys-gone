@@ -124,7 +124,7 @@ MenuActions SettingsMenu::Update(UObject* controller, bool focused, MenuSettings
     MenuActions result;
     rows_ = kBaseRows + (online.enabled ? kOnlineRows : 0) + 1;
     if (selected_ >= rows_) selected_ = rows_ - 1;
-    bool toggle = Pressed(VK_F4) || Pressed(VK_F8);
+    bool toggle = Pressed(VK_F4);
     bool passenger = Pressed(VK_F9);
     bool back = Pressed(VK_ESCAPE);
     bool up = Pressed(VK_UP), down = Pressed(VK_DOWN);

@@ -30,25 +30,20 @@ bool Readable(const void* p, size_t len) {
     if (a < 0x10000 || a > 0x7ffffffffff0) return false;
     size_t slot = (a >> 12) & (kRegionCacheSize - 1);
     const auto& cached = s_regionCache[slot];
-    if (a >= cached.base && a + len <= cached.limit) return cached.readable;
+    if (cached.readable && a >= cached.base && a + len <= cached.limit) return true;
 
     MEMORY_BASIC_INFORMATION mbi{};
-    if (!VirtualQuery(p, &mbi, sizeof(mbi)) || mbi.State != MEM_COMMIT) {
-        uintptr_t base = reinterpret_cast<uintptr_t>(mbi.BaseAddress);
-        s_regionCache[slot] = {base, base + (mbi.RegionSize ? mbi.RegionSize : 4096), false};
-        return false;
-    }
-    if (mbi.Protect & (PAGE_GUARD | PAGE_NOACCESS)) {
-        uintptr_t base = reinterpret_cast<uintptr_t>(mbi.BaseAddress);
-        s_regionCache[slot] = {base, base + mbi.RegionSize, false};
-        return false;
-    }
+    if (!VirtualQuery(p, &mbi, sizeof(mbi)) || mbi.State != MEM_COMMIT) return false;
+    if (mbi.Protect & (PAGE_GUARD | PAGE_NOACCESS)) return false;
     bool ok = (mbi.Protect & (PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_READ |
                              PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY)) != 0;
-    uintptr_t lo = reinterpret_cast<uintptr_t>(mbi.BaseAddress);
-    uintptr_t hi = lo + mbi.RegionSize;
-    s_regionCache[slot] = {lo, hi, ok};
-    return ok && (a + len <= hi);
+    if (ok) {
+        uintptr_t lo = reinterpret_cast<uintptr_t>(mbi.BaseAddress);
+        uintptr_t hi = lo + mbi.RegionSize;
+        s_regionCache[slot] = {lo, hi, true};
+        return (a + len <= hi);
+    }
+    return false;
 }
 
 const uint8_t* EntryAt(const uint8_t* names, int32_t index) {

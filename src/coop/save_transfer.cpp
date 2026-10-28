@@ -12,8 +12,6 @@
 #include <cstring>
 #include <optional>
 #include <vector>
-#include <filesystem>
-#include <fstream>
 
 namespace coop {
 
@@ -25,11 +23,10 @@ constexpr double kSnapshotReuseSeconds = 30;
 constexpr double kSnapshotDropSeconds = 300;
 constexpr double kRequestInterval = 1.0;
 constexpr double kStallSeconds = 10;
-constexpr size_t kPullPerTick = 4; // Paced to 4 KB per burst to prevent queue overflow and latency spikes
+constexpr size_t kPullPerTick = 8; // keeps save streaming bounded and prevents Steam buffer overflow
 constexpr int kMaxVerifyFailures = 3;
 
 bool g_share = false, g_join = false;
-double g_lastContextTime = 0;
 
 struct Host {
     std::vector<uint8_t> bundle;
@@ -48,8 +45,6 @@ struct Guest {
     double nextRequest = 0, lastProgress = 0, firstRequest = -1;
     int verifyFailures = 0;
     std::string error;
-    uint8_t lastAdoptedSha[32]{};
-    bool lastAdoptedShaValid = false;
 } g_guest;
 
 std::string Narrow(const std::wstring& value) {
@@ -64,16 +59,8 @@ uint32_t RandomId() {
     return id ? id : 1;
 }
 
-uint64_t WriteTime(const FILETIME& ft) {
-    return (static_cast<uint64_t>(ft.dwHighDateTime) << 32) | ft.dwLowDateTime;
-}
-
 uint64_t WriteTime(const WIN32_FILE_ATTRIBUTE_DATA& data) {
-    return WriteTime(data.ftLastWriteTime);
-}
-
-uint64_t WriteTime(const WIN32_FIND_DATAW& data) {
-    return WriteTime(data.ftLastWriteTime);
+    return (static_cast<uint64_t>(data.ftLastWriteTime.dwHighDateTime) << 32) | data.ftLastWriteTime.dwLowDateTime;
 }
 
 // The save folder the game used most recently: %LOCALAPPDATA%\BendGame\Saved\<account>\SaveGames with
@@ -128,78 +115,32 @@ bool BuildSnapshot(double now) {
         Log("save transfer: no SaveGames folder with a profile.sav under %%LOCALAPPDATA%%\\BendGame\\Saved");
         return false;
     }
+    std::vector<File> files;
     WIN32_FIND_DATAW entry;
     HANDLE find = FindFirstFileW((*folder + L"\\*.sav").c_str(), &entry);
     if (find == INVALID_HANDLE_VALUE) return false;
-
-    std::wstring bestSaveName;
-    uint64_t bestSaveTime = 0;
-    bool hasProfile = false;
-    bool hasCheckpoint = false;
-    bool hasMainMenu = false;
-
-    auto isFullSave = [](const std::wstring& s) {
-        return (_wcsnicmp(s.c_str(), L"autosave", 8) == 0 ||
-                _wcsnicmp(s.c_str(), L"slot", 4) == 0 ||
-                _wcsnicmp(s.c_str(), L"quicksave", 9) == 0 ||
-                _wcsnicmp(s.c_str(), L"manualsave", 10) == 0);
-    };
-
+    bool ok = true;
     do {
         if (entry.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
-        std::wstring filename = entry.cFileName;
-        std::string name = Narrow(filename);
-        if (!ValidName(name)) continue;
-
-        if (_wcsicmp(filename.c_str(), L"profile.sav") == 0) {
-            hasProfile = true;
+        std::string name = Narrow(entry.cFileName);
+        if (!ValidName(name)) {
+            Log("save transfer: skipping save file with an unsupported name");
             continue;
         }
-        if (_wcsicmp(filename.c_str(), L"checkpoint.sav") == 0) {
-            hasCheckpoint = true;
-            continue;
-        }
-        if (_wcsicmp(filename.c_str(), L"mainmenu.sav") == 0) {
-            hasMainMenu = true;
-            continue;
-        }
-
-        if (isFullSave(filename)) {
-            uint64_t wt = WriteTime(entry);
-            if (wt > bestSaveTime) {
-                bestSaveTime = wt;
-                bestSaveName = filename;
-            }
-        }
-    } while (FindNextFileW(find, &entry));
-    FindClose(find);
-
-    if (!hasProfile || bestSaveName.empty()) {
-        Log("save transfer: could not find valid profile.sav or latest full save in %s", Narrow(*folder).c_str());
-        return false;
-    }
-
-    std::vector<std::wstring> targetFiles;
-    targetFiles.push_back(L"profile.sav");
-    targetFiles.push_back(bestSaveName);
-    if (hasCheckpoint) targetFiles.push_back(L"checkpoint.sav");
-    if (hasMainMenu) targetFiles.push_back(L"mainmenu.sav");
-
-    std::vector<File> files;
-    for (const auto& fname : targetFiles) {
-        std::string name = Narrow(fname);
         File file{name, {}};
-        if (!ReadStable(*folder + L"\\" + fname, file.data)) {
+        if (!ReadStable(*folder + L"\\" + entry.cFileName, file.data)) {
             Log("save transfer: could not read %s consistently", name.c_str());
-            return false;
+            ok = false;
+            break;
         }
         files.push_back(std::move(file));
-    }
-
+    } while (FindNextFileW(find, &entry));
+    FindClose(find);
+    if (!ok) return false;
     std::sort(files.begin(), files.end(), [](const File& a, const File& b) { return a.name < b.name; });
     auto bundle = BuildBundle(files);
     if (bundle.empty()) {
-        Log("save transfer: cannot bundle save files (limit %u files, %u bytes)",
+        Log("save transfer: cannot bundle %u save files (limit %u files, %u bytes)", static_cast<unsigned>(files.size()),
             static_cast<unsigned>(kMaxFiles), kMaxBundleBytes);
         return false;
     }
@@ -209,7 +150,7 @@ bool BuildSnapshot(double now) {
     g_host.transfer = RandomId();
     g_host.builtAt = now;
     g_host.folder = Narrow(*folder);
-    Log("save transfer: snapshot %08x of %u essential files (%u bytes) from %s", g_host.transfer, static_cast<unsigned>(files.size()),
+    Log("save transfer: snapshot %08x of %u files (%u bytes) from %s", g_host.transfer, static_cast<unsigned>(files.size()),
         static_cast<unsigned>(g_host.bundle.size()), g_host.folder.c_str());
     return true;
 }
@@ -261,12 +202,6 @@ void GuestHandle(const Header& header, const char* data, int size, const SaveTra
     if (header.type == kOffer && size >= static_cast<int>(sizeof(OfferPacket))) {
         OfferPacket offer;
         std::memcpy(&offer, data, sizeof offer);
-        if (g_guest.lastAdoptedShaValid && std::memcmp(g_guest.lastAdoptedSha, offer.sha, 32) == 0) {
-            Log("save transfer: host offered snapshot %08x (%u bytes); digest matches current adopted save, skipping transfer!",
-                header.transfer, offer.size);
-            g_guest.state = GuestState::adopted;
-            return;
-        }
         bool fresh = header.transfer != g_guest.receiver.Transfer();
         if (!g_guest.receiver.Offer(header.transfer, offer.size, offer.sha)) {
             Log("save transfer: ignoring invalid offer (%u bytes)", offer.size);
@@ -309,18 +244,9 @@ void Adopt() {
         Fail("cannot install the host save: " + error);
         return;
     }
-    std::memcpy(g_guest.lastAdoptedSha, g_guest.receiver.Sha(), 32);
-    g_guest.lastAdoptedShaValid = true;
-    {
-        std::error_code ec;
-        std::filesystem::create_directories(SaveGuardRoot(), ec);
-        std::ofstream shaOut(std::filesystem::path(SaveGuardRoot()) / L"last_adopted.sha", std::ios::binary | std::ios::trunc);
-        if (shaOut) shaOut.write(reinterpret_cast<const char*>(g_guest.receiver.Sha()), 32);
-    }
     g_guest.state = GuestState::adopted;
     g_guest.receiver.Reset();
-    Log("save transfer: host save installed (%u files); Continue from the main menu to load it",
-        static_cast<unsigned>(files.size()));
+    Log("save transfer: host save installed; Continue from the main menu to load it");
 }
 
 } // namespace
@@ -328,31 +254,22 @@ void Adopt() {
 void SaveTransferConfigure(bool share, bool join) {
     g_share = share;
     g_join = join;
-    std::ifstream shaIn(std::filesystem::path(SaveGuardRoot()) / L"last_adopted.sha", std::ios::binary);
-    if (shaIn) {
-        shaIn.read(reinterpret_cast<char*>(g_guest.lastAdoptedSha), 32);
-        if (shaIn.gcount() == 32) {
-            g_guest.lastAdoptedShaValid = true;
-            Log("save transfer: loaded persisted adopted save digest from disk");
-        }
-    }
 }
 
 void SaveTransferInvalidate() { g_host.builtAt = -1e9; }
 
-bool SaveTransferActive() {
-    return (g_guest.state == GuestState::requesting || g_guest.state == GuestState::receiving);
-}
-
 bool SaveTransferResync() {
     if (g_guest.state == GuestState::requesting || g_guest.state == GuestState::receiving) return false;
-    g_guest.lastAdoptedShaValid = false;
     g_guest = Guest{};
     return true;
 }
 
 bool SaveTransferInProgress() {
     return g_guest.state == GuestState::requesting || g_guest.state == GuestState::receiving;
+}
+
+bool SaveTransferActive() {
+    return SaveTransferInProgress();
 }
 
 bool SaveTransferHandle(const char* data, int size, const SaveTransferContext& context) {
@@ -370,7 +287,6 @@ bool SaveTransferHandle(const char* data, int size, const SaveTransferContext& c
 }
 
 void SaveTransferTick(const SaveTransferContext& context) {
-    g_lastContextTime = context.now;
     if (g_host.transfer && context.now - std::max(g_host.builtAt, g_host.lastServed) > kSnapshotDropSeconds) {
         g_host.bundle.clear();
         g_host.bundle.shrink_to_fit();
@@ -379,8 +295,6 @@ void SaveTransferTick(const SaveTransferContext& context) {
     }
     if (!g_join || context.host || !SaveGuardActive()) return;
     if (g_guest.state == GuestState::idle && context.connected && context.peerSession) {
-        // Once adopted or valid, never download again during the session!
-        if (g_guest.lastAdoptedShaValid || SaveGuardAdopted()) return;
         g_guest.state = GuestState::requesting;
         g_guest.firstRequest = context.now;
         Log("save transfer: requesting the host's save");
@@ -416,9 +330,9 @@ void SaveTransferTick(const SaveTransferContext& context) {
         g_guest.state = GuestState::requesting;
         return;
     }
-    static double lastPullTime = 0;
-    if (context.now - lastPullTime < 0.033) return; // ~30 requests/sec = ~120 KB/s paced stream
-    lastPullTime = context.now;
+    static double s_lastPullTick = 0;
+    if (context.now - s_lastPullTick < 0.05) return;
+    s_lastPullTick = context.now;
     auto indices = g_guest.receiver.NextPull(context.now, kPullPerTick);
     if (indices.empty()) return;
     PullPacket pull{};

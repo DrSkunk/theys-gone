@@ -58,7 +58,7 @@ private:
     bool ready_ = false, pump_ = false, messages_ = false;
     std::string name_;
     double nextResolve_ = 0, nextMembers_ = 0, nextFriends_ = 0, pendingSince_ = 0;
-    uint64_t self_ = 0, lobby_ = 0, owner_ = 0, partner_ = 0, connectLobby_ = 0;
+    uint64_t self_ = 0, lobby_ = 0, owner_ = 0, partner_ = 0, lastPartner_ = 0, connectLobby_ = 0;
     uint64_t pendingCall_ = 0, pendingLobby_ = 0;
     Pending pending_ = Pending::None;
     struct StaleCall {

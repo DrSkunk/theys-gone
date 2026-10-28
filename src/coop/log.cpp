@@ -28,7 +28,12 @@ void Log(const char* fmt, ...) {
     std::vfprintf(g_file, fmt, ap);
     va_end(ap);
     std::fputc('\n', g_file);
-    std::fflush(g_file);
+    static DWORD s_lastFlush = 0;
+    DWORD now = GetTickCount();
+    if (now - s_lastFlush >= 1000) {
+        s_lastFlush = now;
+        std::fflush(g_file);
+    }
     LeaveCriticalSection(&g_lock);
 }
 

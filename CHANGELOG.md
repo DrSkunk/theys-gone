@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.5.2] (2026-10-28)
+
+### Features
+* **steam:** multi-channel friend invitation pipeline: automatic direct Steam lobby invite (InviteUserToLobby), desktop Steam Friends window (steam://open/friends), direct join clipboard link, and Steam in-game overlay fallback
+* **ui:** dedicated CHEATS submenu in gameplay pause menu (God Mode, Infinite Stamina, Repair & Refuel Bike), keeping GIVE HOST TO PARTNER on root in-game menu
+
+### Bug Fixes
+* **network:** filter ~350 micro-facial deformation bones via kinematic whitelist (IsEssentialBodyBone), cutting pose packet rate from 136 to ~30 pkt/s and eliminating Steam P2P buffer queue saturation (result 25 k_EResultLimitExceeded) and partner rubberbanding
+* **pose:** fix collapsed / distorted animation mesh during aiming and motorcycle riding by preserving root translation and streaming pure rotation for child kinematic bones
+* **ui:** fix rapid-fire audio clicking loop and accidental session drops by removing duplicate GetAsyncKeyState(VK_LBUTTON) in PauseUpdate and adding a 350ms input debounce latch
+* **ui:** clamp pause menu rendered rows to 10 (maxEntries), preventing hidden option rows from exceeding UE4 Slate widget bounds
+* **ui:** fix title menu 'HOST ONLINE GAME' and 'JOIN A FRIEND' bouncing immediately back to main menu
+
 ## [0.5.1](https://github.com/DrSkunk/theys-gone/compare/v0.5.0...v0.5.1) (2026-10-27)
 
 

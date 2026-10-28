@@ -33,14 +33,14 @@ namespace slot {
 constexpr int kRequestLobbyList = 4, kAddRequestLobbyListStringFilter = 5, kAddRequestLobbyListFilterSlotsAvailable = 8,
               kAddRequestLobbyListDistanceFilter = 9, kAddRequestLobbyListResultCountFilter = 10,
               kGetLobbyByIndex = 12, kSetLobbyType = 33;
-constexpr int kCreateLobby = 13, kJoinLobby = 14, kLeaveLobby = 15, kGetNumLobbyMembers = 17,
+constexpr int kCreateLobby = 13, kJoinLobby = 14, kLeaveLobby = 15, kInviteUserToLobby = 16, kGetNumLobbyMembers = 17,
               kGetLobbyMemberByIndex = 18, kGetLobbyData = 19, kSetLobbyData = 20, kSetLobbyJoinable = 34,
               kGetLobbyOwner = 35, kSetLobbyOwner = 36;
 constexpr int kGetPersonaName = 0;
 constexpr int kGetFriendCount = 2, kGetFriendByIndex = 3, kGetFriendPersonaName = 6, kGetFriendGamePlayed = 7,
-              kActivateGameOverlayInviteDialog = 32;
+              kActivateGameOverlay = 27, kActivateGameOverlayInviteDialog = 32;
 constexpr int kGetSteamID = 2;
-constexpr int kGetAppID = 8, kIsAPICallCompleted = 10, kGetAPICallResult = 12;
+constexpr int kGetAppID = 8, kIsAPICallCompleted = 10, kGetAPICallResult = 12, kIsOverlayEnabled = 16;
 constexpr int kSendMessageToUser = 0, kReceiveMessagesOnChannel = 1, kAcceptSessionWithUser = 2,
               kCloseSessionWithUser = 3;
 constexpr int kSendP2PPacket = 0, kIsP2PPacketAvailable = 1, kReadP2PPacket = 2, kAcceptP2PSessionWithUser = 3,
@@ -52,6 +52,7 @@ constexpr int kLobbyDistanceWorldwide = 3;
 constexpr uint32_t kResultOK = 1;
 constexpr uint32_t kChatRoomEnterSuccess = 1;
 constexpr int kFriendFlagImmediate = 0x04;
+constexpr int kSendUnreliable = 0;
 constexpr int kSendUnreliableNoNagle = 1;
 constexpr int kSendAutoRestartBrokenSession = 32;
 constexpr int kP2PSendUnreliable = 0;

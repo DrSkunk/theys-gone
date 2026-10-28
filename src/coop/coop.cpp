@@ -56,7 +56,7 @@ namespace {
 constexpr uint8_t kPrologue[19] = {0x40, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56,
                                    0x41, 0x57, 0x48, 0x81, 0xEC, 0xF0, 0x00, 0x00, 0x00};
 constexpr double kTickInterval = 1.0 / 60.0;
-constexpr double kSendInterval = 1.0 / 60.0;
+constexpr double kSendInterval = 1.0 / 30.0;
 constexpr double kPeerTimeout = 5.0;
 constexpr size_t kObjectiveProgressApplyPerTick = 16;
 double PeerTimeout();
@@ -154,7 +154,7 @@ struct PoseSource {
 PoseSource g_bodySource, g_bikeSource;
 PoseBuffer g_bodyPoses, g_bikePoses;
 double g_lastBodyPose = -10, g_lastBikePose = -10, g_nextPoseSend = 0;
-constexpr double kPoseFresh = 0.5;
+constexpr double kPoseFresh = 1.5;
 struct PoseStats {
     uint64_t sent = 0, bytes = 0, received = 0, rejected = 0, reads = 0;
     double readTime = 0;
@@ -358,7 +358,7 @@ const std::vector<UObject*>& OwnedMeshes(OwnedMeshCache& cache, UObject* owner, 
         cache.refreshed = -10;
         cache.meshes.clear();
     }
-    if (!IsLive(owner) || now - cache.refreshed < 1) return cache.meshes;
+    if (!IsLive(owner) || !cache.meshes.empty() || now - cache.refreshed < 0.5) return cache.meshes;
     cache.refreshed = now;
     cache.meshes.clear();
     for (int32_t i = 0, n = ObjectCount(); i < n; ++i) {
@@ -608,6 +608,10 @@ void UpdateWorldSync(UObject* pawn, double now) {
 // Stale controllers from an unloaded world can linger until GC, so prefer the newest one whose pawn
 // points back at it.
 UObject* FindLocalController() {
+    if (IsLive(g_controller)) {
+        auto pawn = Prop(g_controller, "Pawn");
+        if (IsLive(pawn)) return g_controller;
+    }
     if (IsLive(g_localPlayer)) {
         auto current = Prop(g_localPlayer, "PlayerController");
         if (IsLive(current) && Prop(current, "Player") == g_localPlayer) return current;
@@ -1512,6 +1516,7 @@ void DestroyBike() {
 }
 
 void FindLocalBike(UObject* pawn) {
+    if (IsLive(g_localBike)) return;
     UObject* bike = nullptr;
     if (IsLive(pawn)) {
         Call riding(pawn, "GetVehicle");
@@ -1532,7 +1537,9 @@ void FindLocalBike(UObject* pawn) {
             }
         }
     }
-    if (!IsLive(bike)) {
+    static double s_lastObjScan = 0;
+    if (!IsLive(bike) && Now() - s_lastObjScan >= 10.0) {
+        s_lastObjScan = Now();
         static auto bikeClass = FindClass("BP_bike04Drifter_C");
         if (!bikeClass) bikeClass = FindClass("BP_bike04Drifter_C");
         if (bikeClass) {
@@ -1600,6 +1607,19 @@ bool SpawnBike(UObject* pawn, const FVector& at) {
         auto mesh = Prop(component, "SkeletalMesh");
         Call visible(component, "IsVisible");
         if (!IsLive(mesh) || !visible.invoke() || !visible.get<bool>("ReturnValue")) continue;
+
+        // Reject non-bike components (ragdoll/gore pieces, environmental props stuck to interaction roots)
+        std::string meshName = Name(mesh);
+        if (meshName.find("gore") != std::string::npos || meshName.find("dumpster") != std::string::npos ||
+            meshName.find("swarmer") != std::string::npos || meshName.find("freaker") != std::string::npos ||
+            meshName.find("human") != std::string::npos) {
+            continue;
+        }
+        bool isMastered = WeakProp(component, "MasterPoseComponent") == source;
+        if (!isMastered && Prop(component, "AttachParent") != source) {
+            continue;
+        }
+
         auto actor = SpawnMeshActor(pawn, at);
         BikePart part;
         part.actor = actor;
@@ -1613,8 +1633,7 @@ bool SpawnBike(UObject* pawn, const FVector& at) {
         SetBoolProp(part.component, "bPerBoneMotionBlur", false);
         SetBoolProp(part.component, "bCastContactShadow", false);
         g_bike.parts.push_back(actor);
-        // Parts either share the chassis skeleton (master pose) or are rigid pieces mounted on a chassis socket.
-        part.mastered = WeakProp(component, "MasterPoseComponent") == source;
+        part.mastered = isMastered;
         if (part.mastered) {
             if (!Call(actor, "K2_AttachRootComponentToActor").set("InParentActor", g_bike.actor)
                     .set("AttachLocationType", static_cast<uint8_t>(2)).invoke() ||
@@ -1629,9 +1648,6 @@ bool SpawnBike(UObject* pawn, const FVector& at) {
             GetProp(component, "RelativeLocation", part.location);
             GetProp(component, "RelativeRotation", part.rotation);
             GetProp(component, "RelativeScale3D", part.scale);
-            if (Prop(component, "AttachParent") != source)
-                Log("bike: part %s is mounted on %s; approximating on the chassis", Name(mesh).c_str(),
-                    Name(Prop(component, "AttachParent")).c_str());
             ++mounted;
         }
         g_bike.attachments.push_back(part);
@@ -2445,6 +2461,7 @@ bool PassengerExitPosition(FVector& destination) {
 }
 
 bool EndPassenger(bool forced) {
+    (void)forced;
     if (!g_passenger.pawn) return true;
     FVector destination{};
     bool samePawn = IsLive(g_passenger.pawn) && g_passenger.pawn == g_pawn;
@@ -2901,6 +2918,24 @@ bool SpawnAvatar(UObject* localPawn, const FVector& at, Avatar& avatar) {
     auto localMesh = Prop(localPawn, "Mesh");
     auto skeletal = Prop(localMesh, "SkeletalMesh");
     if (!skeletal) return false;
+
+    // Check candidate modular character meshes on the local pawn.
+    // Days Gone characters are modular: clothing parts (jacket/vest, jeans, arms/hands, etc.) are attached
+    // asynchronously by Blueprint. If the local pawn hasn't attached its clothes yet, wait until it is dressed
+    // so we don't spawn a naked torso or floating head.
+    int modularPartCount = 0;
+    for (auto o : OwnedMeshes(g_characterMeshes, localPawn, Now())) {
+        if (!o || o == localMesh || !IsLive(o)) continue;
+        auto partMesh = Prop(o, "SkeletalMesh");
+        if (partMesh && IsCharacterPart(o, localMesh)) {
+            modularPartCount++;
+        }
+    }
+    if (modularPartCount == 0) {
+        // Local pawn is still initializing its modular clothing - wait for next tick
+        return false;
+    }
+
     avatar.actor = SpawnMeshActor(localPawn, at);
     avatar.component = Prop(avatar.actor, "SkeletalMeshComponent");
     if (!avatar.component) {
@@ -3176,16 +3211,29 @@ void UpdateAvatar(UObject* localPawn, double now) {
     if (hasSample && g_avatar.writer.Apply(frame)) {
         lastValidPose = now;
     }
-    // Hysteresis: smoothly hold pose and avoid flapping between poseable & skeletal meshes
-    bool streamed = g_avatar.pose && (now - lastValidPose < 0.4);
+    // Hysteresis: smoothly hold pose for up to 1.5s to avoid flapping between poseable & skeletal meshes on jitter
+    bool streamed = g_avatar.pose && (now - lastValidPose < 1.5);
     std::vector<UObject*> mastered;
     for (auto part : g_avatar.parts) mastered.push_back(Prop(part, "SkeletalMeshComponent"));
     bool wasPosing = g_avatar.posing;
     SetPosing(streamed, g_avatar.posing, g_avatar.pose, g_avatar.component, mastered);
     if (wasPosing != g_avatar.posing) {
-        Log("avatar: %s", g_avatar.posing ? "following the partner's streamed skeleton" : "pose stream stale; using animation clips");
+        Log("avatar: %s (lastValidPoseDelta=%.3fs, hasSample=%d, bodyPoseAge=%.3fs, frameBones=%d)",
+            g_avatar.posing ? "following partner's streamed skeleton" : "pose stream stale; using animation clips",
+            now - lastValidPose, hasSample, now - g_lastBodyPose, static_cast<int>(frame.bones.size()));
         g_avatar.pelvis = {};
         g_avatar.currentAnim = nullptr;
+    }
+    static uint32_t s_lastPartnerActions = 0;
+    static uint8_t s_lastPartnerWeapon = 0;
+    static uint16_t s_lastPartnerFlags = 0;
+    if (s.actions != s_lastPartnerActions || s.weaponType != s_lastPartnerWeapon || s.flags != s_lastPartnerFlags) {
+        Log("avatar: partner state actions=0x%02x aiming=%d weapon=%d inVehicle=%d speed=%.1f",
+            s.actions, (s.actions & kAiming) != 0, s.weaponType, (s.flags & kInVehicle) != 0,
+            std::sqrt(s.vel.x * s.vel.x + s.vel.y * s.vel.y));
+        s_lastPartnerActions = s.actions;
+        s_lastPartnerWeapon = s.weaponType;
+        s_lastPartnerFlags = s.flags;
     }
     if (!g_avatar.posing) AnimateAvatar(s, now);
     FRotator facing{0, s.yaw, 0};
@@ -3450,12 +3498,16 @@ void ReceiveGear(const char* data, int len, double now) {
 // the materials of a live component that already shows the same asset (usually the local player's own copy).
 // The scan walks the whole object array (~80 ms), so remember each asset's donor while it stays valid.
 UObject* LiveMeshUser(UObject* asset, bool skeletal, UObject* exclude) {
-    static std::unordered_map<UObject*, UObject*> donors;
+    struct CacheEntry { UObject* donor; double retryAt; };
+    static std::unordered_map<UObject*, CacheEntry> donors;
+    double now = Now();
     const char* property = skeletal ? "SkeletalMesh" : "StaticMesh";
     if (auto cached = donors.find(asset); cached != donors.end()) {
-        UObject* o = cached->second;
-        if (o != exclude && IsLive(o) && Prop(o, property) == asset) return o;
-        donors.erase(cached);
+        if (now < cached->second.retryAt) {
+            UObject* o = cached->second.donor;
+            if (o && o != exclude && IsLive(o) && Prop(o, property) == asset) return o;
+            if (!o) return nullptr; // negative cached, do not scan 200k objects again
+        }
     }
     static UObject* staticComponent = FindClass("StaticMeshComponent");
     UObject* cls = skeletal ? C.skelMeshComponent : staticComponent;
@@ -3466,7 +3518,7 @@ UObject* LiveMeshUser(UObject* asset, bool skeletal, UObject* exclude) {
         Call visible(o, "IsVisible");
         if (visible.invoke() && visible.get<bool>("ReturnValue")) found = o;
     }
-    if (found) donors[asset] = found;
+    donors[asset] = {found, now + (found ? 60.0 : 10.0)};
     return found;
 }
 
@@ -3613,12 +3665,7 @@ void FinishEnemyScan(UObject* pawn) {
     for (auto o : g_enemyScan.pawns) {
         bool kept = g_kept.count(o) != 0;
         if (keptOnly && !kept) continue;
-        if (!IsLive(o) || !IsLive(Prop(Prop(o, "Mesh"), "SkeletalMesh"))) continue;
-        // Pooled pawns parked near the world origin are alive but have no controller.
-        Call alive(o, "IsAlive");
-        bool living = alive.invoke() && alive.get<bool>("ReturnValue");
-        if (living && !IsLive(Prop(o, "Controller"))) continue;
-        if (IsPartnerProxy(o) || (living && !SharedEnemy(o, pawn))) continue;
+        if (!IsLive(o)) continue;
         Call where(o, "K2_GetActorLocation");
         if (!where.invoke()) continue;
         auto p = where.get<FVector>("ReturnValue");
@@ -3628,9 +3675,16 @@ void FinishEnemyScan(UObject* pawn) {
             float dx = world.x - player.x, dy = world.y - player.y, dz = world.z - player.z;
             best = std::min(best, dx * dx + dy * dy + dz * dz);
         }
+        if (!kept && best > kEnemyRadius * kEnemyRadius) continue;
+        if (!IsLive(Prop(Prop(o, "Mesh"), "SkeletalMesh"))) continue;
+        // Pooled pawns parked near the world origin are alive but have no controller.
+        Call alive(o, "IsAlive");
+        bool living = alive.invoke() && alive.get<bool>("ReturnValue");
+        if (living && !IsLive(Prop(o, "Controller"))) continue;
+        if (IsPartnerProxy(o) || (living && !SharedEnemy(o, pawn))) continue;
         // Kept enemies are fighting the other player, possibly beyond this player's radius; they sort first.
         if (kept) found.push_back({o, -1.f});
-        else if (best <= kEnemyRadius * kEnemyRadius) found.push_back({o, best});
+        else found.push_back({o, best});
     }
     std::sort(found.begin(), found.end(), [](const Candidate& a, const Candidate& b) { return a.distance < b.distance; });
     if (found.size() > kEnemyMaxStreamed) found.resize(kEnemyMaxStreamed);
@@ -4552,8 +4606,13 @@ void HandleTeleport(UObject* pawn, double now) {
 
 bool InGameplay(UObject* pawn) {
     if (!pawn) return false;
+    static double s_lastCheck = 0;
+    static bool s_cached = false;
+    double now = Now();
+    if (now - s_lastCheck < 0.25) return s_cached;
+    s_lastCheck = now;
     Call mode(C.statics, "GetGameMode");
-    if (!mode.set("WorldContextObject", pawn).invoke()) return false;
+    if (!mode.set("WorldContextObject", pawn).invoke()) return s_cached = false;
     auto gameMode = mode.get<UObject*>("ReturnValue");
     uint8_t menu = 0;
     Call loading(gameMode, "GetIsShowingLoadingScreenFromSaveGameLoad");
@@ -4564,9 +4623,9 @@ bool InGameplay(UObject* pawn) {
             Log("gameplay: could not verify game/menu/loading state; gameplay features blocked");
         }
         g_settingsError = "Game state unavailable; gameplay features are blocked";
-        return false;
+        return s_cached = false;
     }
-    return !menu && !loading.get<bool>("ReturnValue");
+    return s_cached = (!menu && !loading.get<bool>("ReturnValue"));
 }
 
 void RecallBikeToPlayer(UObject* pawn) {
@@ -4945,12 +5004,12 @@ void TraceMissionEvent(UObject* obj, UObject* fn) {
 
 bool g_teleportAfterLoad = false;
 
-// A guest in gameplay switches to the host's save as soon as it is installed: the newest save in the
-// sandbox is the host's, so an in-place reload loads it. Retried while the pins say it has not loaded.
+// A guest in gameplay adopts the host's save into the sandbox folder (TheysGone-guest-saves).
+// Mid-game in-place reloads are disabled: ReloadBecauseOfJobFailure kills the active player,
+// causes a black screen hitch, despawns assets, and interrupts co-op gameplay.
+// Players cleanly load the dedicated co-op save from the main/pause menu.
 void LoadAdoptedSave(double now) {
     (void)now;
-    // Disabled mid-game in-place reloads: ReloadBecauseOfJobFailure kills the active player,
-    // causes a black screen hitch and interrupts co-op gameplay.
 }
 
 [[maybe_unused]] bool CinematicActive() {
@@ -4970,19 +5029,30 @@ StorySignature ReadStory() {
     Array refs{};
     if (!GetProp(jobs, "JobRefsInOrder", refs) || refs.count <= 0 || refs.count > 4096 || !refs.data) return {};
     StoryHasher hasher;
+    static BoundFunction doneFn, activeFn;
+    static UObject* boundJobsClass = nullptr;
+    if (boundJobsClass != jobs->cls) {
+        doneFn.Bind(jobs->cls, "GetIsJobComplete", {"JobID", "ReturnValue"});
+        activeFn.Bind(jobs->cls, "GetIsJobActive", {"JobID", "ReturnValue"});
+        boundJobsClass = jobs->cls;
+    }
     for (int32_t i = 0; i < refs.count; ++i) {
         UObject* job = refs.data[i];
         if (!IsLive(job)) continue;
-        Call done(jobs, "GetIsJobComplete"), active(jobs, "GetIsJobActive");
-        done.set("JobID", job);
-        active.set("JobID", job);
+        bool isDone = false, isActive = false;
+        if (doneFn.Ready()) {
+            doneFn.Set(0, job);
+            if (doneFn.Invoke(jobs)) isDone = doneFn.Get<bool>(1);
+        }
+        if (activeFn.Ready()) {
+            activeFn.Set(0, job);
+            if (activeFn.Invoke(jobs)) isActive = activeFn.Get<bool>(1);
+        }
         uint8_t state = 0;
         int32_t objective = -1;
         GetProp(job, "JobCurrentState", state);
         GetProp(job, "CurrentJobObjectiveIndex", objective);
-        bool isActive = active.invoke() && active.get<bool>("ReturnValue");
-        hasher.Add(Name(job), done.invoke() && done.get<bool>("ReturnValue"),
-                   static_cast<uint8_t>(state | (isActive ? 0x80 : 0)), objective);
+        hasher.Add(Name(job), isDone, static_cast<uint8_t>(state | (isActive ? 0x80 : 0)), objective);
     }
     std::vector<research::ObjectiveProgress> objectives;
     static bool objectiveSnapshotFailed = false;
@@ -4999,12 +5069,21 @@ StorySignature ReadStory() {
     if (datas.invoke()) {
         auto list = datas.get<Array>("ReturnValue");
         std::vector<std::pair<std::string, bool>> missions;
+        static BoundFunction completedFn;
+        static UObject* boundMissionClass = nullptr;
+        if (boundMissionClass != mission->cls) {
+            completedFn.Bind(mission->cls, "GetIsMissionCompleted", {"MissionData", "ReturnValue"});
+            boundMissionClass = mission->cls;
+        }
         for (int32_t i = 0; i < list.count && list.count < 4096 && list.data; ++i) {
             UObject* data = list.data[i];
             if (!IsLive(data)) continue;
-            Call completed(mission, "GetIsMissionCompleted");
-            completed.set("MissionData", data);
-            missions.emplace_back(Name(data), completed.invoke() && completed.get<bool>("ReturnValue"));
+            bool isComp = false;
+            if (completedFn.Ready()) {
+                completedFn.Set(0, data);
+                if (completedFn.Invoke(mission)) isComp = completedFn.Get<bool>(1);
+            }
+            missions.emplace_back(Name(data), isComp);
         }
         std::sort(missions.begin(), missions.end());
         for (const auto& [name, done] : missions) hasher.Add(name, done);
@@ -5226,36 +5305,12 @@ void UpdateStory(double now) {
     ui::Notify("Theys Gone", "Host made progress: syncing to their save");
 }
 
-static std::atomic<bool> s_loadingHeartbeatActive{false};
-static std::thread s_loadingHeartbeatThread;
-
 void StartLoadingHeartbeat() {
-    if (s_loadingHeartbeatActive.load()) return;
-    s_loadingHeartbeatActive.store(true);
-    if (s_loadingHeartbeatThread.joinable()) s_loadingHeartbeatThread.detach();
-    s_loadingHeartbeatThread = std::thread([]() {
-        Log("save transfer: level load started; background heartbeat active");
-        while (s_loadingHeartbeatActive.load()) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(300));
-            if (!s_loadingHeartbeatActive.load()) break;
-            if (g_net && g_session) {
-                StatePacket p{};
-                p.magic = kMagic;
-                p.version = kProtocolVersion;
-                p.session = g_session;
-                p.targetSession = g_peer.session;
-                p.consent = g_consent;
-                p.flags = kAlive;
-                g_net->Send(p);
-            }
-        }
-        Log("save transfer: level load finished; background heartbeat ended");
-    });
+    Log("save transfer: level load started");
 }
 
 void StopLoadingHeartbeat() {
-    s_loadingHeartbeatActive.store(false);
-    if (s_loadingHeartbeatThread.joinable()) s_loadingHeartbeatThread.detach();
+    Log("save transfer: level load finished");
 }
 
 void ObserveSaveEvent(UObject* obj, UObject* fn, void* parms) {
@@ -5292,13 +5347,15 @@ void ObserveSaveEvent(UObject* obj, UObject* fn, void* parms) {
         return;
     }
     if (found->second == kLoaded) {
-        StopLoadingHeartbeat();
-        bool adoptedLoad = g_saveLoading && g_loadAfterAdopt;
-        g_saveLoading = g_loadAfterAdopt = false;
-        if (adoptedLoad && SaveGuardPinned()) {
-            g_loadVerificationPending = true;
-            g_loadVerificationAt = Now() + 1.0;
-            g_loadVerificationDeadline = Now() + 10.0;
+        if (g_saveLoading) {
+            StopLoadingHeartbeat();
+            bool adoptedLoad = g_loadAfterAdopt;
+            g_saveLoading = g_loadAfterAdopt = false;
+            if (adoptedLoad && SaveGuardPinned()) {
+                g_loadVerificationPending = true;
+                g_loadVerificationAt = Now() + 1.0;
+                g_loadVerificationDeadline = Now() + 10.0;
+            }
         }
         return;
     }
@@ -5380,7 +5437,7 @@ void Tick(bool hudFrame) {
     }
     double now = g_frameClock.Update(wall, engineTime, engineValid);
     g_tickNow = now;
-    if (now - g_lastScan >= (IsLive(g_controller) ? 1.0 : 0.5)) {
+    if (!IsLive(g_controller) || now - g_lastScan >= 5.0) {
         g_lastScan = now;
         auto controller = FindLocalController();
         if (controller != g_controller) {
@@ -5469,7 +5526,7 @@ void Tick(bool hudFrame) {
     UpdateDebugTools(now);
     if (g_cfg.debugTools) research::MissionWatchTick(now);
     UpdateDamageScope(now);
-    if (g_pawn && now - g_lastScan < kTickInterval && now >= g_localSettledAt) FindLocalBike(g_pawn);
+    if (g_pawn && !IsLive(g_localBike) && now - g_lastScan < kTickInterval && now >= g_localSettledAt) FindLocalBike(g_pawn);
     UpdateBike(g_pawn, now);
     UpdatePassenger(now);
     PollMelee();
@@ -5712,13 +5769,13 @@ void HookedProcessEvent(UObject* obj, UObject* fn, void* parms) {
         if (hudFrame) {
             if (Now() - g_lastHudTick >= 0.5) Log("tick: synchronizing visual updates to the local HUD frame");
             g_lastHudTick = Now();
+            if (IsLive(g_controller)) {
+                bool inGameplay = g_pawn && InGameplay(g_pawn);
+                bool showCursor = !inGameplay ? true : ui::CursorNeeded(g_controller);
+                SetBoolProp(g_controller, "bShowMouseCursor", showCursor);
+            }
         }
         Tick(hudFrame);
-        if (IsLive(g_controller)) {
-            bool inGameplay = g_pawn && InGameplay(g_pawn);
-            bool showCursor = !inGameplay ? true : ui::CursorNeeded(g_controller);
-            SetBoolProp(g_controller, "bShowMouseCursor", showCursor);
-        }
         g_inTick = false;
     }
     if (g_ready && g_cfg.discovery && !g_inTick && fn) {

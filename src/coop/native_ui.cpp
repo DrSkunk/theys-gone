@@ -179,6 +179,7 @@ bool Navigate(Page& page, const session::Row& row) {
     case Action::BrowseFriends: page = Page::Friends; break;
     case Action::BrowsePublic: page = Page::Public; break;
     case Action::BrowseLan: page = Page::Lan; break;
+    case Action::BrowseCheats: page = Page::Cheats; break;
     case Action::HostSteam:
     case Action::HostLan:
     case Action::JoinFriend:
@@ -619,21 +620,6 @@ bool MainBefore(UObject* fn) {
     }
     if ((info.kind == MainEvent::Confirm && MainCursor() == g_main.coopRow) ||
         (info.kind == MainEvent::Row && info.row.clicked && info.row.row == g_main.coopRow)) {
-        bool mouseClick = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
-        if (mouseClick) {
-            HWND hwnd = GetForegroundWindow();
-            POINT pt;
-            GetCursorPos(&pt);
-            ScreenToClient(hwnd, &pt);
-            RECT rc;
-            GetClientRect(hwnd, &rc);
-            float relY = rc.bottom > 0 ? static_cast<float>(pt.y) / static_cast<float>(rc.bottom) : 0.f;
-            if (relY >= 0.75f) {
-                Log("native ui: QUIT TO DESKTOP clicked via mouse (relY=%.2f); exiting cleanly", relY);
-                ExitProcess(0);
-                return true;
-            }
-        }
         Log("native ui: CO-OP confirmed/clicked; opening CO-OP menu");
         MainSetCursor(g_main.coopRow);
         MainOpen();
@@ -657,6 +643,7 @@ void MainAfter(UObject* fn) {
 }
 
 void MainUpdate(const session::View& view, const std::vector<std::string>& log) {
+    if (view.inGame) return;
     UObject* widget = IsLive(g_mainSeen) ? g_mainSeen : nullptr;
     if (widget != g_main.widget) {
         MainReset();
@@ -690,30 +677,9 @@ void MainUpdate(const session::View& view, const std::vector<std::string>& log) 
                 cursor, g_main.coopRow, quitRow, relX, relY);
 
             if (cursor == g_main.coopRow) {
-                if (relY >= 0.76f) {
-                    Log("native ui: mouse clicked QUIT TO DESKTOP via cursor match; exiting cleanly");
-                    g_main.handledAt = g_now;
-                    ExitProcess(0);
-                } else {
-                    Log("native ui: mouse clicked CO-OP via cursor match");
-                    g_main.handledAt = g_now;
-                    MainOpen();
-                }
-            } else if (cursor == quitRow) {
-                Log("native ui: mouse clicked QUIT TO DESKTOP via cursor match; exiting cleanly");
+                Log("native ui: mouse clicked CO-OP via cursor match");
                 g_main.handledAt = g_now;
-                ExitProcess(0);
-            } else if (relX >= 0.01f && relX < 0.60f) {
-                // Coordinate-based match for dual monitors, any aspect ratio
-                if (relY >= 0.76f) {
-                    Log("native ui: mouse clicked QUIT TO DESKTOP via coordinates (relY=%.3f); exiting cleanly", relY);
-                    g_main.handledAt = g_now;
-                    ExitProcess(0);
-                } else if (relY >= 0.58f && relY < 0.76f) {
-                    Log("native ui: mouse clicked CO-OP via coordinates (relY=%.3f)", relY);
-                    g_main.handledAt = g_now;
-                    MainOpen();
-                }
+                MainOpen();
             }
         } else if (g_main.open) {
             int cursor = MainCursor();
@@ -787,6 +753,8 @@ int PauseIndex() {
     return index ? *index : -1;
 }
 
+bool WidgetBool(UObject* widget, const char* function, bool& value);
+
 bool InViewport(UObject* widget) {
     Call call(widget, "IsInViewport");
     return call.ok() && call.invoke() && call.get<bool>("ReturnValue");
@@ -848,9 +816,15 @@ void PauseInject() {
 
 void PauseRender(const session::View& view, const std::vector<std::string>& log) {
     g_pause.rows = session::BuildRows(g_pause.page, view);
+    auto entries = PauseEntries();
+    int maxEntries = entries && entries->num > 0 ? entries->num : 10;
+    if (static_cast<int>(g_pause.rows.size()) > maxEntries && maxEntries >= 2) {
+        auto back = g_pause.rows.back();
+        g_pause.rows.resize(static_cast<size_t>(maxEntries - 1));
+        g_pause.rows.push_back(back);
+    }
     std::vector<std::string> labels;
     for (const auto& row : g_pause.rows) labels.push_back(row.label);
-    auto entries = PauseEntries();
     if (labels != g_pause.labels && entries && static_cast<int>(labels.size()) <= entries->num) {
         bool pageChanged = g_pause.labels.size() != labels.size() || g_pause.labels.empty() || g_pause.labels.back() != labels.back();
         std::vector<FText24> texts;
@@ -874,6 +848,10 @@ void PauseRender(const session::View& view, const std::vector<std::string>& log)
 }
 
 void PauseOpen() {
+    if (g_pause.coopIndex < 0) {
+        Log("native ui: cannot open pause CO-OP menu because coopIndex is invalid (%d)", g_pause.coopIndex);
+        return;
+    }
     g_pause.savedLabels.clear();
     auto entries = PauseEntries();
     auto profile = Field<TArrayRaw>(g_pause.widget, "ActiveMenuProfile");
@@ -891,12 +869,14 @@ void PauseOpen() {
     g_pause.page = Page::Root;
     g_pause.labels.clear();
     g_pause.status.clear();
+    g_pause.handledAt = g_now + 0.35;
     Log("native ui: pause CO-OP opened");
 }
 
 void PauseClose() {
     if (!g_pause.open) return;
     g_pause.open = false;
+    g_pause.handledAt = g_now + 0.35;
     std::vector<FText24> texts;
     for (size_t i = 0; i < g_pause.savedLabels.size(); ++i) {
         FText24 text;
@@ -915,6 +895,11 @@ void PauseActivate(int row) {
     if (row < 0 || row >= static_cast<int>(g_pause.rows.size())) return;
     const auto& selected = g_pause.rows[static_cast<size_t>(row)];
     Log("native ui: pause CO-OP selected '%s'", selected.label.c_str());
+    if (selected.action == Action::Leave) {
+        g_commands.push_back({selected.action, selected.index});
+        PauseClose();
+        return;
+    }
     if (Navigate(g_pause.page, selected)) PauseClose();
 }
 
@@ -946,21 +931,22 @@ bool PauseBefore(UObject* obj, UObject* fn, void* parms) {
     }
     if (g_pause.coopIndex < 0 || (!g_pause.coopText && !g_pause.open)) return false;
     bool echo = g_now - g_pause.handledAt < 0.25;
-    if (!top && name == g_pauseNames.confirm) {
+    if (name == g_pauseNames.confirm) {
+        if (echo) return true;
         int index = PauseIndex();
+        Log("native ui: pause confirm event (top=%d, index=%d, coopIndex=%d, open=%d)", top, index, g_pause.coopIndex, g_pause.open);
         if (g_pause.open) {
             g_pause.handledAt = g_now;
             PauseActivate(index);
             return true;
         }
-        if (index == g_pause.coopIndex) {
+        if (g_pause.coopIndex >= 0 && index == g_pause.coopIndex) {
             g_pause.handledAt = g_now;
             PauseOpen();
             return true;
         }
         return false;
     }
-    if (top && name == g_pauseNames.confirm) return echo;
     if (name == g_pauseNames.cancel || (top && name == g_pauseNames.cancelTop)) {
         // The list and the top widget both see one press; the second must not close the pause menu.
         if (!g_pause.open) return g_now - g_pause.cancelAt < 0.25;
@@ -978,7 +964,7 @@ bool PauseBefore(UObject* obj, UObject* fn, void* parms) {
         if (g_pause.open) {
             // Mouse clicks activate without a confirm press.
             if (activate && selected && !echo) {
-                g_pause.handledAt = g_now;
+                g_pause.handledAt = g_now + 0.35;
                 PauseResetCategorySelection();
                 PauseActivate(*index);
             } else if (activate) {
@@ -986,17 +972,20 @@ bool PauseBefore(UObject* obj, UObject* fn, void* parms) {
             }
             return true;
         }
-        if (*index == g_pause.coopIndex) {
+        if (g_pause.coopIndex >= 0 && *index == g_pause.coopIndex) {
             if (activate) {
                 PauseResetCategorySelection();
                 if (selected && !echo) {
-                    g_pause.handledAt = g_now;
+                    g_pause.handledAt = g_now + 0.35;
                     PauseOpen();
                 }
             }
             return true;
         }
-        if (*index > g_pause.coopIndex) --*index;
+        if (g_pause.coopIndex >= 0 && *index > g_pause.coopIndex) {
+            --*index;
+            if (*index < 0) *index = 0;
+        }
     }
     return false;
 }
@@ -1018,8 +1007,24 @@ void PauseUpdate(const session::View& view, const std::vector<std::string>& log)
         }
         return;
     }
+
+    // Always inject CO-OP into the list before evaluating clicks
     if (!g_pause.open) {
         PauseInject();
+    }
+
+    bool isF8Down = (GetAsyncKeyState(VK_F8) & 0x8000) != 0;
+    static bool wasF8Down = false;
+
+    if (isF8Down && !wasF8Down && (g_now >= g_pause.handledAt)) {
+        g_pause.handledAt = g_now + 0.35;
+        Log("native ui: pause F8 pressed (open=%d, coopIndex=%d)", g_pause.open, g_pause.coopIndex);
+        if (!g_pause.open && g_pause.coopIndex >= 0) PauseOpen();
+        else if (g_pause.open) PauseClose();
+    }
+    wasF8Down = isF8Down;
+
+    if (!g_pause.open) {
         return;
     }
     PauseRender(view, log);
@@ -1384,14 +1389,14 @@ void Update(double now, const session::View& view, const session::EventLog& log)
     g_pauseClass.Get(now);
     g_hudClass.Get(now);
 
-    // Hotkey toggle (F6 or F8 popup)
+    // Hotkey toggle (F6 title popup)
     auto isFocused = []() {
         DWORD pid = 0;
         GetWindowThreadProcessId(GetForegroundWindow(), &pid);
         return pid == GetCurrentProcessId();
     };
     static bool heldF6 = false;
-    bool downF6 = isFocused() && ((GetAsyncKeyState(VK_F6) & 0x8000) || (GetAsyncKeyState(VK_F8) & 0x8000));
+    bool downF6 = isFocused() && !view.inGame && ((GetAsyncKeyState(VK_F6) & 0x8000) != 0);
     if (downF6 && !heldF6) {
         if (g_main.widget) {
             if (g_main.open) MainClose(true);

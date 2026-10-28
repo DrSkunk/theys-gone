@@ -11,7 +11,7 @@ namespace coop {
 constexpr uint32_t kStoryMagic = 0x54534D44; // "DMST"
 constexpr uint16_t kStoryVersion = 3;
 constexpr double kStoryInterval = 1.0;        // host resend period
-constexpr double kStorySampleInterval = 3.0;  // how often each side recomputes its own signature
+constexpr double kStorySampleInterval = 30.0; // how often each side recomputes its own signature (saves recompute immediately)
 constexpr double kStoryResyncDelay = 6.0;     // a mismatch must persist this long before reloading
 constexpr double kObjectiveProgressInterval = 3.0; // host retries completed objectives
 constexpr uint32_t kObjectiveProgressMagic = 0x424F4D44; // "DMOB"

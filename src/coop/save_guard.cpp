@@ -377,7 +377,8 @@ bool SaveGuardEnable() {
     if (!g_installed) return false;
     std::error_code error;
     std::filesystem::remove_all(g_discard, error);
-        std::filesystem::create_directories(g_discard, error);
+    std::filesystem::remove_all(g_root, error);
+    std::filesystem::create_directories(g_discard, error);
     if (!error) std::filesystem::create_directories(g_root, error);
     if (error) {
         Log("save guard: cannot prepare sandbox %s (%s)", Narrow(g_root).c_str(), error.message().c_str());

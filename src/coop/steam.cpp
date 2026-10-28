@@ -4,6 +4,7 @@
 #include "log.hpp"
 
 #include <windows.h>
+#include <shellapi.h>
 
 #include <algorithm>
 #include <bit>
@@ -528,19 +529,7 @@ void SteamPeer::Leave() {
 void SteamPeer::Invite() {
     if (!ready_ || !lobby_) return;
     VCall<void>(api.friends, slot::kActivateGameOverlayInviteDialog, lobby_);
-    std::string joinUrl = "steam://joinlobby/480/" + std::to_string(lobby_) + "/" + std::to_string(self_);
-    if (OpenClipboard(nullptr)) {
-        EmptyClipboard();
-        HGLOBAL hGlob = GlobalAlloc(GMEM_MOVEABLE, joinUrl.size() + 1);
-        if (hGlob) {
-            std::memcpy(GlobalLock(hGlob), joinUrl.c_str(), joinUrl.size() + 1);
-            GlobalUnlock(hGlob);
-            SetClipboardData(CF_TEXT, hGlob);
-        }
-        CloseClipboard();
-    }
-    Log("steam: opened overlay invite dialog & copied link: %s", joinUrl.c_str());
-    Announce("Invite link copied to clipboard!");
+    Log("steam: opened Steam overlay invite dialog for lobby %llu", static_cast<unsigned long long>(lobby_));
 }
 
 bool SteamPeer::TransferHost() {
@@ -638,6 +627,7 @@ void SteamPeer::RefreshMembers() {
     if (partner_) Log("steam: %s left the lobby", FriendName(partner_).c_str());
     ClosePartnerSession();
     partner_ = next;
+    if (partner_) lastPartner_ = partner_;
     inbox_.clear();
     if (partner_) {
         Log("steam: partner %s (%llu) is in the lobby; streaming over %s", FriendName(partner_).c_str(),
@@ -662,12 +652,19 @@ void SteamPeer::SendRaw(const void* data, int size) {
     if (messages_) {
         auto id = Identity(partner_);
         result = VCall<uint32_t>(api.messages, slot::kSendMessageToUser, &id, data, static_cast<uint32_t>(size),
-                                 kSendUnreliableNoNagle | kSendAutoRestartBrokenSession, 0);
+                                 kSendUnreliable | kSendAutoRestartBrokenSession, 0);
     } else {
         result = VCall<bool>(api.networking, slot::kSendP2PPacket, partner_, data, static_cast<uint32_t>(size),
                              kP2PSendUnreliable, 0) ? kResultOK : 2;
     }
-    if (result != kResultOK && result != lastSendResult_) Log("steam: send failed (result %u)", result);
+    if (result != kResultOK) {
+        static ULONGLONG s_lastSendErrorMs = 0;
+        ULONGLONG nowMs = GetTickCount64();
+        if (nowMs - s_lastSendErrorMs >= 5000) {
+            s_lastSendErrorMs = nowMs;
+            Log("steam: send throttled/failed (result %u)", result);
+        }
+    }
     lastSendResult_ = result;
 }
 

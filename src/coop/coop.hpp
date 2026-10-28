@@ -27,7 +27,7 @@ struct Config {
     std::string animRun = "/Game/Animation/Deacon/run/run.Run";
     std::string animSprint = "/Game/Animation/Deacon/run/sprint.Sprint";
     int teleportKey = 0x76; // VK_F7
-    int poseRate = 20;      // player and bike pose updates per second (10-30; stable bandwidth)
+    int poseRate = 15;      // player and bike pose updates per second (10-30; stable bandwidth)
     bool poseFace = false;  // also stream the face rig (about 280 extra bones)
     bool autoLan = false;   // Transport=udp: start a LAN session at launch (host, or join PeerHost)
     bool steamPumpCallbacks = false; // also run SteamAPI_RunCallbacks from the mod (only if invites never arrive)

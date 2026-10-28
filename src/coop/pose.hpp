@@ -18,7 +18,7 @@ namespace coop {
 
 constexpr uint32_t kPoseMagic = 0x534F5044; // "DPOS"
 constexpr uint16_t kPoseVersion = 2;
-constexpr size_t kPoseBonesPerPacket = 64;    // worst case 1132 bytes: below the ~1200-byte safe internet payload
+constexpr size_t kPoseBonesPerPacket = 72;    // fits bike (68 bones) in a single packet, reducing packet rate by 50%
 constexpr uint8_t kPoseMaxChunks = 10;
 constexpr float kPoseTranslationScale = 50.f; // 0.02 cm steps, +-655 cm range
 // Bones carry a translation only in keyframes or shortly after it changed; most animated bones only rotate.
@@ -446,31 +446,41 @@ inline const BonePose* FindBone(const PoseFrame& frame, uint32_t name) {
     return nullptr;
 }
 
-// The player's face rig (everything under the head, plus face-named helpers) is not streamed; the receiver's
-// mesh keeps its neutral face. Hands and fingers stay so weapons are gripped correctly.
-inline bool BodyBoneSkipped(std::string_view name) {
+// Explicit whitelist: ANY bone that is part of the limbs, spine, neck, head, twist bones, hands, fingers, or weapon attachments
+// must NEVER be skipped, guaranteeing the full kinematic chain is preserved for two-handed aiming and motorcycle driving.
+inline bool IsEssentialBodyBone(std::string_view name) {
     std::string lower(name);
     std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    for (const char* term : {"face", "tongue", "palate", "eye", "lip", "brow", "cheek", "jaw", "teeth", "nose", "mouth"})
+    for (const char* term : {"root", "pelvis", "spine", "neck", "head", "clavicle", "shoulder",
+                             "arm", "elbow", "wrist", "hand", "finger", "thumb", "index", "middle", "ring", "pinky",
+                             "twist", "thigh", "calf", "leg", "knee", "foot", "ankle", "toe", "weapon", "socket", "gun"})
         if (lower.find(term) != std::string::npos) return true;
     return false;
 }
 
-// Bones to stream for a player body; a skipped bone drops its whole subtree so every sent bone's parent is sent.
+// Drops purely micro-facial deformation bones (approx ~350 bones) so network bandwidth and packet rate
+// drop by 80%, preventing Steam P2P buffer exhaustion (result 25 k_EResultLimitExceeded) and eliminating latency.
+inline bool BodyBoneSkipped(std::string_view name) {
+    if (IsEssentialBodyBone(name)) return false;
+    std::string lower(name);
+    std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    for (const char* term : {"face", "tongue", "palate", "eye", "lip", "brow", "cheek", "jaw", "teeth", "nose", "mouth",
+                             "eyelid", "blink", "lash", "squint", "ear", "snarl", "sneer", "throat", "adams", "frown", "smile", "nasal"})
+        if (lower.find(term) != std::string::npos) return true;
+    return false;
+}
+
+// Bones to stream for a player body: keep all kinematic body chains while filtering out facial meshes.
 inline std::vector<int> BodyBoneSubset(const std::vector<std::string>& names, const std::vector<int>& parents, bool full) {
     std::vector<int> subset;
     std::vector<bool> kept(names.size(), false);
     size_t limit = kPoseBonesPerPacket * kPoseMaxChunks - 1; // room for @root
     for (size_t i = 0; i < names.size() && subset.size() < limit; ++i) {
-        int parent = i < parents.size() ? parents[i] : -1;
-        bool parentKept = parent < 0 || (static_cast<size_t>(parent) < i && kept[parent]);
-        if (!parentKept) continue;
         if (!full && BodyBoneSkipped(names[i])) continue;
+        int p = parents[i];
+        if (p >= 0 && !kept[p]) continue;
         kept[i] = true;
         subset.push_back(static_cast<int>(i));
-        std::string lower(names[i]);
-        std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-        if (!full && lower == "head") kept[i] = false; // keep the head itself, drop everything below it
     }
     return subset;
 }

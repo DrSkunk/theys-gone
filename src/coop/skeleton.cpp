@@ -181,6 +181,7 @@ bool PoseWriter::Apply(const PoseFrame& frame) {
         !ReadableMemory(array.data, static_cast<size_t>(array.count) * sizeof(FTransform)))
         return false;
     auto atoms = reinterpret_cast<FTransform*>(array.data);
+    int applied = 0;
     for (size_t i = 0; i < frame.names.size() && i < frame.bones.size(); ++i) {
         auto it = table_.byHash.find(frame.names[i]);
         if (it == table_.byHash.end()) continue;
@@ -190,8 +191,9 @@ bool PoseWriter::Apply(const PoseFrame& frame) {
         const auto& bone = frame.bones[i];
         atom.rotation = {bone.q[0], bone.q[1], bone.q[2], bone.q[3]};
         atom.translation = bone.t;
+        applied++;
     }
-    return true;
+    return applied > 0;
 }
 
 UObject* CreateRuntimeComponent(UObject* actor, const char* className) {

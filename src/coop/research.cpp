@@ -632,10 +632,14 @@ std::string ErrorText(const FStringRaw& error) {
 }
 
 UObject* FindInstance(const char* className) {
-    auto cls = FindClass(className);
+    static std::unordered_map<std::string, std::pair<UObject*, UObject*>> cache;
+    auto& [cls, instance] = cache[className];
+    if (!cls) cls = FindClass(className);
+    if (IsLive(instance) && (!cls || IsA(instance, cls))) return instance;
+    instance = nullptr;
     for (int32_t i = 0, n = ObjectCount(); cls && i < n; ++i) {
         auto obj = ObjectAt(i);
-        if (IsLive(obj) && IsLive(obj->cls) && !IsDefaultOrArchetype(obj) && IsA(obj, cls)) return obj;
+        if (IsLive(obj) && IsLive(obj->cls) && !IsDefaultOrArchetype(obj) && IsA(obj, cls)) return instance = obj;
     }
     return nullptr;
 }
