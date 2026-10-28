@@ -31,6 +31,7 @@ struct Config {
     bool poseFace = false;  // also stream the face rig (about 280 extra bones)
     bool autoLan = false;   // Transport=udp: start a LAN session at launch (host, or join PeerHost)
     bool steamPumpCallbacks = false; // also run SteamAPI_RunCallbacks from the mod (only if invites never arrive)
+    std::string steamApp = "daysgone"; // Steam app for lobbies: daysgone, or spacewar (needs steam_spacewar.dll)
     bool freeRoam = false; // host: stream world tiles around a distant partner and hand them their region's enemies
 };
 

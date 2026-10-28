@@ -9,6 +9,7 @@
 #include <bit>
 #include <cstring>
 #include <mutex>
+#include <string>
 
 namespace coop {
 namespace {
@@ -144,11 +145,75 @@ const char* EnterResponseText(uint32_t response) {
     }
 }
 
+// Sets an environment variable for the lifetime of the object, then restores the previous value.
+class ScopedEnvironment {
+public:
+    ScopedEnvironment(const wchar_t* name, const wchar_t* value) : name_(name) {
+        DWORD size = GetEnvironmentVariableW(name, nullptr, 0);
+        if (size > 0) {
+            old_.resize(size);
+            DWORD n = GetEnvironmentVariableW(name, old_.data(), size);
+            had_ = n < size;
+            old_.resize(had_ ? n : 0);
+        }
+        SetEnvironmentVariableW(name, value);
+    }
+    ~ScopedEnvironment() { SetEnvironmentVariableW(name_, had_ ? old_.c_str() : nullptr); }
+
+private:
+    const wchar_t* name_;
+    std::wstring old_;
+    bool had_ = false;
+};
+
+// The game's steam_api64.dll is already initialized as Days Gone and cannot switch apps. A second copy of the
+// DLL keeps its own globals, so initializing it while SteamAppId says 480 gives the mod a separate Spacewar
+// connection to the running Steam client. Nothing pumps that copy's callbacks but the mod.
+HMODULE LoadSpacewar(std::string& diag) {
+    static HMODULE dll = nullptr;
+    static bool initialized = false;
+    if (!dll) dll = GetModuleHandleW(kSpacewarDll);
+    if (!dll) {
+        wchar_t exe[MAX_PATH];
+        DWORD n = GetModuleFileNameW(nullptr, exe, MAX_PATH);
+        std::wstring path(exe, n < MAX_PATH ? n : 0);
+        path = path.substr(0, path.find_last_of(L"\\/") + 1) + kSpacewarDll;
+        dll = LoadLibraryW(path.c_str());
+        if (!dll) {
+            diag = "SteamApp=spacewar needs steam_spacewar.dll (a copy of steam_api64.dll) next to the game executable";
+            return nullptr;
+        }
+    }
+    if (initialized) return dll;
+    using InitFlatFn = int (*)(char*); // SteamAPI_InitFlat(SteamErrMsg*), SDK 1.59+; 0 is k_ESteamAPIInitResult_OK
+    using InitFn = bool (*)();         // SteamAPI_Init, kept as an export by every SDK
+    auto initFlat = std::bit_cast<InitFlatFn>(GetProcAddress(dll, "SteamAPI_InitFlat"));
+    auto init = std::bit_cast<InitFn>(GetProcAddress(dll, "SteamAPI_Init"));
+    if (!initFlat && !init) {
+        diag = "steam_spacewar.dll exports neither SteamAPI_InitFlat nor SteamAPI_Init";
+        return nullptr;
+    }
+    char error[1024] = {};
+    {
+        // steam_api reads the app from SteamAppId, which Steam set to Days Gone for this process.
+        ScopedEnvironment appId(L"SteamAppId", L"480"), gameId(L"SteamGameId", L"480");
+        initialized = initFlat ? initFlat(error) == 0 : init();
+    }
+    if (!initialized) {
+        diag = std::string("Steam refused to start Spacewar (app 480)") +
+               (error[0] ? ": " + std::string(error) : "; is the Steam client running?");
+        return nullptr;
+    }
+    Log("steam: initialized steam_spacewar.dll as Spacewar (app 480)");
+    return dll;
+}
+
 } // namespace
 
-bool SteamPeer::Open(const std::string& playerName, bool pumpCallbacks, std::string& diag) {
+bool SteamPeer::Open(const std::string& playerName, bool pumpCallbacks, steam::SteamApp app, std::string& diag) {
     name_ = playerName;
-    pump_ = pumpCallbacks;
+    app_ = app;
+    pump_ = pumpCallbacks || app == SteamApp::Spacewar;
     connectLobby_ = ParseConnectLobby(GetCommandLineA());
     if (connectLobby_) Log("steam: launched from an invite for lobby %llu", static_cast<unsigned long long>(connectLobby_));
     std::string reason;
@@ -161,8 +226,10 @@ bool SteamPeer::Open(const std::string& playerName, bool pumpCallbacks, std::str
 }
 
 bool SteamPeer::Resolve(std::string& diag) {
-    HMODULE dll = GetModuleHandleW(L"steam_api64.dll");
-    if (!dll) {
+    HMODULE dll = nullptr;
+    if (app_ == SteamApp::Spacewar) {
+        if (!(dll = LoadSpacewar(diag))) return false;
+    } else if (!(dll = GetModuleHandleW(L"steam_api64.dll"))) {
         diag = "steam_api64.dll is not loaded";
         return false;
     }
@@ -196,7 +263,8 @@ bool SteamPeer::Resolve(std::string& diag) {
     self_ = VCallSteamId(api.user, slot::kGetSteamID);
     for (auto& callback : callbacks) api.registerCallback(&callback, callback.id);
     ready_ = true;
-    diag = "Steam ready as " + std::to_string(self_) + " using " +
+    diag = "Steam ready as " + std::to_string(self_) + " on " +
+           (app_ == SteamApp::Spacewar ? "Spacewar (app 480)" : "Days Gone") + " using " +
            (messages_ ? "SteamNetworkingMessages" : "legacy SteamNetworking P2P") +
            (api.utils ? "" : " (no SteamUtils; lobby results rely on callbacks)") +
            (pump_ ? "; pumping Steam callbacks" : "");
@@ -662,7 +730,7 @@ void SteamPeer::RefreshFriends(double now) {
     if (!ready_ || now < nextFriends_) return;
     nextFriends_ = now + 3;
     friends_.clear();
-    uint32_t app = api.utils ? VCall<uint32_t>(api.utils, slot::kGetAppID) : kDaysGoneAppId;
+    uint32_t app = api.utils ? VCall<uint32_t>(api.utils, slot::kGetAppID) : AppId(app_);
     int count = std::min(VCall<int>(api.friends, slot::kGetFriendCount, kFriendFlagImmediate), 1000);
     for (int i = 0; i < count; ++i) {
         uint64_t user = VCallSteamId(api.friends, slot::kGetFriendByIndex, i, kFriendFlagImmediate);

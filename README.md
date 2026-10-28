@@ -205,6 +205,21 @@ Visibility=friends
    lobby log and as native HUD notifications during gameplay. This is an
    event log, not typed text chat.
 
+#### Spacewar (optional, untested)
+
+By default the mod uses the game's own Steam connection, so lobbies belong to
+Days Gone. `SteamApp=spacewar` instead runs the lobby under Spacewar (app 480),
+Valve's public test app, through a second copy of the Steam API. Use it when a
+copy of the game has no Steam connection of its own, such as one bought
+outside Steam.
+
+1. Copy `steam_api64.dll` (from the game folder, or any Steamworks game) next to
+   the game executable and rename the copy to `steam_spacewar.dll`.
+2. Set `SteamApp=spacewar` in `TheysGone.ini`, and keep the Steam client running.
+
+Both players must use the same `SteamApp`: Spacewar players only see Spacewar
+lobbies. This mode has not been tested in a paired session yet.
+
 Only traffic from the other lobby member is accepted. `Port` and `PeerHost`
 do not control Steam connections. Epic Online Services is not implemented.
 The lobby owner is the host: their save, story and (in standard mode) enemies
@@ -292,6 +307,7 @@ All keys are in the `[Coop]` section of `TheysGone.ini`.
 | `Transport` | `menu` | Choose Steam/LAN in CO-OP; `udp` automatically hosts/joins LAN using the INI |
 | `Visibility` | `friends` | Steam: `private` (invite only), `friends`, or `public`; adjustable while hosting |
 | `SteamPumpCallbacks` | `0` | `1` also pumps Steam callbacks from the mod. Try it if invites never arrive |
+| `SteamApp` | `daysgone` | Steam app for lobbies: `daysgone` (the game's own), or `spacewar` (app 480, needs `steam_spacewar.dll`; see [Spacewar](#spacewar-optional-untested)). Both players must match |
 
 ## Troubleshooting
 
