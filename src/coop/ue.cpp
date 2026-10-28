@@ -1,5 +1,6 @@
 #include "ue.hpp"
 #include "log.hpp"
+#include "region_cache.hpp"
 
 #include <windows.h>
 
@@ -16,21 +17,23 @@ namespace {
 constexpr int kNamesPerChunk = 16384;
 constexpr int kNameChunks = 128;
 constexpr int kNameEntryString = 0x12; // Bend adds a 16-bit field before the string (stock 4.10: 0x10)
+constexpr int kMaxChainDepth = 64;     // outer/super chains; a corrupt pointer can otherwise loop forever
 
 bool Readable(const void* p, size_t len) {
-    static uintptr_t lo = 0, hi = 0;
-    auto a = reinterpret_cast<uintptr_t>(p);
-    if (a < 0x10000 || a > 0x7ffffffffff0) return false;
-    if (a >= lo && a + len <= hi) return true;
-    MEMORY_BASIC_INFORMATION mbi{};
-    if (!VirtualQuery(p, &mbi, sizeof(mbi)) || mbi.State != MEM_COMMIT) return false;
-    if (mbi.Protect & (PAGE_GUARD | PAGE_NOACCESS)) return false;
-    if (!(mbi.Protect & (PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_READ |
-                         PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY)))
-        return false;
-    lo = reinterpret_cast<uintptr_t>(mbi.BaseAddress);
-    hi = lo + mbi.RegionSize;
-    return a + len <= hi;
+    thread_local coop::ReadableRegionCache cache;
+    return cache.Readable(reinterpret_cast<uintptr_t>(p), len, GetTickCount64(),
+                          [](uintptr_t address, coop::ReadableRegionCache::Region& region) {
+        MEMORY_BASIC_INFORMATION mbi{};
+        if (!VirtualQuery(reinterpret_cast<const void*>(address), &mbi, sizeof(mbi)) || mbi.State != MEM_COMMIT)
+            return false;
+        if (mbi.Protect & (PAGE_GUARD | PAGE_NOACCESS)) return false;
+        if (!(mbi.Protect & (PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_READ |
+                             PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY)))
+            return false;
+        region.base = reinterpret_cast<uintptr_t>(mbi.BaseAddress);
+        region.limit = region.base + mbi.RegionSize;
+        return true;
+    });
 }
 
 const uint8_t* EntryAt(const uint8_t* names, int32_t index) {
@@ -55,8 +58,13 @@ bool EntryIs(const uint8_t* names, int32_t index, const char* text) {
 
 int32_t NameCount() { return *reinterpret_cast<const int32_t*>(g.names + kNameChunks * 8); }
 
-std::unordered_map<std::string, int32_t>& NameCache() {
-    static std::unordered_map<std::string, int32_t> cache;
+struct CachedName {
+    int32_t index = -1;
+    ULONGLONG retryAt = 0;
+};
+
+std::unordered_map<std::string, CachedName>& NameCache() {
+    static std::unordered_map<std::string, CachedName> cache;
     return cache;
 }
 
@@ -137,18 +145,25 @@ std::string NameString(int32_t index) {
     return reinterpret_cast<const char*>(e + kNameEntryString);
 }
 
+// A miss scans every GNames entry, and FindChild looks names up on each property or function access, so
+// misses are remembered too. Names appear as assets stream in, hence the retry.
 int32_t FindNameIndex(const char* s) {
+    constexpr ULONGLONG kMissRetryMs = 3000;
+    if (!s || !*s) return -1;
     auto& cache = NameCache();
-    if (auto it = cache.find(s); it != cache.end()) return it->second;
+    ULONGLONG now = GetTickCount64();
+    auto it = cache.find(s);
+    if (it != cache.end() && (it->second.index >= 0 || now < it->second.retryAt)) return it->second.index;
     int32_t n = NameCount();
     for (int32_t i = 0; i < n; ++i) {
         auto e = EntryAt(g.names, i);
         if (e && !(*reinterpret_cast<const int32_t*>(e) & 1) &&
             std::strcmp(reinterpret_cast<const char*>(e + kNameEntryString), s) == 0) {
-            cache[s] = i;
+            cache[s] = {i, 0};
             return i;
         }
     }
+    cache[s] = {-1, now + kMissRetryMs};
     return -1;
 }
 
@@ -213,8 +228,9 @@ std::string Name(const UObject* obj) {
 std::string FullName(const UObject* obj) {
     if (!obj) return "None";
     std::string path = Name(obj);
-    for (auto o = obj->outer; o; o = o->outer) path = Name(o) + "." + path;
-    return Name(obj->cls) + " " + path;
+    int depth = 0;
+    for (auto o = obj->outer; o && ++depth < kMaxChainDepth; o = o->outer) path = Name(o) + "." + path;
+    return (obj->cls ? Name(obj->cls) : "<no-class>") + " " + path;
 }
 
 UObject* Super(const UObject* s) {
@@ -223,7 +239,8 @@ UObject* Super(const UObject* s) {
 
 bool IsA(const UObject* obj, const UObject* cls) {
     if (!obj || !cls) return false;
-    for (auto c = obj->cls; c; c = Super(c))
+    int depth = 0;
+    for (auto c = obj->cls; c && ++depth < kMaxChainDepth; c = Super(c))
         if (c == cls) return true;
     return false;
 }
@@ -234,6 +251,7 @@ bool IsDefaultOrArchetype(const UObject* obj) {
 
 // Accepts a short object name or "Outer.Name" (e.g. "/Game/Animation/Deacon/run/run.Run").
 UObject* FindObject(const char* name, const UObject* cls) {
+    if (!name || !*name) return nullptr;
     static std::unordered_map<std::string, std::unordered_map<const UObject*, CachedLookup>> cache;
     auto& entry = cache[name][cls];
     if (auto object = entry.Get()) return object;
