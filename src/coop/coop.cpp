@@ -2457,11 +2457,16 @@ void UpdateRidePrompt(double now) {
                now - g_lastRecv < kPeerTimeout && (g_peer.flags & kAlive) && (g_peer.flags & kAcceptPassengers) &&
                (g_peer.flags & kInVehicle) && !(g_peer.flags & kPassenger) && now >= g_localSettledAt &&
                g_motion.BikeSpeed() <= 200) {
-        Call where(g_bike.component, "K2_GetComponentLocation");
-        if (where.invoke()) {
+        constexpr float kPromptRange = 1000; // cm; well beyond the interact's own range
+        Call where(g_bike.component, "K2_GetComponentLocation"), me(g_pawn, "K2_GetActorLocation");
+        if (where.invoke() && me.invoke()) {
             at = where.get<FVector>("ReturnValue");
-            visible = true;
-            label = "Ride with " + PartnerName();
+            auto mine = me.get<FVector>("ReturnValue");
+            float dx = at.x - mine.x, dy = at.y - mine.y, dz = at.z - mine.z;
+            if (dx * dx + dy * dy + dz * dz <= kPromptRange * kPromptRange) {
+                visible = true;
+                label = "Ride with " + PartnerName();
+            }
         }
     }
     if (ride::Update(g_pawn, visible, at, label)) {
