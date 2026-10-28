@@ -2457,11 +2457,16 @@ void UpdateRidePrompt(double now) {
                now - g_lastRecv < kPeerTimeout && (g_peer.flags & kAlive) && (g_peer.flags & kAcceptPassengers) &&
                (g_peer.flags & kInVehicle) && !(g_peer.flags & kPassenger) && now >= g_localSettledAt &&
                g_motion.BikeSpeed() <= 200) {
-        Call where(g_bike.component, "K2_GetComponentLocation");
-        if (where.invoke()) {
+        constexpr float kPromptRange = 1000; // cm; well beyond the interact's own range
+        Call where(g_bike.component, "K2_GetComponentLocation"), me(g_pawn, "K2_GetActorLocation");
+        if (where.invoke() && me.invoke()) {
             at = where.get<FVector>("ReturnValue");
-            visible = true;
-            label = "Ride with " + PartnerName();
+            auto mine = me.get<FVector>("ReturnValue");
+            float dx = at.x - mine.x, dy = at.y - mine.y, dz = at.z - mine.z;
+            if (dx * dx + dy * dy + dz * dz <= kPromptRange * kPromptRange) {
+                visible = true;
+                label = "Ride with " + PartnerName();
+            }
         }
     }
     if (ride::Update(g_pawn, visible, at, label)) {
@@ -4902,7 +4907,7 @@ void UpdateStory(double now) {
 }
 
 void ObserveSaveEvent(UObject* obj, UObject* fn, void* parms) {
-    if (!IsLive(obj) || !IsLive(fn)) return;
+    if (!fn) return;
     enum Kind : uint8_t { kIgnored, kSaveEvent, kLoadStarted, kLoaded };
     static std::unordered_map<int32_t, Kind> saveNames;
     auto found = saveNames.find(fn->name.index);
@@ -4914,7 +4919,8 @@ void ObserveSaveEvent(UObject* obj, UObject* fn, void* parms) {
                             name == "ReceivePreCheckpointSave" ? kSaveEvent : kIgnored;
         found = saveNames.emplace(fn->name.index, kind).first;
     }
-    if (found->second == kIgnored) return;
+    // Runs for every ProcessEvent: filter by name before the costlier liveness checks.
+    if (found->second == kIgnored || !IsLive(obj) || !IsLive(fn)) return;
     if (!SaveGuardActive()) {
         // Host or solo: our own save is authoritative; remember what it now contains.
         if (found->second == kSaveEvent) g_story.savePending = true;
