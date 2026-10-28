@@ -4888,7 +4888,7 @@ void UpdateStory(double now) {
 }
 
 void ObserveSaveEvent(UObject* obj, UObject* fn, void* parms) {
-    if (!IsLive(obj) || !IsLive(fn)) return;
+    if (!fn) return;
     enum Kind : uint8_t { kIgnored, kSaveEvent, kLoadStarted, kLoaded };
     static std::unordered_map<int32_t, Kind> saveNames;
     auto found = saveNames.find(fn->name.index);
@@ -4900,7 +4900,8 @@ void ObserveSaveEvent(UObject* obj, UObject* fn, void* parms) {
                             name == "ReceivePreCheckpointSave" ? kSaveEvent : kIgnored;
         found = saveNames.emplace(fn->name.index, kind).first;
     }
-    if (found->second == kIgnored) return;
+    // Runs for every ProcessEvent: filter by name before the costlier liveness checks.
+    if (found->second == kIgnored || !IsLive(obj) || !IsLive(fn)) return;
     if (!SaveGuardActive()) {
         // Host or solo: our own save is authoritative; remember what it now contains.
         if (found->second == kSaveEvent) g_story.savePending = true;

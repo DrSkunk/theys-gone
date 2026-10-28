@@ -15,6 +15,7 @@
 #include "../src/coop/session.hpp"
 #include "../src/coop/research.hpp"
 #include "../src/coop/streaming.hpp"
+#include "../src/coop/region_cache.hpp"
 
 #include <cassert>
 #include <cstring>
@@ -1134,7 +1135,53 @@ void TestStreamingMerge() {
     assert(!coop::streaming::ParseOffsetMeters("nan 0", east, north));
 }
 
+void TestReadableRegionCache() {
+    using coop::ReadableRegionCache;
+    ReadableRegionCache cache;
+    int calls = 0;
+    // One committed region [0x100000, 0x140000); everything else unreadable.
+    auto query = [&calls](uintptr_t address, ReadableRegionCache::Region& region) {
+        ++calls;
+        if (address < 0x100000 || address >= 0x140000) return false;
+        region = {0x100000, 0x140000};
+        return true;
+    };
+    assert(cache.Readable(0x100010, 8, 0, query) && calls == 1);
+    assert(cache.Readable(0x100020, 64, 50, query) && calls == 1);         // same slot, cached
+    assert(cache.Readable(0x130000, 8, 50, query) && calls == 2);          // other 64 KB slot queries once
+    assert(cache.Readable(0x130100, 8, 60, query) && calls == 2);
+    assert(!cache.Readable(0x13fff8, 16, 60, query));                      // crosses the region end
+    assert(cache.Readable(0x100010, 8, ReadableRegionCache::kTtlMs, query) && calls == 4); // expired, re-queried
+    // Unreadable answers are never remembered: memory committed later becomes readable at once.
+    assert(!cache.Readable(0x200000, 8, 200, query) && calls == 5);
+    assert(!cache.Readable(0x200000, 8, 200, query) && calls == 6);
+    bool committed = false;
+    auto later = [&committed](uintptr_t, ReadableRegionCache::Region& region) {
+        if (!committed) return false;
+        region = {0x200000, 0x210000};
+        return true;
+    };
+    assert(!cache.Readable(0x200000, 8, 300, later));
+    committed = true;
+    assert(cache.Readable(0x200000, 8, 300, later));
+    // Bounds checked before any query.
+    int before = calls;
+    assert(!cache.Readable(0, 8, 0, query));
+    assert(!cache.Readable(0xffff, 1, 0, query));
+    assert(!cache.Readable(ReadableRegionCache::kMaxAddress + 1, 1, 0, query));
+    assert(!cache.Readable(0x100000, SIZE_MAX, 0, query));
+    assert(calls == before);
+    // A query whose region does not contain the address is rejected and not cached.
+    auto wrong = [](uintptr_t, ReadableRegionCache::Region& region) {
+        region = {0x500000, 0x510000};
+        return true;
+    };
+    assert(!cache.Readable(0x400000, 8, 400, wrong));
+    std::puts("readable region cache ok");
+}
+
 int main() {
+    TestReadableRegionCache();
     TestStreamingMerge();
     TestResearchLifetime();
     TestSession();
