@@ -213,9 +213,12 @@ Valve's public test app, through a second copy of the Steam API. Use it when a
 copy of the game has no Steam connection of its own, such as one bought
 outside Steam.
 
-1. Copy `steam_api64.dll` (from the game folder, or any Steamworks game) next to
-   the game executable and rename the copy to `steam_spacewar.dll`.
-2. Set `SteamApp=spacewar` in `TheysGone.ini`, and keep the Steam client running.
+1. Set `SteamApp=spacewar` in `TheysGone.ini`, and keep the Steam client running.
+2. On first use the mod copies the game's `steam_api64.dll` next to the game
+   executable as `steam_spacewar.dll`. If the game has no `steam_api64.dll`, or
+   the folder is not writable, place a copy of one (from any Steamworks game)
+   there under that name yourself; a file you put there is always used as-is.
+   Delete `steam_spacewar.dll` to undo.
 
 Both players must use the same `SteamApp`: Spacewar players only see Spacewar
 lobbies. This mode has not been tested in a paired session yet.
@@ -307,7 +310,7 @@ All keys are in the `[Coop]` section of `TheysGone.ini`.
 | `Transport` | `menu` | Choose Steam/LAN in CO-OP; `udp` automatically hosts/joins LAN using the INI |
 | `Visibility` | `friends` | Steam: `private` (invite only), `friends`, or `public`; adjustable while hosting |
 | `SteamPumpCallbacks` | `0` | `1` also pumps Steam callbacks from the mod. Try it if invites never arrive |
-| `SteamApp` | `daysgone` | Steam app for lobbies: `daysgone` (the game's own), or `spacewar` (app 480, needs `steam_spacewar.dll`; see [Spacewar](#spacewar-optional-untested)). Both players must match |
+| `SteamApp` | `daysgone` | Steam app for lobbies: `daysgone` (the game's own), or `spacewar` (app 480 through a copy of the Steam API; see [Spacewar](#spacewar-optional-untested)). Both players must match |
 
 ## Troubleshooting
 

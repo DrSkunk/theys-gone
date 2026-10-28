@@ -166,21 +166,53 @@ private:
     bool had_ = false;
 };
 
+std::wstring ModulePath(HMODULE module) {
+    wchar_t path[MAX_PATH];
+    DWORD n = GetModuleFileNameW(module, path, MAX_PATH);
+    return n && n < MAX_PATH ? std::wstring(path, n) : std::wstring();
+}
+
+std::wstring Folder(const std::wstring& path) {
+    return path.substr(0, path.find_last_of(L"\\/") + 1);
+}
+
+std::string Narrow(const std::wstring& text) {
+    std::string out;
+    for (wchar_t c : text) out += c < 128 ? static_cast<char>(c) : '?';
+    return out;
+}
+
 // The game's steam_api64.dll is already initialized as Days Gone and cannot switch apps. A second copy of the
 // DLL keeps its own globals, so initializing it while SteamAppId says 480 gives the mod a separate Spacewar
 // connection to the running Steam client. Nothing pumps that copy's callbacks but the mod.
+// A steam_spacewar.dll the player placed next to the game wins; otherwise the game's own DLL is copied there.
 HMODULE LoadSpacewar(std::string& diag) {
     static HMODULE dll = nullptr;
     static bool initialized = false;
     if (!dll) dll = GetModuleHandleW(kSpacewarDll);
     if (!dll) {
-        wchar_t exe[MAX_PATH];
-        DWORD n = GetModuleFileNameW(nullptr, exe, MAX_PATH);
-        std::wstring path(exe, n < MAX_PATH ? n : 0);
-        path = path.substr(0, path.find_last_of(L"\\/") + 1) + kSpacewarDll;
+        std::wstring folder = Folder(ModulePath(nullptr));
+        std::wstring path = folder + kSpacewarDll;
+        if (GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES) {
+            HMODULE game = GetModuleHandleW(L"steam_api64.dll");
+            std::wstring source = game ? ModulePath(game) : folder + L"steam_api64.dll";
+            if (GetFileAttributesW(source.c_str()) == INVALID_FILE_ATTRIBUTES) {
+                diag = "SteamApp=spacewar: the game has no steam_api64.dll to copy; place a copy of one named "
+                       "steam_spacewar.dll next to the game executable";
+                return nullptr;
+            }
+            DWORD error = CopyFileW(source.c_str(), path.c_str(), TRUE) ? ERROR_SUCCESS : GetLastError();
+            if (error != ERROR_SUCCESS && error != ERROR_FILE_EXISTS) {
+                diag = "SteamApp=spacewar: cannot copy " + Narrow(source) + " to " + Narrow(path) + " (error " +
+                       std::to_string(error) + "); copy it there by hand";
+                return nullptr;
+            }
+            Log("steam: copied %s to %s for Spacewar", Narrow(source).c_str(), Narrow(path).c_str());
+        }
         dll = LoadLibraryW(path.c_str());
         if (!dll) {
-            diag = "SteamApp=spacewar needs steam_spacewar.dll (a copy of steam_api64.dll) next to the game executable";
+            DWORD error = GetLastError();
+            diag = "SteamApp=spacewar: cannot load " + Narrow(path) + " (error " + std::to_string(error) + ")";
             return nullptr;
         }
     }
