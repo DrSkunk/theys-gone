@@ -5026,7 +5026,8 @@ void Tick(bool hudFrame) {
     }
     double now = g_frameClock.Update(wall, engineTime, engineValid);
     g_tickNow = now;
-    if (now - g_lastScan >= 1.0 || !IsLive(g_controller)) {
+    // Without a controller (title menu, loads) FindLocalController walks every UObject; don't do that per tick.
+    if (now - g_lastScan >= (IsLive(g_controller) ? 1.0 : 0.5)) {
         g_lastScan = now;
         auto controller = FindLocalController();
         if (controller != g_controller) {
