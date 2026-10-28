@@ -184,7 +184,9 @@ bool PoseWriter::Apply(const PoseFrame& frame) {
     for (size_t i = 0; i < frame.names.size() && i < frame.bones.size(); ++i) {
         auto it = table_.byHash.find(frame.names[i]);
         if (it == table_.byHash.end()) continue;
-        auto& atom = atoms[it->second];
+        int idx = it->second;
+        if (idx < 0 || idx >= array.count) continue;
+        auto& atom = atoms[idx];
         const auto& bone = frame.bones[i];
         atom.rotation = {bone.q[0], bone.q[1], bone.q[2], bone.q[3]};
         atom.translation = bone.t;

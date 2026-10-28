@@ -33,9 +33,9 @@ public:
     void Clear() {
         samples_.clear();
         clockReady_ = false;
-        interval_ = 1.0 / 30;
+        interval_ = 1.0 / 120;
         jitter_ = 0;
-        delay_ = 0.1;
+        delay_ = 0.025;
     }
 
     bool Empty() const { return samples_.empty(); }
@@ -45,6 +45,11 @@ public:
     // The sender clock (milliseconds) that the last Sample played back; lets other streams follow it.
     double SenderMs() const {
         return samples_.empty() ? 0 : lastTimestamp_ + (playback_ - samples_.back().t) * 1000.0;
+    }
+    double SenderMs(double customDelay) const {
+        if (samples_.empty()) return 0;
+        double targetPlayback = samples_.back().t - customDelay;
+        return lastTimestamp_ + (targetPlayback - samples_.back().t) * 1000.0;
     }
     const Statistics& Stats() const { return stats_; }
     float BikeSpeed() const {
@@ -57,7 +62,8 @@ public:
         double time = 0;
         if (!samples_.empty()) {
             uint32_t milliseconds = packet.timeMs - lastTimestamp_;
-            if (milliseconds >= 0x80000000u || arrival < lastArrival_) return false;
+            if (milliseconds >= 0x80000000u) return false;
+            if (arrival < lastArrival_) arrival = lastArrival_;
             if (milliseconds > 2000) {
                 Clear();
                 ++stats_.resets;
@@ -67,8 +73,8 @@ public:
                     double spacing = milliseconds * 0.001;
                     interval_ += 0.05 * (spacing - interval_);
                     jitter_ += 0.05 * (std::fabs((arrival - lastArrival_) - spacing) - jitter_);
-                    double target = std::clamp(3 * interval_ + 2 * jitter_, 0.08, 0.25);
-                    delay_ += (target > delay_ ? 0.1 : 0.01) * (target - delay_);
+                    double target = std::clamp(2.0 * interval_ + 1.0 * jitter_, 0.020, 0.045);
+                    delay_ += (target > delay_ ? 0.1 : 0.02) * (target - delay_);
                 }
             }
         }
@@ -98,7 +104,7 @@ public:
     }
 
     bool Sample(double now, MotionSnapshot& out) {
-        if (samples_.empty() || !std::isfinite(now) || now < lastArrival_) return false;
+        if (samples_.empty() || !std::isfinite(now)) return false;
         bool frame = !clockReady_ || now > sampledAt_;
         if (!clockReady_) {
             playback_ = samples_.back().t - delay_;
@@ -108,11 +114,11 @@ public:
             double elapsed = now - sampledAt_;
             double target = samples_.back().t + (now - lastArrival_) - delay_;
             double error = target - (playback_ + elapsed);
-            if (std::fabs(error) > 0.5) {
+            if (std::fabs(error) > 1.5) {
                 playback_ = target;
                 ++stats_.resets;
             } else {
-                double rate = std::clamp(1 + error * 0.5, 0.98, 1.02);
+                double rate = std::clamp(1.0 + error * 1.5, 0.85, 1.15);
                 playback_ += elapsed * rate;
             }
             sampledAt_ = now;
@@ -177,7 +183,7 @@ private:
     std::deque<MotionSnapshot> samples_;
     uint32_t lastTimestamp_ = 0;
     double lastArrival_ = 0, sampledAt_ = 0, playback_ = 0;
-    double interval_ = 1.0 / 30, jitter_ = 0, delay_ = 0.1;
+    double interval_ = 1.0 / 120, jitter_ = 0, delay_ = 0.025;
     bool clockReady_ = false;
     Statistics stats_;
 

@@ -21,12 +21,12 @@ constexpr uint32_t kEnemyInfoMagic = 0x4E454D44; // "DMEN"
 constexpr uint16_t kEnemyInfoVersion = 1;
 constexpr size_t kEnemyMeshPaths = 4;      // body plus up to three modular parts
 constexpr size_t kEnemyPathLength = 120;
-constexpr size_t kEnemyMaxBones = 159; // at most three packets per enemy, including @root
-constexpr size_t kEnemyMaxStreamed = 16;
-constexpr float kEnemyRadius = 8000.f;     // 80 m around either player
-constexpr double kEnemySendInterval = 1.0 / 15;
+constexpr size_t kEnemyMaxBones = 48; // guaranteed to fit into 1 packet (kPoseBonesPerPacket is 53)
+constexpr size_t kEnemyMaxStreamed = 8;
+constexpr float kEnemyRadius = 4500.f;     // 45 m around either player (active combat zone)
+constexpr double kEnemySendInterval = 1.0 / 12;
 constexpr double kEnemyInfoInterval = 1.0;
-constexpr double kEnemyTimeout = 1.5;
+constexpr double kEnemyTimeout = 4.0;
 
 constexpr double kHandoffCalm = 6.0;   // an enemy that ignores its player this long goes back to normal rules
 constexpr double kHandoffMax = 180.0;  // upper bound on keeping an enemy past an ownership change
@@ -101,12 +101,20 @@ inline bool EncodeEnemyInfo(uint32_t session, uint32_t entity, const std::vector
     return DecodeEnemyInfo(reinterpret_cast<const char*>(&out), sizeof out, check);
 }
 
-// Face rig, tongue, eyes, fingers and camera/reference helpers do not change an enemy's silhouette.
+// Face rig, tongue, eyes, fingers, twist bones, helpers and sockets do not change an enemy's silhouette.
 inline bool EnemyBoneSkipped(std::string_view name) {
     std::string lower(name);
     std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    for (const char* term : {"face", "tongue", "palate", "eye", "thumb", "index", "ring", "pinky", "middle", "cam0", "ref0", "lip", "brow", "cheek"})
+    for (const char* term : {
+        "face", "tongue", "palate", "eye", "thumb", "index", "ring", "pinky", "middle",
+        "cam", "ref", "lip", "brow", "cheek", "jaw", "teeth", "mouth", "nose", "ear",
+        "chin", "lid", "forehead", "nasal", "twist", "helper", "hlp", "adj", "corr",
+        "clavicle_extra", "rib", "breast", "pec", "scapula", "deltoid", "bicep", "tricep",
+        "butt", "groin", "bulge", "ragdoll", "driver", "ik", "weapon", "holster", "sheath",
+        "attach", "socket"
+    }) {
         if (lower.find(term) != std::string::npos) return true;
+    }
     return false;
 }
 
@@ -120,6 +128,16 @@ inline std::vector<int> EnemyBoneSubset(const std::vector<std::string>& names, c
         if (!parentKept || EnemyBoneSkipped(names[i])) continue;
         kept[i] = true;
         subset.push_back(static_cast<int>(i));
+        std::string lower(names[i]);
+        std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        // Keep head itself, drop everything attached to head (face, jaws, eyes, etc.)
+        if (lower == "head" || lower.find("head") != std::string::npos) {
+            kept[i] = false;
+        }
+        // Keep hands, drop all individual fingers
+        if (lower == "hand_l" || lower == "hand_r") {
+            kept[i] = false;
+        }
     }
     return subset;
 }

@@ -103,6 +103,15 @@ enum class Action : uint8_t {
     Leave,
     Refresh,
     Back,
+    RecallBike,
+    TeleportPartner,
+    ToggleGodMode,
+    ToggleInfiniteStamina,
+    RefuelRepairBike,
+    TransferHost,
+    DismountPassenger,
+    TogglePassengers,
+    ToggleEnemies,
 };
 
 struct Row {
@@ -123,6 +132,11 @@ struct View {
     std::vector<std::string> friends; // friends hosting a Theys Gone lobby
     std::vector<std::string> publicLobbies;
     std::vector<std::string> lanHosts;
+    bool godMode = false;
+    bool infiniteStamina = false;
+    bool isPassenger = false;
+    bool passengers = true;
+    bool enemies = true;
 };
 
 // Main menu rows 0-8 have native mouse targets; the pause list has ten entries.
@@ -149,8 +163,17 @@ inline std::vector<Row> BuildRows(Page page, const View& v) {
         if (!v.inGame) rows.push_back({v.host ? "START GAME" : "START GAME (JOIN HOST)", Action::Start});
         if (v.kind == Kind::Steam && !v.busy) {
             rows.push_back({"INVITE FRIENDS", Action::Invite});
-            if (v.host)
-                rows.push_back({std::string("VISIBILITY: ") + VisibilityName(v.visibility), Action::CycleVisibility});
+            if (v.host && v.connected) rows.push_back({"GIVE HOST TO PARTNER", Action::TransferHost});
+        }
+        if (v.inGame) {
+            if (v.isPassenger) rows.push_back({"DISMOUNT PASSENGER", Action::DismountPassenger});
+            rows.push_back({"RECALL BIKE (GROUND)", Action::RecallBike});
+            if (v.connected) rows.push_back({"TELEPORT TO PARTNER", Action::TeleportPartner});
+            rows.push_back({std::string("ENEMY SYNC: ") + (v.enemies ? "ENABLED" : "OFF"), Action::ToggleEnemies});
+            rows.push_back({std::string("GOD MODE: ") + (v.godMode ? "ENABLED" : "OFF"), Action::ToggleGodMode});
+            rows.push_back({std::string("INFINITE STAMINA: ") + (v.infiniteStamina ? "ENABLED" : "OFF"), Action::ToggleInfiniteStamina});
+            rows.push_back({"REPAIR & REFUEL BIKE", Action::RefuelRepairBike});
+            rows.push_back({std::string("ALLOW PASSENGERS: ") + (v.passengers ? "ENABLED" : "OFF"), Action::TogglePassengers});
         }
         rows.push_back({v.host ? "CLOSE SESSION" : "LEAVE SESSION", Action::Leave});
         rows.push_back({"BACK", Action::Back});

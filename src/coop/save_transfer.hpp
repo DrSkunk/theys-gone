@@ -31,6 +31,7 @@ bool SaveTransferInProgress();
 // Returns true when the datagram belonged to the save transfer.
 bool SaveTransferHandle(const char* data, int size, const SaveTransferContext& context);
 void SaveTransferTick(const SaveTransferContext& context);
+bool SaveTransferActive();
 // Short status for the co-op menu; empty when there is nothing to report.
 std::string SaveTransferStatus(const SaveTransferContext& context);
 

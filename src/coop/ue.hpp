@@ -123,6 +123,16 @@ template <typename T> bool GetProp(UObject* obj, const char* name, T& out) {
     return true;
 }
 
+template <typename T> bool SetProp(UObject* obj, const char* name, const T& in) {
+    if (!obj) return false;
+    UObject* p = FindChild(obj->cls, name);
+    if (!p) return false;
+    int offset = PropertyOffset(p);
+    if (offset < 0) return false;
+    std::memcpy(reinterpret_cast<uint8_t*>(obj) + offset, &in, sizeof(T));
+    return true;
+}
+
 bool ReadableMemory(const void* p, size_t len);
 
 // Resolves a UFunction and its parameter offsets once, then reuses one parameter buffer.

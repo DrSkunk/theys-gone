@@ -47,6 +47,7 @@ static_assert(sizeof(FText24) == 24 && sizeof(FStringRaw) == 16 && sizeof(TArray
 constexpr uint8_t kVisible = 0, kCollapsed = 1, kHidden = 2, kSelfHitTestInvisible = 4;
 
 bool g_trace = false;
+bool g_nativeMenu = true;
 std::vector<Command> g_commands;
 
 std::wstring Widen(const std::string& text) {
@@ -212,6 +213,7 @@ struct MainMenu {
     std::shared_ptr<UObject> statusBlock;
     std::shared_ptr<UObject> statusBackground;
     bool loggedLabels = false;
+    double handledAt = -10;
     bool brandLogged = false;
 } g_main;
 
@@ -302,6 +304,14 @@ void MainInject() {
     *max = names->num;
     g_main.coopRow = at;
     g_main.coopText = coop.Data();
+    for (int i = 0; i < names->num && i < 10; ++i) {
+        char interactName[32];
+        std::snprintf(interactName, sizeof interactName, "MenuInteract_MainMenu%d", i);
+        if (auto interact = ObjectField(g_main.widget, interactName)) {
+            SetVisibility(interact, kVisible);
+            if (auto enabled = Field<bool>(interact, "bIsEnabled")) *enabled = true;
+        }
+    }
     MainRefresh();
     Log("native ui: added CO-OP to the title menu at row %d of %d", at, names->num);
 }
@@ -437,6 +447,7 @@ void MainOpen() {
     g_main.saved.assign(reinterpret_cast<FText24*>(names->data), reinterpret_cast<FText24*>(names->data) + names->num);
     g_main.savedMax = *max;
     g_main.open = true;
+    g_main.handledAt = g_now;
     g_main.page = Page::Root;
     g_main.labels.clear();
     MainShowStatus(true);
@@ -446,6 +457,7 @@ void MainOpen() {
 void MainClose(bool restore) {
     if (!g_main.open) return;
     g_main.open = false;
+    g_main.handledAt = g_now;
     auto names = MainNames();
     auto max = Field<int32_t>(g_main.widget, "MaxMenuOptions");
     if (restore && names && max && static_cast<int>(g_main.saved.size()) <= names->max) {
@@ -503,6 +515,7 @@ void MainRender(const session::View& view, const std::vector<std::string>& log) 
 }
 
 void MainActivate(int row) {
+    g_main.handledAt = g_now;
     if (row < 0 || row >= static_cast<int>(g_main.rows.size())) return;
     const auto& selected = g_main.rows[static_cast<size_t>(row)];
     Log("native ui: CO-OP selected '%s'", selected.label.c_str());
@@ -523,12 +536,19 @@ struct RowEvent {
     bool clicked = false;
 };
 RowEvent ParseRowEvent(const std::string& name) {
-    constexpr std::string_view prefix = "BndEvt__MenuInteract_MainMenu";
     RowEvent event;
-    if (!name.starts_with(prefix) || name.size() <= prefix.size() || !std::isdigit(static_cast<unsigned char>(name[prefix.size()])))
-        return event;
-    event.row = name[prefix.size()] - '0';
-    event.clicked = name.find("ClickedEvent") != std::string::npos;
+    auto pos = name.find("MenuInteract");
+    if (pos == std::string::npos) return event;
+    for (size_t i = pos + 12; i < name.size(); ++i) {
+        if (std::isdigit(static_cast<unsigned char>(name[i]))) {
+            event.row = std::stoi(name.substr(i));
+            break;
+        }
+        if (name[i] == 'K' && name.substr(i, 6) == "K2Node") break;
+    }
+    event.clicked = (name.find("Click") != std::string::npos ||
+                     name.find("Pressed") != std::string::npos ||
+                     name.find("Select") != std::string::npos);
     return event;
 }
 
@@ -544,7 +564,8 @@ MainEventInfo ClassifyMain(UObject* fn) {
     if (found != cache.end()) return found->second;
     std::string name = Name(fn);
     MainEventInfo info;
-    if (name == "OnConfirmPressed") info.kind = MainEvent::Confirm;
+    if (name == "OnConfirmPressed" || name == "ConfirmSelection" ||
+        name == "SelectOption" || name == "ConfirmOption") info.kind = MainEvent::Confirm;
     else if (name == "OnCancelPressed" || name == "NavigateBack") info.kind = MainEvent::Cancel;
     else if (name == "OnUpPressed") info.kind = MainEvent::Up;
     else if (name == "OnDownPressed") info.kind = MainEvent::Down;
@@ -557,6 +578,7 @@ MainEventInfo ClassifyMain(UObject* fn) {
 }
 
 bool MainBefore(UObject* fn) {
+    if (g_now - g_main.handledAt < 0.35) return true; // Swallow echoes while transitioning!
     auto info = ClassifyMain(fn);
     if (info.kind == MainEvent::Other) return false;
     if (g_main.open) {
@@ -571,16 +593,55 @@ bool MainBefore(UObject* fn) {
             if (info.row.clicked) {
                 MainActivate(info.row.row);
                 return true;
+            } else {
+                if (info.row.row >= 0 && info.row.row < static_cast<int>(g_main.rows.size()))
+                    MainSetCursor(info.row.row);
+                return false;
             }
-            return info.row.row >= static_cast<int>(g_main.rows.size());
         default: return false;
         }
     }
     if (g_main.coopRow < 0 || !MainPageActive()) return false;
+    auto names = MainNames();
+    int quitRow = names ? names->num - 1 : -1;
+    if (quitRow > g_main.coopRow && info.kind == MainEvent::Confirm && MainCursor() == quitRow) {
+        Log("native ui: QUIT TO DESKTOP confirmed; exiting game cleanly");
+        ExitProcess(0);
+        return true;
+    }
+    if (info.kind == MainEvent::Row && !info.row.clicked && info.row.row == g_main.coopRow) {
+        MainSetCursor(g_main.coopRow);
+        return false;
+    }
+    if (info.kind == MainEvent::Row && !info.row.clicked && info.row.row == quitRow) {
+        MainSetCursor(quitRow);
+        return false;
+    }
     if ((info.kind == MainEvent::Confirm && MainCursor() == g_main.coopRow) ||
         (info.kind == MainEvent::Row && info.row.clicked && info.row.row == g_main.coopRow)) {
-        if (info.kind == MainEvent::Row) MainSetCursor(g_main.coopRow);
+        bool mouseClick = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
+        if (mouseClick) {
+            HWND hwnd = GetForegroundWindow();
+            POINT pt;
+            GetCursorPos(&pt);
+            ScreenToClient(hwnd, &pt);
+            RECT rc;
+            GetClientRect(hwnd, &rc);
+            float relY = rc.bottom > 0 ? static_cast<float>(pt.y) / static_cast<float>(rc.bottom) : 0.f;
+            if (relY >= 0.75f) {
+                Log("native ui: QUIT TO DESKTOP clicked via mouse (relY=%.2f); exiting cleanly", relY);
+                ExitProcess(0);
+                return true;
+            }
+        }
+        Log("native ui: CO-OP confirmed/clicked; opening CO-OP menu");
+        MainSetCursor(g_main.coopRow);
         MainOpen();
+        return true;
+    }
+    if (info.kind == MainEvent::Row && info.row.clicked && info.row.row == quitRow) {
+        Log("native ui: QUIT TO DESKTOP clicked via row event; exiting cleanly");
+        ExitProcess(0);
         return true;
     }
     return false;
@@ -603,6 +664,67 @@ void MainUpdate(const session::View& view, const std::vector<std::string>& log) 
     }
     if (!widget) return;
     MainBrand();
+
+    auto isFocused = []() {
+        DWORD pid = 0;
+        GetWindowThreadProcessId(GetForegroundWindow(), &pid);
+        return pid == GetCurrentProcessId();
+    };
+    static bool wasLButtonDown = false;
+    bool isLButtonDown = isFocused() && ((GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0);
+    if (isLButtonDown && !wasLButtonDown && (g_now - g_main.handledAt >= 0.35)) {
+        HWND hwnd = GetForegroundWindow();
+        POINT pt;
+        GetCursorPos(&pt);
+        ScreenToClient(hwnd, &pt);
+        RECT rc;
+        GetClientRect(hwnd, &rc);
+        float relY = rc.bottom > 0 ? static_cast<float>(pt.y) / static_cast<float>(rc.bottom) : 0.f;
+        float relX = rc.right > 0 ? static_cast<float>(pt.x) / static_cast<float>(rc.right) : 0.f;
+
+        if (!g_main.open && MainPageActive()) {
+            int cursor = MainCursor();
+            auto names = MainNames();
+            int quitRow = names ? names->num - 1 : -1;
+            Log("native ui: title menu click (cursor=%d, coopRow=%d, quitRow=%d, relX=%.3f, relY=%.3f)",
+                cursor, g_main.coopRow, quitRow, relX, relY);
+
+            if (cursor == g_main.coopRow) {
+                if (relY >= 0.76f) {
+                    Log("native ui: mouse clicked QUIT TO DESKTOP via cursor match; exiting cleanly");
+                    g_main.handledAt = g_now;
+                    ExitProcess(0);
+                } else {
+                    Log("native ui: mouse clicked CO-OP via cursor match");
+                    g_main.handledAt = g_now;
+                    MainOpen();
+                }
+            } else if (cursor == quitRow) {
+                Log("native ui: mouse clicked QUIT TO DESKTOP via cursor match; exiting cleanly");
+                g_main.handledAt = g_now;
+                ExitProcess(0);
+            } else if (relX >= 0.01f && relX < 0.60f) {
+                // Coordinate-based match for dual monitors, any aspect ratio
+                if (relY >= 0.76f) {
+                    Log("native ui: mouse clicked QUIT TO DESKTOP via coordinates (relY=%.3f); exiting cleanly", relY);
+                    g_main.handledAt = g_now;
+                    ExitProcess(0);
+                } else if (relY >= 0.58f && relY < 0.76f) {
+                    Log("native ui: mouse clicked CO-OP via coordinates (relY=%.3f)", relY);
+                    g_main.handledAt = g_now;
+                    MainOpen();
+                }
+            }
+        } else if (g_main.open) {
+            int cursor = MainCursor();
+            if (cursor >= 0 && cursor < static_cast<int>(g_main.rows.size())) {
+                Log("native ui: mouse click detected in open CO-OP menu row %d", cursor);
+                g_main.handledAt = g_now;
+                MainActivate(cursor);
+            }
+        }
+    }
+    wasLButtonDown = isLButtonDown;
     if (g_main.open && !MainPageActive()) {
         Log("native ui: the title menu left its main page; closing CO-OP");
         g_main.open = false;
@@ -611,7 +733,7 @@ void MainUpdate(const session::View& view, const std::vector<std::string>& log) 
         MainShowStatus(false);
     }
     if (!g_main.open) {
-        if (MainPageActive()) {
+        if (g_nativeMenu && MainPageActive()) {
             if (g_titleSavesChanged) MainRebuildForSaves();
             MainInject();
         }
@@ -1075,8 +1197,19 @@ void ProbeImages() {
 
 } // namespace
 
-void Configure(bool trace) {
+void Configure(bool trace, bool nativeMenu) {
     g_trace = trace;
+    g_nativeMenu = nativeMenu;
+}
+
+bool IsUiWidget(UObject* obj) {
+    if (!obj) return false;
+    auto a = reinterpret_cast<uintptr_t>(obj);
+    if (a < 0x10000 || a > 0x7ffffffffff0) return false;
+    UObject* cls = obj->cls;
+    if (!cls) return false;
+    return cls == g_mainClass.cls || cls == g_pauseClass.cls ||
+           (g_pause.category && obj == g_pause.category) || cls == g_hudClass.cls;
 }
 
 bool ProbeRuntimeUi() {
@@ -1225,7 +1358,7 @@ bool ContinueTitle() {
 }
 
 bool BeforeEvent(UObject* obj, UObject* fn, void* parms) {
-    if (!IsLive(obj) || !IsLive(fn) || !IsLive(obj->cls)) return false;
+    if (!IsLive(obj) || !IsLive(fn)) return false;
     if (g_trace) Trace(obj, fn, parms);
     if (obj->cls == g_mainClass.cls) {
         g_mainSeen = obj;
@@ -1242,8 +1375,7 @@ bool BeforeEvent(UObject* obj, UObject* fn, void* parms) {
 }
 
 void AfterEvent(UObject* obj, UObject* fn) {
-    if (!IsLive(obj) || !IsLive(fn)) return;
-    if (obj == g_main.widget) MainAfter(fn);
+    if (obj == g_main.widget && IsLive(obj) && IsLive(fn)) MainAfter(fn);
 }
 
 void Update(double now, const session::View& view, const session::EventLog& log) {
@@ -1251,6 +1383,23 @@ void Update(double now, const session::View& view, const session::EventLog& log)
     g_mainClass.Get(now);
     g_pauseClass.Get(now);
     g_hudClass.Get(now);
+
+    // Hotkey toggle (F6 or F8 popup)
+    auto isFocused = []() {
+        DWORD pid = 0;
+        GetWindowThreadProcessId(GetForegroundWindow(), &pid);
+        return pid == GetCurrentProcessId();
+    };
+    static bool heldF6 = false;
+    bool downF6 = isFocused() && ((GetAsyncKeyState(VK_F6) & 0x8000) || (GetAsyncKeyState(VK_F8) & 0x8000));
+    if (downF6 && !heldF6) {
+        if (g_main.widget) {
+            if (g_main.open) MainClose(true);
+            else MainOpen();
+        }
+    }
+    heldF6 = downF6;
+
     auto lines = log.Last(4);
     MainUpdate(view, lines);
     PauseUpdate(view, lines);
@@ -1271,6 +1420,17 @@ Page CurrentPage() {
 
 bool MenuOpen() {
     return g_main.open || g_pause.open;
+}
+
+bool CursorNeeded(UObject* controller) {
+    if (g_pause.open) return true;
+    if (IsLive(g_pauseSeen) && InViewport(g_pauseSeen)) return true;
+    if (IsLive(controller)) {
+        Call paused(FindDefaultObject("GameplayStatics"), "IsGamePaused");
+        if (paused.set("WorldContextObject", controller).invoke() && paused.get<bool>("ReturnValue"))
+            return true;
+    }
+    return false;
 }
 
 void TitleSavesChanged() {

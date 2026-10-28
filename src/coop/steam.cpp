@@ -161,10 +161,30 @@ bool SteamPeer::Open(const std::string& playerName, bool pumpCallbacks, std::str
 }
 
 bool SteamPeer::Resolve(std::string& diag) {
-    HMODULE dll = GetModuleHandleW(L"steam_api64.dll");
+    SetEnvironmentVariableA("SteamAppId", "480");
+    SetEnvironmentVariableA("SteamGameId", "480");
+
+    HMODULE dll = GetModuleHandleW(L"steam_spacewar.dll");
     if (!dll) {
-        diag = "steam_api64.dll is not loaded";
+        dll = LoadLibraryW(L"steam_spacewar.dll");
+    }
+    if (!dll) {
+        dll = GetModuleHandleW(L"steam_api64.dll");
+    }
+    if (!dll) {
+        diag = "steam_spacewar.dll is not loaded";
         return false;
+    }
+
+    using SteamInternal_InitFn = int (*)(void*, int);
+    auto steamInit = std::bit_cast<SteamInternal_InitFn>(GetProcAddress(dll, "SteamInternal_SteamAPI_Init"));
+    if (steamInit) {
+        static bool s_inited = false;
+        if (!s_inited) {
+            int res = steamInit(nullptr, 0);
+            Log("steam: SteamInternal_SteamAPI_Init(480) returned %d", res);
+            if (res == 0) s_inited = true;
+        }
     }
     auto getUser = std::bit_cast<GetHSteamUserFn>(GetProcAddress(dll, "SteamAPI_GetHSteamUser"));
     auto find = std::bit_cast<FindInterfaceFn>(GetProcAddress(dll, "SteamInternal_FindOrCreateUserInterface"));
@@ -183,9 +203,9 @@ bool SteamPeer::Resolve(std::string& diag) {
     api.friends = find(user, kFriendsVersion);
     api.user = find(user, kUserVersion);
     // Like the SDK's SteamUtils() accessor, ISteamUtils is requested without a user handle.
-    api.utils = find(0, kUtilsVersion);
-    api.messages = find(user, kMessagesVersion);
-    api.networking = find(user, kNetworkingVersion);
+    api.utils = (kUtilsVersion && kUtilsVersion[0]) ? find(0, kUtilsVersion) : nullptr;
+    api.messages = (kMessagesVersion && kMessagesVersion[0]) ? find(user, kMessagesVersion) : nullptr;
+    api.networking = (kNetworkingVersion && kNetworkingVersion[0]) ? find(user, kNetworkingVersion) : nullptr;
     Log("steam: interfaces matchmaking=%p friends=%p user=%p utils=%p messages=%p networking=%p", api.matchmaking,
         api.friends, api.user, api.utils, api.messages, api.networking);
     if (!api.matchmaking || !api.friends || !api.user || (!api.messages && !api.networking)) {
@@ -216,7 +236,7 @@ void SteamPeer::Poll(double now) {
         }
         Log("steam: %s", reason.c_str());
     }
-    if (pump_) api.runCallbacks();
+    if (api.runCallbacks) api.runCallbacks();
     HandleEvents();
     PollCall();
     if (connectLobby_ && !lobby_ && !pendingCall_) {
@@ -508,7 +528,31 @@ void SteamPeer::Leave() {
 void SteamPeer::Invite() {
     if (!ready_ || !lobby_) return;
     VCall<void>(api.friends, slot::kActivateGameOverlayInviteDialog, lobby_);
-    Log("steam: opened the Steam overlay invite dialog (needs the Steam overlay enabled)");
+    std::string joinUrl = "steam://joinlobby/480/" + std::to_string(lobby_) + "/" + std::to_string(self_);
+    if (OpenClipboard(nullptr)) {
+        EmptyClipboard();
+        HGLOBAL hGlob = GlobalAlloc(GMEM_MOVEABLE, joinUrl.size() + 1);
+        if (hGlob) {
+            std::memcpy(GlobalLock(hGlob), joinUrl.c_str(), joinUrl.size() + 1);
+            GlobalUnlock(hGlob);
+            SetClipboardData(CF_TEXT, hGlob);
+        }
+        CloseClipboard();
+    }
+    Log("steam: opened overlay invite dialog & copied link: %s", joinUrl.c_str());
+    Announce("Invite link copied to clipboard!");
+}
+
+bool SteamPeer::TransferHost() {
+    if (!ready_ || !lobby_ || !partner_ || !IsOwner()) return false;
+    bool ok = VCall<bool>(api.matchmaking, slot::kSetLobbyOwner, lobby_, partner_);
+    if (ok) {
+        Announce("Transferring host role to " + PartnerName() + "...");
+        Log("steam: SetLobbyOwner called for partner %llu", static_cast<unsigned long long>(partner_));
+    } else {
+        Log("steam: SetLobbyOwner failed");
+    }
+    return ok;
 }
 
 void SteamPeer::Entered(uint64_t lobby, bool created) {
@@ -557,9 +601,14 @@ void SteamPeer::RefreshMembers() {
     }
     uint64_t owner = VCallSteamId(api.matchmaking, slot::kGetLobbyOwner, lobby_);
     if (owner_ && owner != owner_) {
-        Announce("The host left; the session has ended");
-        Leave();
-        return;
+        owner_ = owner;
+        if (owner_ == self_) {
+            Announce("You are now the host!");
+            Log("steam: ownership transferred to local player");
+        } else {
+            Announce("Host role transferred to " + PartnerName());
+            Log("steam: ownership transferred to partner %llu", static_cast<unsigned long long>(owner_));
+        }
     }
     owner_ = owner;
     if (owner_ != self_) {
@@ -590,9 +639,17 @@ void SteamPeer::RefreshMembers() {
     ClosePartnerSession();
     partner_ = next;
     inbox_.clear();
-    if (partner_)
+    if (partner_) {
         Log("steam: partner %s (%llu) is in the lobby; streaming over %s", FriendName(partner_).c_str(),
             static_cast<unsigned long long>(partner_), messages_ ? "SteamNetworkingMessages" : "SteamNetworking P2P");
+        if (messages_ && api.messages) {
+            auto id = Identity(partner_);
+            VCall<bool>(api.messages, slot::kAcceptSessionWithUser, &id);
+        }
+        if (api.networking) {
+            VCall<bool>(api.networking, slot::kAcceptP2PSessionWithUser, partner_);
+        }
+    }
 }
 
 bool SteamPeer::IsMember(uint64_t user) const {
@@ -623,13 +680,11 @@ void SteamPeer::ReceiveAll() {
             int n = VCall<int>(api.messages, slot::kReceiveMessagesOnChannel, 0, batch, 64);
             for (int i = 0; i < n; ++i) {
                 auto message = batch[i];
-                bool fromPartner = partner_ && message->peer.type == kIdentityTypeSteamID &&
-                                   message->peer.steamId == partner_;
-                if (fromPartner && message->size > 0 && message->size <= kMaxSize && inbox_.size() < kInboxLimit) {
+                if (partner_ && message && message->size > 0 && message->size <= kMaxSize && inbox_.size() < kInboxLimit) {
                     auto bytes = static_cast<const char*>(message->data);
                     inbox_.emplace_back(bytes, bytes + message->size);
                 }
-                message->release(message);
+                if (message && message->release) message->release(message);
             }
             if (n < 64) break;
         }
@@ -662,7 +717,7 @@ void SteamPeer::RefreshFriends(double now) {
     if (!ready_ || now < nextFriends_) return;
     nextFriends_ = now + 3;
     friends_.clear();
-    uint32_t app = api.utils ? VCall<uint32_t>(api.utils, slot::kGetAppID) : kDaysGoneAppId;
+    uint32_t app = api.utils ? VCall<uint32_t>(api.utils, slot::kGetAppID) : 480;
     int count = std::min(VCall<int>(api.friends, slot::kGetFriendCount, kFriendFlagImmediate), 1000);
     for (int i = 0; i < count; ++i) {
         uint64_t user = VCallSteamId(api.friends, slot::kGetFriendByIndex, i, kFriendFlagImmediate);
