@@ -3,7 +3,7 @@
 **Architecture Target:** Unreal Engine 4.11 (Bend Game Custom Engine Fork)  
 **Transport Protocol:** Steamworks P2P (AppID `480` - Spacewar)  
 **Current Active Binary:** `TheysGone.asi` (2,857,984 bytes)  
-**Active Hash (SHA-256):** `FF7B4444038E8240FD67E0094D28931128FDDA197638BE2A806B54B83BA62217`  
+**Active Hash (SHA-256):** `E0F413DD5B96BB503291343E367594F40DA9D7B220FF380C4EDF47DF78257DF1`  
 **Last Updated:** October 28, 2026 (Noon Session)
 
 ---
@@ -445,6 +445,28 @@ flowchart LR
 
 ---
 
+### [October 28, 2026] — Phase 2: Dynamic Lighting Synchronization & Motorcycle Collisions
+
+#### Milestone 2.1: Dynamic Real-Time Lighting Synchronization
+- **Deacon Flashlight Sync (`kFlashlightOn`):**
+  - **Capture:** On the local player pawn/controller, dynamically polls `IsUsingFlashlight()`, falling back to `GetPlayerFlashlight()->IsVisible()`.
+  - **Transmission:** Encoded directly into existing wire bitmask `StatePacket.actions` bit `1 << 3` with zero wire format overhead (preserving strict 144-byte packet sizing).
+  - **Replication:** Instantiates runtime `SpotLightComponent` under the avatar actor slaved to `flashlight_socket` on Deacon's chest with warm incandescent color (6,000 lumens, 35m attenuation radius, 18° inner / 32° outer cone angles). Updates dynamically in real-time.
+- **Motorcycle Headlight Sync (`kHeadlightOn`):**
+  - **Capture:** Dynamically reads `GetHeadlightComponent()->IsVisible()`, falling back to `HeadlightSpot->IsVisible()` on `g_localBike`.
+  - **Transmission:** Encoded into `StatePacket.actions` bit `1 << 4`.
+  - **Replication:** Mounts runtime `SpotLightComponent` on `g_bike.actor` slaved to the chassis at `(X=110, Y=0, Z=85)` pitch `-4°` with high-power beam (30,000 lumens, 85m attenuation radius, 22° inner / 45° outer cone angles). Shines brightly onto the road ahead.
+
+#### Milestone 2.2: Motorcycle-on-Motorcycle Physical Collisions
+- **Symptom:** In previous builds, partner motorcycles had collision disabled (`SetActorEnableCollision(false)`), allowing players to drive straight through each other like ghosts.
+- **Resolution:**
+  - Enabled physical actor collision: `SetActorEnableCollision(true)` on `g_bike.actor`.
+  - Configured collision profile: `SetCollisionProfileName("Vehicle")` and `SetCollisionEnabled(QueryAndPhysics)` (type 3) on `g_bike.component` and `g_bike.pose`.
+  - Cloned chassis `PhysicsAsset` from `g_localBike`'s `VehicleMesh` to replicated bike components.
+  - While remote replication transforms still sweep freely (`bSweep: false`) to avoid client desync/snagging, local vehicle physics simulation detects the partner's solid physical presence, enabling genuine bike collisions, bumps, and accidents.
+
+---
+
 ### [October 28, 2026] — Milestone 8: Multi-Channel Steam Friend Invite & Overlay Fallback Pipeline
 
 #### Fix 8.1: Silent Failure of Steam In-Game Overlay (`ActivateGameOverlayInviteDialog`)
@@ -457,4 +479,4 @@ flowchart LR
     2. **Desktop Steam Friends Window:** Dispatches `steam://open/friends` via `ShellExecuteA`, automatically bringing up the native desktop Steam Friends list on the player's screen.
     3. **Clipboard Join Link:** Places `steam://joinlobby/480/<LobbyID>/<SteamID>` onto the Windows clipboard for instant pasting (`Ctrl+V`) into chats.
     4. **Overlay Passthrough:** Retains `ActivateGameOverlayInviteDialog` and `ActivateGameOverlay("friends")` for players who launch Days Gone via Steam.
-- **Status:** **Verified Fixed, Compiled (2,857,984 bytes, SHA-256: `FF7B4444038E8240FD67E0094D28931128FDDA197638BE2A806B54B83BA62217`), and Deployed to Host & Aziz.**
+- **Status:** **Verified Fixed, Compiled (2,857,984 bytes, SHA-256: `E0F413DD5B96BB503291343E367594F40DA9D7B220FF380C4EDF47DF78257DF1`), and Deployed to Host & Aziz.**

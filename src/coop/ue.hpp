@@ -17,6 +17,7 @@ struct FRotator { float pitch, yaw, roll; };
 struct alignas(16) FQuat { float x, y, z, w; };
 struct alignas(16) FTransform { FQuat rotation; FVector translation; float pad0; FVector scale; float pad1; };
 struct FIntVector { int32_t x, y, z; };
+struct FLinearColor { float r = 1.0f, g = 1.0f, b = 1.0f, a = 1.0f; };
 
 inline FVector AlignBoneToSocket(FVector socket, FVector componentBone, float yawDegrees) {
     float yaw = yawDegrees * 3.14159265f / 180.f;

@@ -27,6 +27,8 @@ enum ActionFlags : uint8_t {
     kAiming = 1 << 0,
     kCrouched = 1 << 1,
     kReloading = 1 << 2,
+    kFlashlightOn = 1 << 3,
+    kHeadlightOn = 1 << 4,
 };
 
 enum WeaponType : uint8_t {
@@ -86,7 +88,7 @@ inline bool DecodeState(const char* data, int len, StatePacket& out) {
         if (!std::isfinite(f) || std::fabs(f) > 1e8f) return false;
     if (out.jacket > 6 || out.trousers > 6 || out.capColor > 6 || out.cap > 1 ||
         out.damage < 0 || out.damage > 1000 || out.health < 0 || out.health > 100000 || out.attackKind > 2 ||
-        (out.actions & ~(kAiming | kCrouched | kReloading)) || out.weaponType > kWeaponMelee) return false;
+        (out.actions & ~(kAiming | kCrouched | kReloading | kFlashlightOn | kHeadlightOn)) || out.weaponType > kWeaponMelee) return false;
     if ((out.flags & kWorldState) &&
         (out.worldTimeOfDay < 0 || out.worldTimeOfDay > 24 ||
          out.worldRelativeTime < 0 || out.worldRelativeTime > 1)) return false;

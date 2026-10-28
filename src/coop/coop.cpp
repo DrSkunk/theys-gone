@@ -140,6 +140,7 @@ struct BikeAvatar {
     UObject* pose = nullptr;
     PoseWriter writer;
     bool posing = false;
+    ue::UObject* headlight = nullptr;
 } g_bike;
 struct PoseSource {
     UObject* mesh = nullptr;
@@ -177,6 +178,8 @@ struct Avatar {
     UObject* pose = nullptr;
     PoseWriter writer;
     bool posing = false;
+    ue::UObject* flashlight = nullptr;
+    ue::FName flashlightSocket{};
 };
 Avatar g_passengerAvatar;
 Appearance g_passengerAppearance;
@@ -1210,6 +1213,46 @@ void SendLocalState(UObject* pawn, double now) {
         if (aiming.invoke() && aiming.get<bool>("ReturnValue")) p.actions |= kAiming;
         Call reloading(pawn, "IsReloading");
         if (reloading.invoke() && reloading.get<bool>("ReturnValue")) p.actions |= kReloading;
+
+        // Dynamic Lighting Sync: Deacon's body flashlight
+        Call fl(pawn, "IsUsingFlashlight");
+        if (fl.invoke() && fl.get<bool>("ReturnValue")) {
+            p.actions |= kFlashlightOn;
+        } else if (g_controller) {
+            Call ctrlFl(g_controller, "IsUsingFlashlight");
+            if (ctrlFl.invoke() && ctrlFl.get<bool>("ReturnValue")) {
+                p.actions |= kFlashlightOn;
+            }
+        }
+        if (!(p.actions & kFlashlightOn)) {
+            Call flActor(pawn, "GetPlayerFlashlight");
+            if (flActor.invoke()) {
+                auto flObj = flActor.get<UObject*>("ReturnValue");
+                if (IsLive(flObj)) {
+                    Call vis(flObj, "IsVisible");
+                    if (vis.invoke() && vis.get<bool>("ReturnValue")) p.actions |= kFlashlightOn;
+                }
+            }
+        }
+
+        // Dynamic Lighting Sync: Motorcycle headlight
+        if (IsLive(g_localBike)) {
+            Call hl(g_localBike, "GetHeadlightComponent");
+            if (hl.invoke()) {
+                auto hlComp = hl.get<UObject*>("ReturnValue");
+                if (IsLive(hlComp)) {
+                    Call vis(hlComp, "IsVisible");
+                    if (vis.invoke() && vis.get<bool>("ReturnValue")) p.actions |= kHeadlightOn;
+                }
+            }
+            if (!(p.actions & kHeadlightOn)) {
+                auto spot = Prop(g_localBike, "HeadlightSpot");
+                if (IsLive(spot)) {
+                    Call vis(spot, "IsVisible");
+                    if (vis.invoke() && vis.get<bool>("ReturnValue")) p.actions |= kHeadlightOn;
+                }
+            }
+        }
         Call held(pawn, "GetEquippedItemCurrentlyInHand");
         UObject* weapon = held.invoke() ? held.get<UObject*>("ReturnValue") : nullptr;
         if (IsLive(weapon)) {
@@ -1221,7 +1264,7 @@ void SendLocalState(UObject* pawn, double now) {
         p.shotSequence = g_localShotSequence;
         static uint8_t lastActions = 0xff, lastWeaponType = 0xff;
         if (g_cfg.discovery && (p.actions != lastActions || p.weaponType != lastWeaponType)) {
-            Log("presentation: local actions=0x%x weapon=%u", p.actions, p.weaponType);
+            Log("presentation: local actions=0x%x weapon=%u fl=%d hl=%d", p.actions, p.weaponType, (p.actions & kFlashlightOn) != 0, (p.actions & kHeadlightOn) != 0);
             lastActions = p.actions;
             lastWeaponType = p.weaponType;
         }
@@ -1601,6 +1644,28 @@ bool SpawnBike(UObject* pawn, const FVector& at) {
         SetBoolProp(g_bike.pose, "bPerBoneMotionBlur", false);
         SetBoolProp(g_bike.pose, "bCastContactShadow", false);
     }
+
+    // Milestone 2.2: Enable physical vehicle collision for motorcycle-on-motorcycle impacts
+    Call(g_bike.actor, "SetActorEnableCollision").setBool("bNewActorEnableCollision", true).invoke();
+    auto physAsset = Prop(source, "PhysicsAsset");
+    if (IsLive(physAsset)) {
+        Call(g_bike.component, "SetPhysicsAsset").set("NewPhysicsAsset", physAsset).setBool("bForceReInit", true).invoke();
+        if (IsLive(g_bike.pose)) {
+            Call(g_bike.pose, "SetPhysicsAsset").set("NewPhysicsAsset", physAsset).setBool("bForceReInit", true).invoke();
+        }
+    }
+    FName profileName{FindNameIndex("Vehicle"), 0};
+    Call prof(source, "GetCollisionProfileName");
+    if (prof.invoke()) {
+        auto liveProf = prof.get<FName>("ReturnValue");
+        if (liveProf.index >= 0) profileName = liveProf;
+    }
+    Call(g_bike.component, "SetCollisionEnabled").set<uint8_t>("NewType", 3).invoke(); // QueryAndPhysics
+    Call(g_bike.component, "SetCollisionProfileName").set("InCollisionProfileName", profileName).setBool("bUpdateOverlaps", true).invoke();
+    if (IsLive(g_bike.pose)) {
+        Call(g_bike.pose, "SetCollisionEnabled").set<uint8_t>("NewType", 3).invoke();
+        Call(g_bike.pose, "SetCollisionProfileName").set("InCollisionProfileName", profileName).setBool("bUpdateOverlaps", true).invoke();
+    }
     int mastered = 0, mounted = 0;
     for (auto component : OwnedMeshes(g_nativeBikeMeshes, g_localBike, Now())) {
         if (!IsLive(component) || component == source) continue;
@@ -1660,6 +1725,29 @@ bool SpawnBike(UObject* pawn, const FVector& at) {
         DestroyBike();
         return false;
     }
+    // Milestone 2.1: Motorcycle Headlight component
+    g_bike.headlight = CreateRuntimeComponent(g_bike.actor, "SpotLightComponent");
+    if (IsLive(g_bike.headlight)) {
+        FVector hlLoc{110.0f, 0.0f, 85.0f};
+        FRotator hlRot{-4.0f, 0.0f, 0.0f};
+        if (auto localSpot = Prop(g_localBike, "HeadlightSpot")) {
+            GetProp(localSpot, "RelativeLocation", hlLoc);
+            GetProp(localSpot, "RelativeRotation", hlRot);
+        }
+        SetProp<float>(g_bike.headlight, "Intensity", 30000.0f);
+        SetProp<float>(g_bike.headlight, "AttenuationRadius", 8500.0f);
+        SetProp<float>(g_bike.headlight, "InnerConeAngle", 22.0f);
+        SetProp<float>(g_bike.headlight, "OuterConeAngle", 45.0f);
+        SetProp<FLinearColor>(g_bike.headlight, "LightColor", FLinearColor{1.0f, 0.98f, 0.92f, 1.0f});
+        Call(g_bike.headlight, "K2_SetRelativeLocationAndRotation")
+            .set("NewRelativeLocation", hlLoc)
+            .set("NewRelativeRotation", hlRot)
+            .setBool("bSweep", false)
+            .setBool("bTeleport", false).invoke();
+        Call(g_bike.headlight, "SetVisibility").setBool("bNewVisibility", false).setBool("bPropagateToChildren", false).invoke();
+        Log("bike: headlight mounted at (%.1f, %.1f, %.1f)", hlLoc.x, hlLoc.y, hlLoc.z);
+    }
+
     Log("bike: cloned chassis, %d skeleton-shared parts and %d socket-mounted parts; streamed pose %s", mastered, mounted,
         g_bike.pose ? "ready" : "unavailable");
     return true;
@@ -1718,6 +1806,13 @@ void UpdateBike(UObject* pawn, double now) {
                 .invoke();
         }
     }
+    bool headlightOn = (sample.actions & kHeadlightOn) != 0;
+    if (IsLive(g_bike.headlight)) {
+        Call(g_bike.headlight, "SetVisibility")
+            .setBool("bNewVisibility", headlightOn)
+            .setBool("bPropagateToChildren", false).invoke();
+    }
+
     if (!g_bike.posing) return;
     for (const auto& part : g_bike.attachments) {
         if (part.mastered) continue;
@@ -2995,6 +3090,20 @@ bool SpawnAvatar(UObject* localPawn, const FVector& at, Avatar& avatar) {
         SetBoolProp(avatar.pose, "bCastCapsuleDirectShadow", false);
         SetBoolProp(avatar.pose, "bCastCapsuleIndirectShadow", false);
     }
+    // Milestone 2.1: Flashlight component attached to Deacon
+    avatar.flashlight = CreateRuntimeComponent(avatar.actor, "SpotLightComponent");
+    if (IsLive(avatar.flashlight)) {
+        SetProp<float>(avatar.flashlight, "Intensity", 6000.0f);
+        SetProp<float>(avatar.flashlight, "AttenuationRadius", 3500.0f);
+        SetProp<float>(avatar.flashlight, "InnerConeAngle", 18.0f);
+        SetProp<float>(avatar.flashlight, "OuterConeAngle", 32.0f);
+        SetProp<FLinearColor>(avatar.flashlight, "LightColor", FLinearColor{1.0f, 0.95f, 0.85f, 1.0f});
+        Call(avatar.flashlight, "SetVisibility").setBool("bNewVisibility", false).setBool("bPropagateToChildren", false).invoke();
+        int32_t flIdx = FindNameIndex("flashlight_socket");
+        if (flIdx >= 0) avatar.flashlightSocket = FName{flIdx, 0};
+        Log("avatar: flashlight component created and configured");
+    }
+
     Log("avatar: spawned %s with mesh %s, %d extra parts, streamed pose %s", Name(avatar.actor).c_str(),
         Name(skeletal).c_str(), static_cast<int>(avatar.parts.size()), avatar.pose ? "ready" : "unavailable");
     return true;
@@ -3280,6 +3389,39 @@ void UpdateAvatar(UObject* localPawn, double now) {
     } else {
         moved = g_avatar.attachedSeatMesh != nullptr;
     }
+    // Milestone 2.1: Update partner flashlight position and beam visibility
+    bool partnerFlashlight = (s.actions & kFlashlightOn) != 0 && !g_avatar.hidden;
+    if (IsLive(g_avatar.flashlight)) {
+        Call(g_avatar.flashlight, "SetVisibility")
+            .setBool("bNewVisibility", partnerFlashlight)
+            .setBool("bPropagateToChildren", false).invoke();
+        if (partnerFlashlight) {
+            UObject* body = AvatarBody();
+            FTransform flXf{};
+            bool positioned = false;
+            if (g_avatar.flashlightSocket.index >= 0 && IsLive(body) && WorldTransform(body, g_avatar.flashlightSocket, flXf)) {
+                float p = 0, y = 0, r = 0;
+                const float q[4] = {flXf.rotation.x, flXf.rotation.y, flXf.rotation.z, flXf.rotation.w};
+                QuatToRotator(q, p, y, r);
+                Call(g_avatar.flashlight, "K2_SetWorldLocationAndRotation")
+                    .set("NewLocation", flXf.translation)
+                    .set("NewRotation", FRotator{p, y, r})
+                    .setBool("bSweep", false)
+                    .setBool("bTeleport", false).invoke();
+                positioned = true;
+            }
+            if (!positioned) {
+                float yawRad = facing.yaw * 3.14159265f / 180.0f;
+                FVector chest = {local.x + std::cos(yawRad) * 20.0f, local.y + std::sin(yawRad) * 20.0f, local.z + 130.0f};
+                Call(g_avatar.flashlight, "K2_SetWorldLocationAndRotation")
+                    .set("NewLocation", chest)
+                    .set("NewRotation", facing)
+                    .setBool("bSweep", false)
+                    .setBool("bTeleport", false).invoke();
+            }
+        }
+    }
+
     MenuSettings remoteSettings;
     remoteSettings.jacket = g_peer.jacket;
     remoteSettings.trousers = g_peer.trousers;

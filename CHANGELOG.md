@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.5.3] (2026-10-28) - Phase 2: Dynamic Lighting & Physical Vehicle Collisions
+
+### Features
+* **lighting (Milestone 2.1):** Dynamic Real-Time Lighting Synchronization:
+  * Deacon's flashlight synchronized over the wire (`kFlashlightOn`). Remote avatar dynamically instantiates a runtime `SpotLightComponent` socketed to `flashlight_socket` on Deacon's chest with warm incandescent illumination (6,000 lumens, 35m attenuation radius, 18°/32° beam angles).
+  * Motorcycle headlight synchronized over the wire (`kHeadlightOn`). Remote bike mounts a forward-facing runtime `SpotLightComponent` (30,000 lumens, 85m attenuation radius, 22°/45° beam angles) aligned to the exact chassis coordinates and pitch of `HeadlightSpot`.
+* **physics (Milestone 2.2):** Motorcycle-on-Motorcycle Physical Collisions:
+  * Enabled physical vehicle collision on replicated motorcycle actors (`SetActorEnableCollision(true)`, `SetCollisionEnabled(QueryAndPhysics)`, `SetCollisionProfileName("Vehicle")`, and cloned chassis `PhysicsAsset`).
+  * Motorcycles now physically impact, block, bump, and collide with each other instead of ghosting through, allowing realistic high-speed crashes and physical road presence.
+
 ## [0.5.2] (2026-10-28)
 
 ### Features
