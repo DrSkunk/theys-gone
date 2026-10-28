@@ -27,7 +27,9 @@ threads); see [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md#prerequisites). Run
 | Build, source layout, debug tools, releases | [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) |
 | Current state, environment, gotchas, code map | [docs/REPLICATION-HANDOFF.md](docs/REPLICATION-HANDOFF.md) |
 | Evidence log for every live test | [docs/REPLICATION-RESEARCH.md](docs/REPLICATION-RESEARCH.md) |
+| Paired tests on one PC (headless lab) | [tools/lab/README.md](tools/lab/README.md) |
 | User-facing behavior and settings | [README.md](README.md) |
+| Story phases, companions, co-op policy per mission type | [docs/STORY-COOP.md](docs/STORY-COOP.md) |
 
 Most gameplay logic is in [`src/coop/coop.cpp`](src/coop/coop.cpp). Pure,
 testable rules live in headers (`enemy.hpp`, `protocol.hpp`, `streaming.hpp`,
@@ -56,6 +58,12 @@ Validated in paired live tests (two PCs, two games):
   interest for 6 s, or hit 180 s.
 
 Implemented but **not yet validated live**:
+
+- Story mission policy ([docs/STORY-COOP.md](docs/STORY-COOP.md),
+  `mission_policy.hpp`): each game reads its running mission; during
+  missions where a story character uses the passenger seat the driver stops
+  offering it. Verified in a paired session on one PC: a riding guest was
+  let off when the host started `OBR` and could not re-board.
 
 - Protocol v9 guest-side host proxy: lets guest-kept enemies target and
   damage the host after a regroup. The only paired attempt was inconclusive

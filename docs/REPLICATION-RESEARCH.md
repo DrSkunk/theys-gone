@@ -3388,3 +3388,116 @@ changes gradually.
   never kept.
 - Identities are not carried over at release; the new owner's own AI takes
   over.
+
+## Story mission catalog (2026-10-27, single PC, read-only)
+
+Goal: map internal mission and job codes to the names the game shows, as
+input for per-mission co-op policy ([STORY-COOP.md](STORY-COOP.md)).
+
+**Static pass.** The pak index of the isolated `run1` copy lists every
+`<CODE>n-MissionData` asset, the streamed mission sublevels
+(`Maps/ORWorld/Missions/Part<n>/<code>…`, usually with a `<CODE>1_Weather`
+level) and per-actor cinematic tracks
+(`Cinematics/Act<n>/<mission>/<scene>/<actor>`). Pak contents are
+Oodle-compressed, so display names are not readable statically.
+
+**Live pass.** `mission-state` gained a catalog section. Backups of the
+isolated prefix's `Saved` tree, the INI and ASI (28 files, SHA-256 list) were
+taken in `run1/before-catalog-20261027`, the new ASI
+(`e18956ba…7d8a`) was staged only in `run1`, and the copy was started with
+`launch-host-test.sh` as a transient unit. At the title menu (no gameplay
+pawn, `active=0`) `mission-state` wrote the catalog: 203 jobs and 118
+missions. `BendGameMission.GetMissionDataFromIDNew(0..255)` returned all
+story missions except `WBB1-MissionData` (found by scanning loaded
+`BendMissionData`). The game was stopped, the backup restored, and every
+hash verified. Output is archived in `run1/logs/catalog-20261027/`.
+
+Findings:
+
+- `BendMissionData.MissionNameText` and `BendJobData.JobNameText` hold the
+  English display names; objective texts name the companions ("Ride With
+  Boozer to Crazy Willie's", "Get Lisa to Your Bike", "Protect Rikki").
+- `MissionsAct` 2–7 is the story episode (`IND` act 2 matched the story
+  signature's episode 2). `GetChapterNameFromEpisode`: 2 "The Drifter
+  Road", 3 "Wings Of Angels", 4 "A Camper's Life", 5 "The Forsaken",
+  6 "Lost Life", 7 "Rest In Peace". Act 12 is post-credits, 17 the E3 demo,
+  18 DLC challenges and test missions.
+- Several walkthrough-based inferences were wrong (for example `OBR` is
+  *I Say We Head North*, not *We'll Make It Quick*; `BMB` is the latter).
+- `BendGameMission.ActiveMissionData` and `CurrentTrackedMission` were null
+  at the title menu; reading them during a mission is still untested.
+
+### Active mission and passenger seat (2026-10-27, single PC)
+
+Same backup, staging and restore procedure (`run1/before-policy-20261027`,
+28 files). After Enter on the title splash and `continue-title`, the pawn
+loaded (`playerHealth=121.875`) with no story mission running:
+`status` reported `mission='' missionFlags=0x000`. `mission-act
+"BendGameMission.StartMissionFromID - MissionID=3 OnlyLoadIfUnlocked=0"`
+restarted the completed *I Say We Head North*; 0.6 s later the log read
+`mission: active 'OBR' (policy flags 0x023); passenger seat reserved for the
+story`, and the OBR intro cutscene with Boozer was on screen. The game was
+stopped, the backup restored and all hashes verified; the log, catalog and
+screenshot are in `run1/logs/policy-20261027/`.
+
+Not tested: no partner was connected, so the cleared `kAcceptPassengers` bit,
+the hidden prompt and the forced dismount were not observed; the mission was
+not completed, so returning to `mission=''` afterwards was not observed.
+
+### Passenger seat with a simulated partner (2026-10-27, single PC)
+
+Backup in `run1/before-onepc-seat-20261027` (28 files); the isolated INI was
+pointed at `fake_peer.py --speed 0` on `127.0.0.1:27778`, and the PR build
+(`172aefb7…7dac`) staged. The fake peer logged the game's state flags
+(`kAcceptPassengers` is bit 32):
+
+| Moment | Game log | Flags seen by the peer | Seat offered |
+|---|---|---|---|
+| Gameplay, no mission | `mission='' missionFlags=0x000` | 737 | yes |
+| `StartMissionFromID` 3 | `mission: active 'OBR' (policy flags 0x023)` | 709 | **no** |
+| `FinishEndingMission` | `mission: active 'OBT' (policy flags 0x001)` (chained) | 739 | yes |
+
+During `OBR` the screen showed Deacon riding behind Boozer, the case the
+pillion flag describes. `StartEndingMission` alone did not end the mission.
+The game was stopped, the backup and INI restored and every hash verified;
+the game log, peer log and screenshot are in `run1/logs/onepc-seat-20261027/`.
+
+Not tested: the guest-side reaction (hidden *Ride with* prompt, forced
+dismount) needs a second game; it uses the existing permission-removal path.
+
+### Passenger seat in a paired session on one PC (2026-10-28)
+
+Two games on cachy, each a disposable reflink clone of `run1` in its own
+headless gamescope (`tools/lab/lab.sh`, introduced with the test lab). The
+host used the desktop Steam client; the guest ran in a bubblewrap sandbox
+with a second Steam client signed in to another account. They paired over
+loopback UDP (`127.0.0.1:27777` / `27778`) and each showed the other's
+avatar. This build adds a guest-side log line when the partner's seat offer
+changes.
+
+1. Guest log on connect: `passenger: partner offers the passenger seat`.
+2. Host mounted its bike (`E`); the guest saw **Ride with Host**, held F9 and
+   logged `passenger: boarded using socket SOCKET_PassengerSeat`.
+3. Host `StartMissionFromID` 3 (*I Say We Head North*): host
+   `09:13:01.942 mission: active 'OBR' (policy flags 0x023)`; guest
+   `09:13:01.944 passenger: partner no longer offers the passenger seat` and
+   `09:13:01.951 passenger: dismounted; native body, movement, collision, and
+   saving restored`. The dismount followed the withdrawn offer, before any
+   cutscene moved the host.
+4. Guest F9 during the mission: `passenger: boarding prerequisites not
+   satisfied`.
+
+**Side finding: the guest follows the host into the mission.** Starting the
+mission made the host write its mission-start save (`story: saved progress
+aace70ce`). Six seconds later the guest logged `host progress aace70ce
+differs from ours fa97ef49; fetching the host's save`, reloaded, and reported
+`mission: active 'OBR'`; both screens then played the same OBR cutscene, each
+with its own Boozer. The existing story resync therefore mirrors mission
+starts that save, and each player gets a local copy of the mission and its
+companions. Logs and screenshots are in
+`~/TheysGone-lab/archive/paired-seat-20261028/` on cachy.
+
+Not tested: a mission whose pillion character joins mid-mission (Lisa in
+`RBC`), the guest-side policy (the guest applied the same flags, but only the
+driver's matter for the seat), and whether two local copies of a mission stay
+consistent through its objectives.
