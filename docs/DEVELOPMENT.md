@@ -610,7 +610,9 @@ With *Sync host's enemies* on, both PCs set `kSyncEnemies`:
   spawns an invisible, brain-stopped `SwarmerPawn_C` with the player's faction
   that follows the guest's avatar. Every 0.5 s, enemies nearer to it than to
   the host get `SetAwarenessOfPawn` and `SetFactionValueOfPawn` for it, so
-  they pick it as a target. Freaker hit tests only damage the player, so the
+  they pick it as a target. During stealth missions
+  (`kMissionStealth`) only enemies that already have a target get them, so
+  the stand-in cannot alert a camp nobody has been seen by. Freaker hit tests only damage the player, so the
   host watches `AnimNotify_MeleeArmed_C.Received_NotifyBegin` through the
   ProcessEvent hook: a swing from an enemy targeting the stand-in within
   2.6 m sends a strike (swarmer 12, others 15-35, an estimate). Real damage

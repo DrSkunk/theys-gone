@@ -642,6 +642,10 @@ void TestMissionPolicy() {
     assert(coop::PassengerSeatOffered(true, coop::MissionFlags("HAT")));
     assert(!coop::PassengerSeatOffered(true, coop::MissionFlags("RFS2")));
     assert(!coop::PassengerSeatOffered(false, 0));
+    assert(coop::ProxyAwarenessAllowed(0, false));
+    assert(coop::ProxyAwarenessAllowed(coop::MissionFlags("HAT"), false));
+    assert(!coop::ProxyAwarenessAllowed(coop::MissionFlags("AON1"), false));
+    assert(coop::ProxyAwarenessAllowed(coop::MissionFlags("AON1"), true));
     std::puts("mission policy ok");
 }
 

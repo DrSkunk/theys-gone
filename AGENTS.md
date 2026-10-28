@@ -62,8 +62,10 @@ Implemented but **not yet validated live**:
 - Story mission policy ([docs/STORY-COOP.md](docs/STORY-COOP.md),
   `mission_policy.hpp`): each game reads its running mission; during
   missions where a story character uses the passenger seat the driver stops
-  offering it. Verified in a paired session on one PC: a riding guest was
-  let off when the host started `OBR` and could not re-board.
+  offering it (paired test: a riding guest was let off when the host started
+  `OBR` and could not re-board). In stealth missions the partner's stand-in
+  is only announced to enemies that are already fighting (paired `AON1` A/B:
+  9 of 13 Rippers targeted it before, 0 after).
 
 - Protocol v9 guest-side host proxy: lets guest-kept enemies target and
   damage the host after a regroup. The only paired attempt was inconclusive
