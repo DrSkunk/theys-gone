@@ -257,8 +257,11 @@ camp rally).
 9. **Region transitions (T).** After `RNA1` (south) and `LRH1` (north) the
    guest's world changes only at the next host save. Candidate policy: when
    the host's act changes, move the guest to the host after the reload.
-10. **Cutscenes (K).** The partner avatar should freeze or hide while the
-    host's `GetIsCinematicActive` is true.
+10. **Cutscenes (K).** When the guest follows the host into a mission, both
+    games play the cutscene in step and the partner avatar overlaps the local
+    Deacon (paired `OBR` test, no stray Deacon in 24 frames). When only one
+    game plays a cutscene, the avatar should hide while that game's
+    `GetIsCinematicActive` is true; not yet observed or implemented.
 
 ## 5. Next steps
 

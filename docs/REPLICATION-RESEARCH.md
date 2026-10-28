@@ -3533,3 +3533,15 @@ Not tested: a full mission failure caused by the stand-in (the control run
 shows alerted enemies, not the fail screen); enemies that are already
 fighting picking the partner as a target in a stealth mission; the enemies'
 native sight of the stand-in, which the fix does not change.
+
+### Partner avatar during mission cutscenes (2026-10-28, paired, one PC)
+
+The host started `OBR`; the guest followed through the mission-start save
+(mission active 19 s after the host's). Twelve screenshots of each game,
+4 s apart, covered the intro cutscene: both played it in step, and no second
+Deacon appeared in any frame. The mod does not hide the partner avatar during
+cinematics; the likely reason is that the avatar plays the partner's
+identical cutscene animation in the same place as the local Deacon. A stray
+avatar remains possible when only one game plays a cutscene (a mission that
+does not save at its start, or a guest that is not following). Montages and
+logs are in `~/TheysGone-lab/archive/cutscene-20261028/` on cachy.
