@@ -56,4 +56,11 @@ for menus.
 - The game still needs a Steam client per account; the sandboxed client does
   not expose itself to the mod's Steam transport, so paired lab sessions use
   `Transport=udp`.
-- The splash needs one key press per instance; `enter` sends it.
+- The splash needs one key press per instance; `enter` sends it, and stops
+  if the title menu has no Continue rather than starting a new game.
+- Saves live under `Saved/<SteamID64>`. `start` copies the base copy's saves
+  for the account that will run the instance, read from that client's
+  `loginusers.vdf`.
+- The desktop's Steam client and the sandboxed one must be signed in to
+  different accounts; check after a reboot, since the desktop client may
+  auto-login to the other one.
