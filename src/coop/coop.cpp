@@ -1293,6 +1293,7 @@ double g_loadStartedAt = 0;
 bool g_loadVerificationPending = false;
 double g_loadVerificationAt = 0, g_loadVerificationDeadline = 0;
 uint32_t g_loadExpectedSignature = 0;
+int g_adoptedReloads = 0; // in-place reload attempts for the currently adopted host save
 
 SaveTransferContext TransferContext(double now) {
     SaveTransferContext context;
@@ -4616,6 +4617,14 @@ void LoadAdoptedSave(double now) {
         if (cinematic.invoke() && cinematic.get<bool>("ReturnValue")) return;
     }
     nextAttempt = now + 30;
+    if (!AdoptedReloadAllowed(g_adoptedReloads)) {
+        if (g_adoptedReloads++ == kAdoptedReloadAttempts) {
+            Log("save transfer: %d in-place reloads did not load the host's progress; stopped retrying", kAdoptedReloadAttempts);
+            ui::Notify("Theys Gone", "Couldn't load the host's save here; return to the main menu and Continue");
+        }
+        return;
+    }
+    ++g_adoptedReloads;
     ui::Notify("Theys Gone", "Loading the host's save");
     if (!ReloadNewestSave()) Log("save transfer: cannot reload in place; quit to the main menu and Continue");
 }
@@ -4995,6 +5004,7 @@ void VerifyAdoptedSaveLoad(double now, double wall) {
 
     g_story.lastResynced = loaded.hash;
     g_story.pendingResync = 0;
+    g_adoptedReloads = 0;
     SaveGuardLoaded();
     g_teleportAfterLoad = true;
     Log("save transfer: verified loaded host progress %08x", loaded.hash);
@@ -5092,6 +5102,7 @@ void Tick(bool hudFrame) {
     static bool adopted = false;
     if (bool nowAdopted = SaveGuardAdopted(); nowAdopted != adopted) {
         adopted = nowAdopted;
+        g_adoptedReloads = 0;
         if (adopted) ui::TitleSavesChanged();
     }
     LoadAdoptedSave(now);
