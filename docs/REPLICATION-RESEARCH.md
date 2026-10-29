@@ -3487,20 +3487,19 @@ changes.
 4. Guest F9 during the mission: `passenger: boarding prerequisites not
    satisfied`.
 
-**Side finding: the guest follows the host into the mission.** Starting the
-mission made the host write its mission-start save (`story: saved progress
-aace70ce`). Six seconds later the guest logged `host progress aace70ce
-differs from ours fa97ef49; fetching the host's save`, reloaded, and reported
-`mission: active 'OBR'`; both screens then played the same OBR cutscene, each
-with its own Boozer. The existing story resync therefore mirrors mission
-starts that save, and each player gets a local copy of the mission and its
-companions. Logs and screenshots are in
+**Side finding: the guest reloads the host's mission-start save.** Starting
+the mission made the host write its mission-start save (`story: saved
+progress aace70ce`). Six seconds later the guest logged `host progress
+aace70ce differs from ours fa97ef49; fetching the host's save`, reloaded,
+and reported `mission: active 'OBR'`. *Correction (2026-10-29):* the
+screenshots taken as the guest's were captures of the host, and later paired
+runs showed that the mission does not start on the guest (no mission script;
+its start fade stays black). There is no second copy of the mission. Logs and screenshots are in
 `~/TheysGone-lab/archive/paired-seat-20261028/` on cachy.
 
 Not tested: a mission whose pillion character joins mid-mission (Lisa in
 `RBC`), the guest-side policy (the guest applied the same flags, but only the
-driver's matter for the seat), and whether two local copies of a mission stay
-consistent through its objectives.
+driver's matter for the seat).
 
 ## Stealth missions and the partner stand-in (2026-10-28, paired, one PC)
 
