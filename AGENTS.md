@@ -80,7 +80,9 @@ Known gaps, roughly in priority order:
 2. Interactions, pickups and mission state in the guest's region are not
    host-authoritative while separated.
 3. Enemy identity is not carried over when ownership is released.
-4. Unexplained 600–800 ms frame-time peaks while paired.
+4. Frame-time peaks: the recurring 600–800 ms peaks came from `VirtualQuery`
+   in object scans and are gone with #15/#17 (one window ≥ 500 ms in 120 in a
+   paired run); keep an eye out for new full scans in per-tick code.
 5. Full engine replication (guest as thin client) remains research only.
 
 Update this section and the docs above whenever the state changes.
