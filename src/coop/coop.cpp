@@ -4629,6 +4629,20 @@ void LoadAdoptedSave(double now) {
     if (!ReloadNewestSave()) Log("save transfer: cannot reload in place; quit to the main menu and Continue");
 }
 
+// Reloading the host's mission-start save in place sets the mission as active but never starts its script,
+// and the mission's start fade then stays black. The mission does not run here, so show the world again.
+void LiftStuckMissionFade() {
+    auto mission = FindLive("BendGameMission");
+    UObject* script = nullptr;
+    if (!mission || (GetProp(mission, "ActiveMissionScript", script) && IsLive(script))) return;
+    Call black(mission, "GetIsBlackScreenActive");
+    if (!black.invoke() || !black.get<bool>("ReturnValue")) return;
+    Call fade(mission, "CallFadeOutOfBlack");
+    fade.setBool("UnhideHudAtEnd", true);
+    bool lifted = fade.invoke() && fade.get<bool>("ReturnValue");
+    Log("save transfer: host's mission did not start here; lifting its black screen (%s)", lifted ? "ok" : "failed");
+}
+
 bool CinematicActive() {
     auto manager = FindWorldManager();
     if (!manager) return false;
@@ -5125,6 +5139,7 @@ void Tick(bool hudFrame) {
     if (teleportAt >= 0 && now >= teleportAt && g_pawn && now >= g_localSettledAt && !g_motion.Empty() &&
         now - g_lastRecv < kPeerTimeout) {
         teleportAt = -1;
+        LiftStuckMissionFade();
         Log("save transfer: moving to the host after loading its save");
         TeleportToPartner(g_pawn, now);
     } else if (teleportAt >= 0 && now > teleportAt + 60) {
