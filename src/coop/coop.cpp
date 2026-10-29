@@ -4824,6 +4824,14 @@ void UpdateActiveMission(double now) {
     UObject* data = nullptr;
     if (auto mission = FindLive("BendGameMission"); mission && GetProp(mission, "ActiveMissionData", data) && IsLive(data))
         code = std::string(MissionCode(Name(data)));
+    if (g_cfg.debugTools) {
+        static std::string lastProgress;
+        auto progress = code.empty() ? std::string() : research::ActiveMissionProgress();
+        if (progress != lastProgress) {
+            lastProgress = progress;
+            if (!progress.empty()) Log("mission progress: '%s' %s", code.c_str(), progress.c_str());
+        }
+    }
     if (code == g_mission.code) return;
     g_mission.code = code;
     g_mission.flags = MissionFlags(code);
