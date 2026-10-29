@@ -191,16 +191,26 @@ cmd_hold() {
 }
 
 cmd_shot() {
-    local name="${1:?instance name}" out="${2:?output png}" socket
+    local name="${1:?instance name}" out="${2:?output png}" socket dir shot
     need gamescopectl
     socket="$(gamescope_socket "$name")"
     [ -n "$socket" ] || die "$name has no gamescope socket (is it running?)"
-    rm -f "$out"
-    WAYLAND_DISPLAY="$socket" gamescopectl screenshot "$out" >/dev/null
+    # gamescopectl talks to GAMESCOPE_WAYLAND_DISPLAY (default gamescope-0), not WAYLAND_DISPLAY, and the
+    # compositor writes the file itself, so a sandboxed instance would write into its private /tmp. Use a
+    # path both sides see.
+    dir="$(dir_of "$name")"
+    shot="$dir/screenshot-$$.png"
+    rm -f "$shot"
+    GAMESCOPE_WAYLAND_DISPLAY="$socket" WAYLAND_DISPLAY="$socket" gamescopectl screenshot "$shot" >/dev/null
     for _ in $(seq 1 50); do
-        [ -s "$out" ] && tail -c 12 "$out" | grep -q IEND && { echo "$out"; return 0; }
+        if [ -s "$shot" ] && tail -c 12 "$shot" | grep -q IEND; then
+            mv -f "$shot" "$out"
+            echo "$out"
+            return 0
+        fi
         sleep 0.2
     done
+    rm -f "$shot"
     die "no screenshot from $name"
 }
 
