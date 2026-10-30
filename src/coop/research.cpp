@@ -2988,6 +2988,136 @@ std::string ActiveMissionProgress() {
     return out;
 }
 
+bool LevelProbe(const std::wstring& path, const std::string& filter, std::string& summary) {
+    auto levelClass = FindClass("LevelStreaming");
+    if (!levelClass) {
+        summary = "LevelStreaming is not loaded";
+        return false;
+    }
+    FILE* file = _wfopen(path.c_str(), L"w");
+    if (!file) {
+        summary = "could not open the level report";
+        return false;
+    }
+    auto lower = [](std::string s) {
+        std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        return s;
+    };
+    std::string wanted = lower(filter);
+    int total = 0, matched = 0;
+    for (int32_t i = 0, n = ObjectCount(); i < n; ++i) {
+        auto level = ObjectAt(i);
+        if (!IsLive(level) || IsDefaultOrArchetype(level) || !IsA(level, levelClass)) continue;
+        ++total;
+        FName package{};
+        ue::GetProp(level, "PackageNameToLoad", package);
+        if (!package.index) ue::GetProp(level, "PackageName", package);
+        std::string name = NameString(package.index);
+        if (!wanted.empty() && lower(name).find(wanted) == std::string::npos) continue;
+        ++matched;
+        bool load = false, visible = false;
+        ue::GetBoolProp(level, "bShouldBeLoaded", load);
+        ue::GetBoolProp(level, "bShouldBeVisible", visible);
+        Call loaded(level, "IsLevelLoaded"), shown(level, "IsLevelVisible");
+        std::fprintf(file, "%s %s shouldLoad=%d shouldShow=%d loaded=%d visible=%d\n", Name(level).c_str(), name.c_str(),
+                     load, visible, loaded.invoke() && loaded.get<bool>("ReturnValue"),
+                     shown.invoke() && shown.get<bool>("ReturnValue"));
+    }
+    std::fclose(file);
+    summary = std::to_string(matched) + " of " + std::to_string(total) + " streaming levels match '" + filter + "'";
+    return true;
+}
+
+bool MinimapProbe(const std::wstring& path, std::string& summary) {
+    auto componentClass = FindClass("MiniMapLocationComponent");
+    if (!componentClass) {
+        summary = "MiniMapLocationComponent is not loaded";
+        return false;
+    }
+    FILE* file = _wfopen(path.c_str(), L"w");
+    if (!file) {
+        summary = "could not open the minimap report";
+        return false;
+    }
+    std::unordered_set<UObject*> registered, onMap;
+    auto collect = [](UObject* manager, const char* function, std::unordered_set<UObject*>& out) {
+        Call list(manager, function);
+        if (!IsLive(manager) || !list.invoke()) return;
+        auto items = list.get<ObjectArray>("OutLocations");
+        for (int32_t i = 0; items.data && i < items.count && items.count < 65536; ++i)
+            if (ReadableMemory(items.data + i, sizeof(UObject*)) && IsLive(items.data[i])) out.insert(items.data[i]);
+    };
+    auto manager = FindInstance("MapLocationMgr");
+    collect(manager, "GetMiniMapLocations", registered);
+    collect(manager, "GetPingLocations", onMap);
+    std::fprintf(file, "# manager %s: %zu minimap locations, %zu ping locations\n",
+                 IsLive(manager) ? Name(manager).c_str() : "missing", registered.size(), onMap.size());
+    // Every MapLocation (the objects the minimap and map draw) with the component it belongs to.
+    std::unordered_map<UObject*, std::string> locationOf;
+    if (auto locationClass = FindClass("MapLocation")) {
+        for (int32_t i = 0, n = ObjectCount(); i < n; ++i) {
+            auto location = ObjectAt(i);
+            if (!IsLive(location) || IsDefaultOrArchetype(location) || !IsA(location, locationClass)) continue;
+            UObject* owner = nullptr;
+            ue::GetProp(location, "Component", owner);
+            Call shown(location, "DisplayOnMiniMap"), texture(location, "IconTexture"), tint(location, "IconTextureColor"),
+                where(location, "Position");
+            UObject* drawn = texture.invoke() ? texture.get<UObject*>("ReturnValue") : nullptr;
+            struct { float r, g, b, a; } color = tint.invoke() ? tint.get<decltype(color)>("ReturnValue") : decltype(color){};
+            FVector at = where.invoke() ? where.get<FVector>("ReturnValue") : FVector{};
+            char text[256];
+            std::snprintf(text, sizeof text,
+                          "%s inMinimapList=%d displayOnMinimap=%d drawnIcon=%s tint=(%.2f,%.2f,%.2f,%.2f) at=(%.0f,%.0f,%.0f)",
+                          Name(location).c_str(), static_cast<int>(registered.contains(location)),
+                          shown.invoke() ? static_cast<int>(shown.get<bool>("ReturnValue")) : -1,
+                          IsLive(drawn) ? Name(drawn).c_str() : "null", color.r, color.g, color.b, color.a, at.x, at.y, at.z);
+            if (IsLive(owner)) locationOf[owner] = text;
+        }
+    }
+    std::map<std::string, int> byIcon;
+    int count = 0;
+    for (int32_t i = 0, n = ObjectCount(); i < n; ++i) {
+        auto component = ObjectAt(i);
+        if (!IsLive(component) || IsDefaultOrArchetype(component) || !IsA(component, componentClass)) continue;
+        ++count;
+        bool hidden = false, fromOwner = false, onMinimap = false;
+        ue::GetBoolProp(component, "bHidden", hidden);
+        ue::GetBoolProp(component, "bGetPositionFromOwner", fromOwner);
+        ue::GetBoolProp(component, "bRenderedOnMiniMap", onMinimap);
+        float color[4]{};
+        if (auto property = FindChild(component->cls, "MinimapColor"))
+            std::memcpy(color, reinterpret_cast<uint8_t*>(component) + PropertyOffset(property), sizeof color);
+        UObject* icon = nullptr;
+        ue::GetProp(component, "MapIcon", icon);
+        std::string iconName = IsLive(icon) ? Name(icon) : "null";
+        ++byIcon[iconName];
+        auto location = locationOf.find(component);
+        std::string details;
+        if (auto property = FindChild(component->cls, "MapLocation")) {
+            const uint8_t* at = reinterpret_cast<const uint8_t*>(component) + PropertyOffset(property);
+            char hex[4];
+            for (int b = 0; b < ElementSize(property) && b < 32; ++b) {
+                std::snprintf(hex, sizeof hex, "%02x", at[b]);
+                details += hex;
+            }
+        }
+        std::fprintf(file, "%s location=[%s] owner=%s icon=%s type=%s display=%s edge=%s scale=%s hidden=%d fromOwner=%d "
+                     "onMinimap=%d color=(%.2f,%.2f,%.2f,%.2f) details=%s name=%s\n",
+                     Name(component->cls).c_str(), location == locationOf.end() ? "none" : location->second.c_str(), IsLive(component->outer) ? FullName(component->outer).c_str() : "?",
+                     iconName.c_str(), FieldValue(component, nullptr, nullptr, "LocationType").c_str(),
+                     FieldValue(component, nullptr, nullptr, "DisplayRule").c_str(),
+                     FieldValue(component, nullptr, nullptr, "EdgeDisplay").c_str(),
+                     FieldValue(component, nullptr, nullptr, "IconScale").c_str(), hidden, fromOwner, onMinimap,
+                     color[0], color[1], color[2], color[3], details.c_str(),
+                     FieldValue(component, nullptr, nullptr, "DisplayName").c_str());
+    }
+    std::fprintf(file, "\n# icons\n");
+    for (auto& [name, uses] : byIcon) std::fprintf(file, "%5d %s\n", uses, name.c_str());
+    std::fclose(file);
+    summary = std::to_string(count) + " minimap components, " + std::to_string(byIcon.size()) + " icons";
+    return true;
+}
+
 bool MissionState(const std::wstring& path, std::string& summary) {
     auto jobs = FindInstance("BendJobManager");
     auto mission = FindInstance("BendGameMission");
