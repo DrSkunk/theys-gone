@@ -269,9 +269,11 @@ by starting `OBR`); the per-mission table is
 [`mission_policy.hpp`](../src/coop/mission_policy.hpp), covered by
 `tools/test_protocol.cpp`; the passenger-seat rule (§4.2) uses it.
 
-1. Decide how two local copies of a mission should behave: test whether
-   they stay consistent through objectives, or keep the guest out of the
-   mission and stream the host's companions instead (§4.1).
+1. Two local copies of a mission: in a paired `OBR` run the host's copy
+   progressed while the guest, after loading the host's mission-start save,
+   stayed on a black screen with no mission progress. Find out why before
+   deciding between shared copies and streaming the host's companions
+   (§4.1).
 2. Check whether enemies that are already fighting still switch to the
    partner in stealth missions (§4.3).
 3. Send the host's active mission code to the guest (a protocol change), so

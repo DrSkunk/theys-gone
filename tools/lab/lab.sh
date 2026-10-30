@@ -38,6 +38,43 @@ x_display() {
     sed -n 's/.*Starting Xwayland on \(:[0-9]*\).*/\1/p' "$(dir_of "$1")/gamescope.log" | tail -1
 }
 
+# SteamID64 of the account a Steam client signs in with next: MostRecent, else AutoLogin, else the newest
+# timestamp in loginusers.vdf.
+steam_account() {
+    python3 - "$1/config/loginusers.vdf" <<'EOF'
+import re, sys
+try:
+    text = open(sys.argv[1], encoding="utf-8").read()
+except OSError:
+    sys.exit(0)
+def flag(body, key):
+    return re.search(rf'"{key}"\s*"1"', body) is not None
+def stamp(body):
+    found = re.search(r'"timestamp"\s*"(\d+)"', body)
+    return int(found.group(1)) if found else 0
+users = re.findall(r'"(\d{17})"\s*\{([^}]*)\}', text)
+for key in ("MostRecent", "AutoLogin"):
+    marked = [steam_id for steam_id, body in users if flag(body, key)]
+    if marked:
+        print(marked[0])
+        sys.exit(0)
+if users:
+    print(max(users, key=lambda user: stamp(user[1]))[0])
+EOF
+}
+
+# Saves live under Saved/<SteamID64>; they load under any account, so an instance run by another account
+# gets a copy of the base copy's saves.
+seed_saves() {
+    local dir="$1" account="$2" saved source
+    saved="$dir/prefix/pfx/drive_c/users/steamuser/AppData/Local/BendGame/Saved"
+    [ -n "$account" ] && [ ! -d "$saved/$account" ] || return 0
+    source="$(find "$saved" -mindepth 2 -maxdepth 2 -type d -name SaveGames -printf '%h\n' 2>/dev/null | head -1)"
+    [ -n "$source" ] || return 0
+    cp -a --reflink=auto "$source" "$saved/$account"
+    echo "copied saves from $(basename "$source") for account $account"
+}
+
 cmd_create() {
     local name="${1:?instance name}" dir
     dir="$(dir_of "$name")"
@@ -123,6 +160,11 @@ cmd_start() {
     dir="$(dir_of "$name")"
     [ -d "$dir" ] || die "no instance $name"
     running "$name" && die "$name is already running"
+    if [ -n "$steam_home" ]; then
+        seed_saves "$dir" "$(steam_account "$steam_home/.local/share/Steam")"
+    else
+        seed_saves "$dir" "$(steam_account "$STEAM_ROOT")"
+    fi
     : > "$dir/gamescope.log"
     local launch=(env STEAM_COMPAT_DATA_PATH="$dir/prefix" STEAM_COMPAT_APP_ID=$APP_ID SteamAppId=$APP_ID
                   SteamGameId=$APP_ID WINEDLLOVERRIDES=version=native,builtin)
@@ -191,16 +233,26 @@ cmd_hold() {
 }
 
 cmd_shot() {
-    local name="${1:?instance name}" out="${2:?output png}" socket
+    local name="${1:?instance name}" out="${2:?output png}" socket dir shot
     need gamescopectl
     socket="$(gamescope_socket "$name")"
     [ -n "$socket" ] || die "$name has no gamescope socket (is it running?)"
-    rm -f "$out"
-    WAYLAND_DISPLAY="$socket" gamescopectl screenshot "$out" >/dev/null
+    # gamescopectl talks to GAMESCOPE_WAYLAND_DISPLAY (default gamescope-0), not WAYLAND_DISPLAY, and the
+    # compositor writes the file itself, so a sandboxed instance would write into its private /tmp. Use a
+    # path both sides see.
+    dir="$(dir_of "$name")"
+    shot="$dir/screenshot-$$.png"
+    rm -f "$shot"
+    GAMESCOPE_WAYLAND_DISPLAY="$socket" WAYLAND_DISPLAY="$socket" gamescopectl screenshot "$shot" >/dev/null
     for _ in $(seq 1 50); do
-        [ -s "$out" ] && tail -c 12 "$out" | grep -q IEND && { echo "$out"; return 0; }
+        if [ -s "$shot" ] && tail -c 12 "$shot" | grep -q IEND; then
+            mv -f "$shot" "$out"
+            echo "$out"
+            return 0
+        fi
         sleep 0.2
     done
+    rm -f "$shot"
     die "no screenshot from $name"
 }
 
@@ -229,6 +281,10 @@ cmd_enter() {
     done
     until cmd_debug "$name" continue-title 2>/dev/null | grep -q '^ok'; do
         [ $((SECONDS - start)) -lt "$timeout" ] || die "$name: Continue never became available"
+        # Enter passes the splash; on a title menu without Continue it would start a new game instead.
+        if grep -q "native ui: Continue refused" "$log"; then
+            die "$name: the title menu offers no Continue (no saves for this Steam account?)"
+        fi
         cmd_key "$name" Return
         sleep 6
     done

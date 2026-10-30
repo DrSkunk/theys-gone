@@ -112,6 +112,8 @@ void TraceEvent(ue::UObject* obj, ue::UObject* fn, void* parms);
 void MissionWatch(bool on);
 bool MissionWatching();
 void MissionWatchEvent(ue::UObject* obj, ue::UObject* fn, void* parms); // ProcessEvent hook, before the call
+// The running story mission's checkpoint and objective states ("checkpoint 1/4 OBR1=2 OBR2=1"), or empty.
+std::string ActiveMissionProgress();
 void MissionWatchTick(double now);
 // Writes the job/mission managers' functions, every job's state, the active jobs' properties and the live
 // job-script objects to path.
