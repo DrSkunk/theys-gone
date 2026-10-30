@@ -479,6 +479,31 @@ void TestEnemy() {
     bad.version = 1;
     assert(!DecodeEnemyInfo(reinterpret_cast<const char*>(&bad), sizeof bad, decoded));
     assert(EncodeEnemyInfo(3, 9, paths, info));
+    // Companion material lists: empty slots allowed, a slot with too long a path is left empty.
+    EnemyMaterialsPacket mats, matsDecoded;
+    std::vector<std::string> materials{"/Game/Characters/Boozer/m/mi_boozer_head.mi_boozer_head", "",
+                                       "/Game/x/" + std::string(200, 'a') + ".b"};
+    assert(EncodeEnemyMaterials(3, 9, paths[0], materials, mats));
+    assert(DecodeEnemyMaterials(reinterpret_cast<const char*>(&mats), sizeof mats, matsDecoded) && matsDecoded.slots == 3 &&
+           std::string(matsDecoded.material[0]) == materials[0] && !matsDecoded.material[1][0] && !matsDecoded.material[2][0]);
+    auto badMats = mats;
+    badMats.material[5][0] = '/'; // past the declared slot count
+    assert(!DecodeEnemyMaterials(reinterpret_cast<const char*>(&badMats), sizeof badMats, matsDecoded));
+    badMats = mats;
+    badMats.mesh[0] = 0;
+    assert(!DecodeEnemyMaterials(reinterpret_cast<const char*>(&badMats), sizeof badMats, matsDecoded));
+    assert(!EncodeEnemyMaterials(3, 9, paths[0], {}, mats));
+    // Runtime scalar parameters travel per slot; a scalar on an empty slot or with a bad name is rejected.
+    // Names the sender cannot carry (unreadable entries, None) are skipped rather than failing the packet.
+    std::vector<std::vector<EnemyMaterialScalar>> scalars{{{"<bad-name>", 0.f}, {"HC_ON", 0.f}, {"None", 1.f}, {"Wet", 0.5f}},
+                                                          {{"X", 1.f}}};
+    assert(EncodeEnemyMaterials(3, 9, paths[0], materials, mats, scalars));
+    assert(DecodeEnemyMaterials(reinterpret_cast<const char*>(&mats), sizeof mats, matsDecoded) &&
+           std::string(matsDecoded.scalarName[0][0]) == "HC_ON" && matsDecoded.scalarValue[0][1] == 0.5f &&
+           !matsDecoded.scalarName[1][0][0]);
+    badMats = mats;
+    std::memcpy(badMats.scalarName[0][0], "bad name", 9);
+    assert(!DecodeEnemyMaterials(reinterpret_cast<const char*>(&badMats), sizeof badMats, matsDecoded));
 
     // Face/finger subtrees are dropped without orphaning any streamed bone.
     std::vector<std::string> names{"Align", "hips", "spine", "neck", "Head", "face_root", "face_lip_l", "jaw",
@@ -1282,6 +1307,7 @@ int main() {
     assert(coop::ParseDebugCommand("minimap-probe") == DebugCommand::minimapProbe);
     assert(coop::ParseDebugCommand("look-companion") == DebugCommand::lookCompanion);
     assert(coop::ParseDebugCommand("level-probe") == DebugCommand::levelProbe);
+    assert(coop::ParseDebugCommand("material-probe") == DebugCommand::materialProbe);
     assert(coop::ParseDebugCommand("mission-act") == DebugCommand::missionAct);
     assert(coop::ParseDebugCommand("mission-act x") == DebugCommand::unknown);
     coop::DebugRequestGate gate;

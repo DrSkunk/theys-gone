@@ -37,6 +37,7 @@ COMMANDS = (
     "minimap-probe",
     "look-companion",
     "level-probe",
+    "material-probe",
 )
 ARG_COMMANDS = ("mission-act", "stream-focus", "move-by", "level-probe")
 ARG_LIMIT = 240

@@ -10,7 +10,7 @@ enum class DebugCommand {
     cleanup, probePlayer, probeEnemy, enemyHealthAllOn, killOwnedEnemy, timeShift, weatherNext, dumpReflection, dumpObjects,
     traceOn, traceOff, rideTest, reloadSave, storyProbe, storyDiverge, hitEnemy, netProbe, netListen, netConnect, netPossess, netTakeover,
     netDiag, netAuto, netNudge, netInput, netWalk, missionWatchOn, missionWatchOff, missionState, missionAct,
-    streamFocus, streamProbe, moveBy, minimapProbe, lookCompanion, levelProbe
+    streamFocus, streamProbe, moveBy, minimapProbe, lookCompanion, levelProbe, materialProbe
 };
 
 inline DebugCommand ParseDebugCommand(std::string_view text) {
@@ -60,6 +60,7 @@ inline DebugCommand ParseDebugCommand(std::string_view text) {
     if (text == "minimap-probe") return DebugCommand::minimapProbe;
     if (text == "look-companion") return DebugCommand::lookCompanion;
     if (text == "level-probe") return DebugCommand::levelProbe;
+    if (text == "material-probe") return DebugCommand::materialProbe;
     return DebugCommand::unknown;
 }
 

@@ -128,3 +128,8 @@ Status: `[ ]` open, `[~]` in progress, `[x]` done (verified), `[!]` blocked.
   mission). A real region-transition test needs a save that has reached
   `RNA1`/`LRH1`; out-of-order starts from the act-2 save leave the guest in
   locked regions.
+- Item 5, companion look: the host sends each companion mesh's slot
+  materials and their scalar overrides (`DMMT`); the guest sets them on
+  dynamic instances. Boozer's shirt was invisible without the host's
+  `HC_ON=0`. In `OBR` the guest's crops show Boozer fully textured. Left for
+  item 5: other companions, and Boozer's bike (item 16).
