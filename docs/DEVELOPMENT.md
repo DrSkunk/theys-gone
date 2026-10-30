@@ -160,7 +160,8 @@ poetry run python tools/debug_control.py --game-dir "/path/to/BendGame/Binaries/
 | `dump-reflection` | Write every loaded class, property and function to `TheysGone-reflection.txt` |
 | `dump-objects` | Write a census of live objects to `TheysGone-objects.txt` |
 | `level-probe` | Read-only: with `--arg "<text>"`, write the streaming levels whose package name contains the text, with their load and visibility state, to `TheysGone-levels.txt` |
-| `look-companion` | Turn the camera to the nearest story-companion replica (to check it renders) |
+| `material-probe` | Log the materials of the host's companion meshes and of the guest's companion replicas |
+| `look-companion` | Move the player 6 m from the nearest story-companion replica, along the camera direction (to check it renders) |
 | `minimap-probe` | Read-only: write every live `MiniMapLocationComponent` (owner, icon texture, location type, display rule, colour, flags, name) and an icon summary to `TheysGone-minimap.txt` |
 | `net-probe` | Write the engine's built-in networking state (net drivers, connections, controllers, roles, replicated actors and properties) to `TheysGone-net.txt` |
 | `net-listen` | Experimental, host: start the engine's built-in listen server (Steam P2P) on the live world; `[Research] ControllerClass=`, `PawnClass=`, `SpectatorJoin=` set what joining players get |

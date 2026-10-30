@@ -3,6 +3,7 @@
 #include "pose.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cctype>
 #include <cstdint>
 #include <cstring>
@@ -86,6 +87,96 @@ inline bool DecodeEnemyInfo(const char* data, int len, EnemyInfoPacket& out) {
             if (p[c] < 0x21 || p[c] > 0x7e) return false;
     }
     return true;
+}
+
+// A companion's runtime look: the base material asset of each slot of one of its meshes. The host builds
+// MaterialInstanceDynamics at runtime, so the meshes alone render with empty slots on the other game.
+constexpr uint32_t kEnemyMaterialsMagic = 0x544D4D44; // "DMMT"
+constexpr uint16_t kEnemyMaterialsVersion = 1;
+constexpr size_t kEnemyMaterialSlots = 8;
+constexpr size_t kEnemyMaterialPathLength = 120;
+constexpr size_t kEnemyMaterialScalars = 2; // runtime scalar parameters per slot (such as HC_ON)
+constexpr size_t kEnemyScalarNameLength = 16;
+
+struct EnemyMaterialScalar {
+    std::string name;
+    float value = 0;
+};
+
+#pragma pack(push, 1)
+struct EnemyMaterialsPacket {
+    uint32_t magic;
+    uint16_t version;
+    uint8_t slots, reserved;
+    uint32_t session, entity;
+    char mesh[kEnemyPathLength];                                   // the SkeletalMesh the slots belong to
+    char material[kEnemyMaterialSlots][kEnemyMaterialPathLength]; // empty: leave the slot as it is
+    char scalarName[kEnemyMaterialSlots][kEnemyMaterialScalars][kEnemyScalarNameLength]; // empty: unused
+    float scalarValue[kEnemyMaterialSlots][kEnemyMaterialScalars];
+};
+static_assert(sizeof(EnemyMaterialsPacket) <= 1472, "DMMT must fit one UDP datagram");
+#pragma pack(pop)
+
+inline bool ValidObjectPath(const char* p, size_t capacity, bool allowEmpty) {
+    size_t n = strnlen(p, capacity);
+    if (n == capacity) return false;
+    if (!n) return allowEmpty;
+    if (n < 3 || p[0] != '/' || !std::memchr(p, '.', n)) return false;
+    for (size_t c = 0; c < n; ++c)
+        if (p[c] < 0x21 || p[c] > 0x7e) return false;
+    return true;
+}
+
+inline bool ValidScalarName(const char* name, size_t n) {
+    if (!n || n >= kEnemyScalarNameLength || (n == 4 && std::memcmp(name, "None", 4) == 0)) return false;
+    for (size_t c = 0; c < n; ++c)
+        if (!(std::isalnum(static_cast<unsigned char>(name[c])) || name[c] == '_')) return false;
+    return true;
+}
+inline bool DecodeEnemyMaterials(const char* data, int len, EnemyMaterialsPacket& out) {
+    if (len != static_cast<int>(sizeof(EnemyMaterialsPacket))) return false;
+    std::memcpy(&out, data, sizeof out);
+    if (out.magic != kEnemyMaterialsMagic || out.version != kEnemyMaterialsVersion || !out.entity || !out.slots ||
+        out.slots > kEnemyMaterialSlots || out.reserved || !ValidObjectPath(out.mesh, kEnemyPathLength, false))
+        return false;
+    for (size_t i = 0; i < kEnemyMaterialSlots; ++i) {
+        if (!ValidObjectPath(out.material[i], kEnemyMaterialPathLength, true)) return false;
+        if (i >= out.slots && out.material[i][0]) return false;
+        for (size_t k = 0; k < kEnemyMaterialScalars; ++k) {
+            const char* name = out.scalarName[i][k];
+            size_t n = strnlen(name, kEnemyScalarNameLength);
+            if (!std::isfinite(out.scalarValue[i][k])) return false;
+            if (n && (i >= out.slots || !out.material[i][0] || !ValidScalarName(name, n))) return false;
+        }
+    }
+    return true;
+}
+
+inline bool EncodeEnemyMaterials(uint32_t session, uint32_t entity, const std::string& mesh,
+                                 const std::vector<std::string>& materials, EnemyMaterialsPacket& out,
+                                 const std::vector<std::vector<EnemyMaterialScalar>>& scalars = {}) {
+    out = EnemyMaterialsPacket{};
+    out.magic = kEnemyMaterialsMagic;
+    out.version = kEnemyMaterialsVersion;
+    out.session = session;
+    out.entity = entity;
+    if (mesh.size() >= kEnemyPathLength) return false;
+    std::memcpy(out.mesh, mesh.data(), mesh.size());
+    for (const auto& m : materials) {
+        if (out.slots == kEnemyMaterialSlots) break;
+        bool kept = m.size() < kEnemyMaterialPathLength;
+        if (kept) std::memcpy(out.material[out.slots], m.data(), m.size());
+        size_t k = 0;
+        if (kept && !m.empty() && out.slots < scalars.size())
+            for (const auto& s : scalars[out.slots])
+                if (k < kEnemyMaterialScalars && ValidScalarName(s.name.c_str(), s.name.size()) && std::isfinite(s.value)) {
+                    std::memcpy(out.scalarName[out.slots][k], s.name.data(), s.name.size());
+                    out.scalarValue[out.slots][k++] = s.value;
+                }
+        ++out.slots;
+    }
+    EnemyMaterialsPacket check;
+    return DecodeEnemyMaterials(reinterpret_cast<const char*>(&out), sizeof out, check);
 }
 
 inline bool EncodeEnemyInfo(uint32_t session, uint32_t entity, const std::vector<std::string>& paths, EnemyInfoPacket& out,
