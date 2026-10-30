@@ -3587,3 +3587,162 @@ after a reboot the desktop Steam client signed in to the sandbox's account,
 which left the host without Continue; both are fixed in `tools/lab/lab.sh`.
 Logs and screenshots: `~/TheysGone-lab/archive/sync-20261028-1139/`,
 `sync-20261029-2054/` and `reload-loop-20261028/` on cachy.
+
+## Partner on the minimap and world map (2026-10-29, paired, one PC)
+
+`minimap-probe` lists every `MiniMapLocationComponent`. The minimap and map
+draw `MapLocation` objects (`MapLocationMgr.GetMiniMapLocations`), one per
+registered component, using `MapLocation.IconTexture()` and `Position()`.
+The player's bike uses icon `MAP_bike`, location type 1, display rule 0.
+
+The partner marker is a spawned native `MapLocationActor`, configured before
+`FinishSpawningActor`: icon `RADAR_player_on_foot` (found loaded), location
+type 1, display rule 0, edge display 1. Its `MapLocation` was registered and
+in the minimap list (`displayOnMinimap=1`, `IconTexture()` correct), but
+`Position()` stayed (0,0,0): the actor has no root component, so moving it
+does nothing and `bGetPositionFromOwner` reads the origin. With that flag off
+and the component's `Position` written every tick, `Position()` followed the
+partner on both games (guest marker at the host's exact coordinates).
+
+- World map, partners 280 m apart: the host's map showed the partner icon (a
+  white-and-black triangle) at the partner's offset.
+- Minimap, partners 35 m apart: with `PartnerMarker=1` the host's minimap
+  showed an extra triangle at the partner's offset; with `PartnerMarker=0`
+  it did not. On the guest the host's marker overlapped the guest's own bike
+  icon, so it was not separately visible.
+- The colour tint (`MinimapColor`, `MarkerColor`) is not applied to this
+  icon; the partner triangle resembles the game's player icons.
+
+Archives: `~/TheysGone-lab/archive/map-*` and `mm-off-*`/`mm-on-*` on cachy.
+
+## Host's story companion on the guest (2026-10-29/30, paired, one PC)
+
+The host's enemy scan now also streams pawns whose controller is a
+`BendBuddyController` (`BuddyController_C`; Boozer is `BoozerPawn_C`, a
+`BendAIPawn`), marked friendly in `DMEN` (version 2, `flags` bit 0). Friendly
+sources are excluded from the stand-in aggro loop, the 15 s target report,
+ownership handoff and incoming guest hits; friendly replicas are skipped by
+the guest's shot and melee tests.
+
+In `OBR` the host logged `streaming companion BoozerPawn_C_0` once Boozer
+spawned after the intro. The guest's first replica attempt failed because
+Boozer's meshes are not loaded on a game that does not run the mission
+(`replica 1 skipped; .../boozer_up_thermal_burned_full... is not loaded`).
+The guest now requests missing meshes through
+`BendStreamingManager.Get().RequestAsyncLoadBPCallback(TAssetPtr, delegate)`
+(TAssetPtr: weak pointer, tag, path string; 32 bytes) and rebuilds a replica
+that was built without some parts once they have loaded: `replica 1
+boozer_head_boozer with 486 bones and 1 parts; rebuilt once the rest has
+loaded`, then `... and 3 parts` 5 s later.
+
+With the guest teleported to the host (F7) and its camera turned to the
+replica (`look-companion`), the guest's screenshot showed a Boozer-shaped
+figure walking 12 m away at Boozer's position; the host's screenshot showed
+Boozer at the same spot. The replica rendered grey and blue, not textured.
+
+Not done: Boozer's bike, his materials/textures, other companions. Archives:
+`~/TheysGone-lab/archive/buddy-*` on cachy.
+
+## Time and weather during host missions (2026-10-29, paired, one PC)
+
+Time and weather sync used to pause while either game was in a mission. The
+guest never runs the host's mission, so the host now keeps sending during
+missions (pausing only for cinematics), and the guest applies them unless it
+runs a mission script or a cinematic itself. During `OBR` the guest went to
+the host's 12.5 h. The mission's fog did not follow: the host's
+`WorldWeather` stayed 0 (clear); the fog comes from the mission's weather
+sublevel (`OBR1_Weather`). Syncing it needs the host's mission on the guest.
+
+## Protocol-v9 guest-side proxy, second attempt (2026-10-30, paired, one PC; inconclusive)
+
+Lab pair with `FreeRoam=1` on both games. The guest moved about 350 m away
+(both logged `regions split`), started a debug session, enabled god mode and
+spawned a pack: this time the guest streamed its 8 swarmers (`streaming 8
+local AI pawns`) and the host showed 8 replicas, which the first attempt never
+reached. Moving the guest back to about 26 m from the host merged the regions;
+the guest created its stand-in for the host (`partner stand-in
+SwarmerPawn_C_24 ...`). Over the next three minutes, with the guest moved
+35 m and then about 146 m from the host (still merged), every 15 s report
+read `8 living streamed enemies target the partner 0, the local player 8`,
+and the host's health stayed 121.875.
+
+Likely reason: the pack consists of debug-spawned pawns owned by the guest's
+debug session, which may stay locked on the local player, so the stand-in is
+never chosen. A valid test needs naturally spawned enemies that the guest owns
+and that are fighting it at the regroup. Logs: `~/TheysGone-lab/archive/
+v9proxy-20261030/` on cachy.
+
+## Host mission on the guest, flashbacks and a marker crash (2026-10-30, paired, one PC)
+
+Protocol v10 adds one byte to the state packet: the `MissionID` of the story
+mission the sender's game runs (0 without a running mission script). Each
+game resolves the partner's mission with its own
+`BendGameMission.GetMissionDataFromIDNew` and applies the policy table.
+While either game runs a flashback mission (`kMissionFlashback`), the partner
+avatar and its map marker are hidden.
+
+The host started `WNG` (*What's a Nice Girl*, ID 9, a flashback) with
+`StartMissionFromID`:
+
+- The first run crashed the host's game about 2 s after the start, right
+  after the host travelled into the flashback and the mod destroyed the
+  partner's map marker (`map marker: partner marker removed (partner
+  unavailable)`). A control run with the previous build, and a run of the new
+  build with `PartnerMarker=0` on the host, did not crash. The marker is now
+  hidden with `SetVisibility(false, false)` and kept until the world goes.
+- With that change and the marker on: no crash. The host logged `mission:
+  active 'WNG'` and `avatar: partner hidden (flashback mission)`; the guest
+  logged `mission: partner runs 'WNG' (id 9, policy flags 0x042)`, lifted
+  the stuck fade, and hid the host's avatar.
+
+Not tested: that the hidden avatar shows again after the flashback ends.
+
+## Host mission weather on the guest (2026-10-30, paired, one PC)
+
+`level-probe --arg obr` during the host's `OBR` showed the same
+`LevelStreamingKismet` entries in both games; on the host
+`/Game/maps/ORWorld/Missions/Part1/obr/OBR1_Weather` was loaded and visible,
+on the guest not loaded. Setting `bShouldBeLoaded`/`bShouldBeVisible` on the
+guest's entry did nothing in 110 s. `GameplayStatics.PerformActionOnStreamingLevels`
+(a Bend addition, not latent) loaded it: `streaming the partner's mission
+weather .../OBR1_Weather (ok)`, then `loaded=1 visible=1`.
+
+The weather level alone turned the guest's view nearly white: the guest kept
+the host's synced `WorldWeather` 0 (clear) while the host's mission uses its
+`TempDefaultWeather` (4). With the guest applying the mission's preset while
+the level is streamed (`world sync: weather 0 -> 4`), the guest's screenshot
+showed the same dark, misty overcast as the host's.
+
+The level is released with `ClearActionOnStreamingLevels` when the host's
+mission changes or ends; that release was not observed in this run.
+
+## Region transition and the guest's mission state (2026-10-30, paired, one PC)
+
+The host started `RNA1` (*Riding Nomad Again*, ID 70) out of order from the
+lab's act-2 save.
+
+1. Following the host's mission-start save put the guest at the mission's
+   staging point (about (249658, 234496)), 4.2 km from the host's gameplay
+   start. The post-load teleport fired while the host was still in its intro
+   cinematic; it now waits until the host sends world state again (the host
+   sends none during cinematics).
+2. A later F7 teleport across 1.1 km dropped the guest far below the host
+   (z -17243 against -1669): the ground there was not loaded. Long teleports
+   (over 200 m) now hold the player at the destination until a capsule sweep
+   finds ground, as `move-by` does: `holding 1143 m away until the ground
+   there loads`, `placed on ground z=-1759 after 2.5 s`.
+3. The start fade turned black after the post-load check; it is now watched
+   once a second and lifted after 5 s (follower only: the local mission must
+   be the one the partner runs).
+4. 1.5 s after the teleport the game replaced the guest's pawn and respawned
+   it at the staging point. Because the guest's game treats the host's
+   mission as active (failure zones, staging point) without running it, the
+   guest now defers story resync while the host runs a story mission
+   (`story: waiting for the host to finish mission 'RNA1' before syncing`)
+   and catches up at the host's first save after it.
+5. With resync deferred, the guest stayed on its own act-2 save; the F7
+   teleport into the Lost Lake encampment was still followed by a respawn at
+   the guest's save position. That act-2 save has not unlocked Lost Lake, so
+   this is most likely the game resetting a player in a locked region, an
+   artefact of starting `RNA1` out of order. Region transitions need a test
+   save that has reached them.

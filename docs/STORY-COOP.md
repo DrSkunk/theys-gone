@@ -241,10 +241,9 @@ camp rally).
    (`AHB5`). These suit co-op if guest hits apply on the host's enemies,
    which already works.
 5. **Captures (C).** `CRW` (Boozer), `TLL2` (caught), `PBC4` → `AON1` (Deacon
-   betrayed, gear and cut taken), `AHB5` (hanging). A free, armed partner
-   contradicts them. Candidate policy: while one is active, hide the guest's
-   avatar on the host, stop guest hits on mission enemies, and move the
-   guest to the host when it completes.
+   betrayed, gear and cut taken), `AHB5` (hanging). Decided 2026-10-30: no
+   restriction, like most co-op games; both players stay free and the
+   escape is a shared prison break.
 6. **Flashbacks (M).** `WNG`, `HGL`, `TSR`, `IPR`, `AQW` and the memorial
    stone jobs play in the past or in memory. The partner must not appear.
    `BendGameMission.OnFlashbackCinematicToggled` may signal the cinematic
