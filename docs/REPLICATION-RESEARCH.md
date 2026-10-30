@@ -3746,3 +3746,34 @@ lab's act-2 save.
    this is most likely the game resetting a player in a locked region, an
    artefact of starting `RNA1` out of order. Region transitions need a test
    save that has reached them.
+
+## Companion materials on the guest (2026-10-30, paired, one PC)
+
+Follow-up to "Host's story companion on the guest". The host's Boozer
+renders with runtime `MaterialInstanceDynamic`s; the new `DMMT` datagram
+(own version 1, every 2 s per streamed companion mesh) carries, per slot, the
+asset behind each instance (`Parent`, walked up to the first asset) and up to
+two of its scalar overrides. `material-probe` lists each slot on both games.
+
+- Host, `OBR`: every Boozer slot is a dynamic instance with `HC_ON=0`
+  (the hands also have `wrinkleInfR1=1.88 wrinkleInfG1=1.88`), for example
+  `boozer_up_thermal_burned_full` → `mi_boozer_thermal_burnt`.
+  `FScalarParameterValue` is 0x20 bytes in this build; the first probe read
+  it with a 28-byte stride and printed garbage entries (`<bad-name>`).
+- Setting only the asset materials on the guest textured the head and
+  pants, but the thermal shirt stayed invisible, so the head floated above
+  the legs. With a dynamic instance per slot and the host's `HC_ON=0`, the
+  guest's crops (`buddy-20261030-1736`, `g1.png`) showed the shirt.
+- The hand materials have 99-character paths (`.../hand/mi_boozer_hand_burnt_not_bloody...`)
+  and were dropped by the 96-byte slot limit; it is now 120 bytes (packet
+  1,416 bytes).
+- One run (`buddy-20261030-1744`) built the replica with only the head, and
+  it was never rebuilt: the loaded meshes were apparently collected before the
+  1 s completeness check, and assets were requested only once. Requests are
+  now repeated after 10 s and the replica is rebuilt in the same tick the
+  meshes are found. In `buddy-20261030-1752` the hand material was requested
+  twice (10 s apart) before it stayed loaded. All four meshes were built with the host's
+  materials (`companion replica materials applied (4 meshes)`). Three guest
+  crops show Boozer fully textured: shirt, burnt hands, pants and boots.
+
+Not tested: other companions, Boozer's bike, a two-PC run.

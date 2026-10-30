@@ -278,7 +278,13 @@ void DestroyBike();
 void DestroyEnemyReplicas();
 void ReceiveEnemyPose(const PosePacket& packet, double now);
 void ReceiveEnemyInfo(const char* data, int len, double now);
+void ReceiveEnemyMaterials(const char* data, int len, double now);
+struct EnemySource;
+struct EnemyReplica;
+void SendCompanionMaterials(const EnemySource& e);
+void ApplyReplicaMaterials(EnemyReplica& r);
 bool LookAtCompanion();
+void ProbeCompanionMaterials();
 void ReceiveGear(const char* data, int len, double now);
 void ReceiveStory(const char* data, int len);
 void ReceiveObjectiveProgress(const char* data, int len);
@@ -1337,6 +1343,10 @@ void ReceivePose(const char* data, int len, double now) {
         ReceiveObjectiveProgress(data, len);
         return;
     }
+    if (magic == kEnemyMaterialsMagic) {
+        ReceiveEnemyMaterials(data, len, now);
+        return;
+    }
     if (magic == kEnemyHitMagic) {
         ReceiveEnemyHit(data, len, now);
         return;
@@ -2299,6 +2309,7 @@ void UpdateDebugTools(double now) {
         Log("research: %s: %s", text.c_str(), summary.c_str());
         if (!success) DebugError(summary.c_str());
     }
+    else if (command == DebugCommand::materialProbe) ProbeCompanionMaterials();
     else if (command == DebugCommand::lookCompanion) {
         if (!LookAtCompanion()) success = DebugError("look-companion needs a companion replica and a player");
     }
@@ -3138,6 +3149,7 @@ struct EnemySource {
     std::vector<std::string> paths;
     double lastInfo = -10;
     double onGuest = -1e9; // last time it targeted the partner or the local proxy for them
+    double lastMaterials = -10;
     bool friendly = false; // a story companion (BendBuddyController): streamed for display only
 };
 struct EnemyReplica {
@@ -3151,6 +3163,18 @@ struct EnemyReplica {
     bool missingLogged = false, alive = false;
     bool friendly = false; // the host's story companion: never a hit target
     bool incomplete = false; // built while some mesh parts were still loading
+    struct Slot {
+        std::string path; // empty: leave the slot as it is
+        std::vector<EnemyMaterialScalar> scalars; // the host's runtime overrides; needs a dynamic instance
+        bool operator==(const Slot& o) const {
+            if (path != o.path || scalars.size() != o.scalars.size()) return false;
+            for (size_t i = 0; i < scalars.size(); ++i)
+                if (scalars[i].name != o.scalars[i].name || scalars[i].value != o.scalars[i].value) return false;
+            return true;
+        }
+    };
+    std::unordered_map<std::string, std::vector<Slot>> materials; // mesh path -> slots
+    bool materialsPending = false; // some slots still to apply (loading, or a new list arrived)
     FVector at{}; // feet, in local engine coordinates
 };
 std::vector<EnemySource> g_enemySources;
@@ -3172,9 +3196,13 @@ bool LookAtCompanion() {
         }
     }
     if (!nearest) return false;
-    float yaw = std::atan2(nearest->at.y - me.y, nearest->at.x - me.x) * 180.f / 3.14159265f;
-    Call(g_controller, "SetControlRotation").set("NewRotation", FRotator{-5, yaw, 0}).invoke();
-    Log("debug: looking at the companion replica %.0f m away (yaw %.0f)", std::sqrt(best) / 100, yaw);
+    // The camera does not follow SetControlRotation, so the player is moved instead: 6 m behind the replica along
+    // the current camera direction, which puts the replica in view.
+    Call rotation(Prop(g_controller, "PlayerCameraManager"), "GetCameraRotation");
+    float yaw = rotation.invoke() ? rotation.get<FRotator>("ReturnValue").yaw * 3.14159265f / 180.f : 0.f;
+    FVector spot{nearest->at.x - std::cos(yaw) * 600.f, nearest->at.y - std::sin(yaw) * 600.f, nearest->at.z + 120.f};
+    Call(g_pawn, "K2_SetActorLocation").set("NewLocation", spot).setBool("bSweep", false).setBool("bTeleport", true).invoke();
+    Log("debug: placed 6 m from the companion replica (was %.0f m away)", std::sqrt(best) / 100);
     return true;
 }
 uint32_t g_nextEnemyEntity = 1;
@@ -3203,6 +3231,32 @@ double g_nextHandoffCheck = 0, g_guestPresentAt = -1e9;
 std::string AssetPath(UObject* asset) {
     if (!IsLive(asset) || !asset->outer || asset->outer->outer) return {};
     return Name(asset->outer) + "." + Name(asset);
+}
+
+// The asset behind a material slot: runtime MaterialInstanceDynamics are walked up to their asset parent.
+std::string MaterialAssetPath(UObject* material) {
+    for (int depth = 0; IsLive(material) && depth < 4; ++depth) {
+        auto path = AssetPath(material);
+        if (!path.empty()) return path;
+        material = Prop(material, "Parent");
+    }
+    return {};
+}
+
+// The runtime scalar parameters of a MaterialInstanceDynamic (FScalarParameterValue is 0x20 bytes here).
+std::vector<EnemyMaterialScalar> DynamicScalars(UObject* material) {
+    std::vector<EnemyMaterialScalar> out;
+    if (!IsLive(material) || Name(material->cls) != "MaterialInstanceDynamic") return out;
+    struct Array { uint8_t* data; int32_t count, capacity; } params{};
+    if (!GetProp(material, "ScalarParameterValues", params) || !params.data || params.count > params.capacity) return out;
+    for (int32_t p = 0; p < params.count && p < 24 && ReadableMemory(params.data + p * 0x20, 0x20); ++p) {
+        FName name{};
+        float value = 0;
+        std::memcpy(&name, params.data + p * 0x20, sizeof name);
+        std::memcpy(&value, params.data + p * 0x20 + 8, sizeof value);
+        out.push_back({NameString(name.index), value});
+    }
+    return out;
 }
 
 // ---- Held item mirroring --------------------------------------------------------------------------------------
@@ -3488,6 +3542,51 @@ uint8_t EnemyClassKind(UObject* cls) {
     return it->second;
 }
 
+// Debug: the materials of each mesh component of the host's companions and of the guest's companion replicas,
+// to compare what the host renders with what the replica uses.
+void LogComponentMaterials(const char* label, UObject* component) {
+    if (!IsLive(component)) return;
+    Call count(component, "GetNumMaterials");
+    int n = count.invoke() ? count.get<int32_t>("ReturnValue") : -1;
+    std::string list;
+    for (int i = 0; i < n && i < 16; ++i) {
+        Call get(component, "GetMaterial");
+        UObject* material = get.set("ElementIndex", i).invoke() ? get.get<UObject*>("ReturnValue") : nullptr;
+        list += std::string(i ? ", " : "") + (IsLive(material) ? Name(material->cls) + " " + Name(material) : "null");
+        // Runtime instances: their scalar parameters, which the base asset does not carry.
+        if (IsLive(material) && Name(material->cls) == "MaterialInstanceDynamic") {
+            list += " {";
+            for (const auto& s : DynamicScalars(material)) {
+                char item[96];
+                std::snprintf(item, sizeof item, "%s%s=%.3g", list.back() == '{' ? "" : " ", s.name.c_str(), s.value);
+                list += item;
+            }
+            list += "} parent=" + MaterialAssetPath(material);
+        }
+    }
+    Log("materials: %s %s mesh=%s [%s]", label, Name(component).c_str(), AssetPath(Prop(component, "SkeletalMesh")).c_str(),
+        list.c_str());
+}
+
+void ProbeCompanionMaterials() {
+    int sources = 0, replicas = 0;
+    for (const auto& e : g_enemySources) {
+        if (!e.friendly || !IsLive(e.pawn)) continue;
+        ++sources;
+        Call parts(e.pawn, "GetComponentsByClass");
+        if (!parts.set("ComponentClass", C.skelMeshComponent).invoke()) continue;
+        struct Array { UObject** data; int32_t count, capacity; } list = parts.get<Array>("ReturnValue");
+        for (int32_t i = 0; list.data && i < list.count && i < 32; ++i) LogComponentMaterials("host companion", list.data[i]);
+    }
+    for (const auto& [entity, r] : g_enemyReplicas) {
+        if (!r.friendly) continue;
+        ++replicas;
+        LogComponentMaterials("replica body", r.pose);
+        for (auto part : r.parts) LogComponentMaterials("replica part", part);
+    }
+    Log("materials: %d companion sources, %d companion replicas", sources, replicas);
+}
+
 void FinishEnemyScan(UObject* pawn) {
     Call me(pawn, "K2_GetActorLocation");
     if (!me.invoke()) return;
@@ -3611,6 +3710,10 @@ void SendEnemy(EnemySource& e, const FVector& origin, uint32_t timeMs, double no
             static_cast<int>(names.size()));
     }
     if (e.subset.empty()) return;
+    if (e.friendly && now - e.lastMaterials >= 2.0) {
+        e.lastMaterials = now;
+        SendCompanionMaterials(e);
+    }
     if (now - e.lastInfo >= kEnemyInfoInterval) {
         EnemyInfoPacket info;
         if (EncodeEnemyInfo(g_session, e.entity, e.paths, info, e.friendly ? kEnemyInfoFriendly : 0)) {
@@ -3730,9 +3833,14 @@ void ReceiveEnemyPose(const PosePacket& packet, double now) {
 
 // Asks the game's streaming manager to load an asset by object path, once per path. Meshes of the host's
 // story companions are not loaded on the joining player, whose game does not run the mission.
+// Nothing holds a loaded asset until a replica uses it, so garbage collection can drop it again; asking again
+// after a while covers that.
 void RequestAssetLoad(const std::string& path) {
-    static std::unordered_set<std::string> requested;
-    if (path.empty() || !requested.insert(path).second) return;
+    static std::unordered_map<std::string, double> requested;
+    if (path.empty()) return;
+    double now = Now();
+    if (auto found = requested.find(path); found != requested.end() && now - found->second < 10) return;
+    requested[path] = now;
     static UObject* manager = nullptr;
     if (!IsLive(manager)) {
         if (auto statics = FindDefaultObject("BendStreamingManager")) {
@@ -3753,6 +3861,101 @@ void RequestAssetLoad(const std::string& path) {
     Call load(manager, "RequestAsyncLoadBPCallback");
     bool ok = load.set("Target", target).set("DelegateToCall", none).invoke();
     Log("assets: requested %s (%s)", path.c_str(), ok && load.get<bool>("ReturnValue") ? "loading" : "not started");
+}
+
+// Host: each streamed mesh of a companion with the asset material of every slot.
+void SendCompanionMaterials(const EnemySource& e) {
+    Call parts(e.pawn, "GetComponentsByClass");
+    if (!IsLive(e.pawn) || !parts.set("ComponentClass", C.skelMeshComponent).invoke()) return;
+    struct Array { UObject** data; int32_t count, capacity; } list = parts.get<Array>("ReturnValue");
+    for (int32_t i = 0; list.data && i < list.count && i < 32; ++i) {
+        auto component = list.data[i];
+        if (!IsLive(component)) continue;
+        auto mesh = AssetPath(Prop(component, "SkeletalMesh"));
+        if (mesh.empty() || std::find(e.paths.begin(), e.paths.end(), mesh) == e.paths.end()) continue;
+        Call count(component, "GetNumMaterials");
+        int n = count.invoke() ? std::min<int>(count.get<int32_t>("ReturnValue"), kEnemyMaterialSlots) : 0;
+        std::vector<std::string> materials;
+        std::vector<std::vector<EnemyMaterialScalar>> scalars;
+        for (int slot = 0; slot < n; ++slot) {
+            Call get(component, "GetMaterial");
+            UObject* material = get.set("ElementIndex", slot).invoke() ? get.get<UObject*>("ReturnValue") : nullptr;
+            materials.push_back(MaterialAssetPath(material));
+            scalars.push_back(DynamicScalars(material));
+        }
+        EnemyMaterialsPacket packet;
+        if (EncodeEnemyMaterials(g_session, e.entity, mesh, materials, packet, scalars))
+            g_net->SendRaw(&packet, sizeof packet);
+    }
+}
+
+void ReceiveEnemyMaterials(const char* data, int len, double now) {
+    EnemyMaterialsPacket packet;
+    if (!DecodeEnemyMaterials(data, len, packet) || packet.session != g_peer.session || !g_peer.session) {
+        ++g_enemyStats.rejected;
+        return;
+    }
+    if (!AcceptEnemies(now)) return;
+    auto it = g_enemyReplicas.find(packet.entity);
+    if (it == g_enemyReplicas.end()) return;
+    std::vector<EnemyReplica::Slot> materials(packet.slots);
+    for (int i = 0; i < packet.slots; ++i) {
+        materials[i].path = packet.material[i];
+        for (size_t k = 0; k < kEnemyMaterialScalars && packet.scalarName[i][k][0]; ++k)
+            materials[i].scalars.push_back({packet.scalarName[i][k], packet.scalarValue[i][k]});
+    }
+    auto& current = it->second.materials[packet.mesh];
+    if (current != materials) {
+        current = std::move(materials);
+        it->second.materialsPending = true;
+    }
+}
+
+// Guest: sets the host's slot materials on a companion replica, loading missing ones; retried until all are set.
+void ApplyReplicaMaterials(EnemyReplica& r) {
+    static UObject* materialClass = FindClass("MaterialInterface");
+    bool pending = false;
+    std::vector<UObject*> components{r.pose};
+    components.insert(components.end(), r.parts.begin(), r.parts.end());
+    for (auto component : components) {
+        if (!IsLive(component)) continue;
+        auto found = r.materials.find(AssetPath(Prop(component, "SkeletalMesh")));
+        if (found == r.materials.end()) continue;
+        for (size_t slot = 0; slot < found->second.size(); ++slot) {
+            const auto& [path, scalars] = found->second[slot];
+            if (path.empty()) continue;
+            auto material = FindObject(path.c_str(), materialClass);
+            if (!material) {
+                RequestAssetLoad(path);
+                pending = true;
+                continue;
+            }
+            auto index = static_cast<int32_t>(slot);
+            Call get(component, "GetMaterial");
+            UObject* current = get.set("ElementIndex", index).invoke() ? get.get<UObject*>("ReturnValue") : nullptr;
+            if (scalars.empty()) {
+                if (current != material)
+                    Call(component, "SetMaterial").set("ElementIndex", index).set("Material", material).invoke();
+                continue;
+            }
+            // The host's overrides (such as HC_ON) go on a dynamic instance of the asset, made once per slot.
+            UObject* instance = current;
+            if (!IsLive(current) || Name(current->cls) != "MaterialInstanceDynamic" || Prop(current, "Parent") != material) {
+                Call create(component, "CreateDynamicMaterialInstance");
+                instance = create.set("ElementIndex", index).set("SourceMaterial", material).invoke()
+                               ? create.get<UObject*>("ReturnValue") : nullptr;
+            }
+            if (!IsLive(instance)) continue;
+            for (const auto& s : scalars) {
+                int32_t name = FindNameIndex(s.name.c_str());
+                if (name >= 0)
+                    Call(instance, "SetScalarParameterValue").set("ParameterName", FName{name, 0}).set("Value", s.value).invoke();
+            }
+        }
+    }
+    if (r.materialsPending && !pending)
+        Log("enemies: companion replica materials applied (%d meshes)", static_cast<int>(r.materials.size()));
+    r.materialsPending = pending;
 }
 
 bool SpawnReplica(UObject* context, EnemyReplica& r, uint32_t entity, const FVector& at) {
@@ -3817,12 +4020,16 @@ void UpdateEnemyReplicas(UObject* pawn, double now) {
             r.lastSpawnAttempt = now;
             bool loaded = std::all_of(r.paths.begin(), r.paths.end(),
                                       [](const std::string& path) { return FindObject(path.c_str(), meshClass) != nullptr; });
-            if (loaded) DestroyReplica(r);
+            if (loaded) {
+                DestroyReplica(r);
+                r.lastSpawnAttempt = now - 1; // rebuild now, before the loaded parts can be collected
+            }
         }
         if (!IsLive(r.actor) && now - r.lastSpawnAttempt >= 1.0) {
             r.lastSpawnAttempt = now;
-            SpawnReplica(pawn, r, it->first, at);
+            if (SpawnReplica(pawn, r, it->first, at)) r.materialsPending = !r.materials.empty();
         }
+        if (IsLive(r.actor) && r.materialsPending && now - r.lastSpawnAttempt >= 0.5) ApplyReplicaMaterials(r);
         if (IsLive(r.actor) && r.friendly && g_cfg.debugTools) {
             static double nextReport = 0;
             if (now >= nextReport) {

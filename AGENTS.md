@@ -69,7 +69,8 @@ Implemented but **not yet validated live**:
 - Lab-verified on one PC (two games, see [docs/COOP-ROADMAP.md](docs/COOP-ROADMAP.md)):
   the guest's stuck mission fade is lifted; the partner shows on the minimap
   and world map (`PartnerMarker`); the host's story companions (Boozer) are
-  streamed as friendly replicas (`DMEN` v2) with on-demand mesh loading;
+  streamed as friendly replicas (`DMEN` v2) with on-demand mesh loading
+  and the host's materials (`DMMT`);
   time follows the host during its missions; each state packet carries the
   sender's running mission (protocol v10) and both games hide the partner
   during flashback missions.
