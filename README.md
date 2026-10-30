@@ -42,6 +42,7 @@ the host progress. Host and join sessions through Steam or your local network.
 | Appearance | Seven color presets for jacket, trousers and cap, and an option to hide the cap |
 | Friendly fire | Optional. Both players must opt in each session |
 | Teleport | Jump next to your partner |
+| Partner on the map | Your partner appears on the minimap and the world map |
 | In-game menu | Settings overlay usable with keyboard, mouse or gamepad |
 
 ### What is not synchronized
@@ -298,6 +299,7 @@ All keys are in the `[Coop]` section of `TheysGone.ini`.
 | `SyncEnemies` | `1` | Host enemy sync |
 | `FreeRoam` | `0` | Experimental, supported game build only: host streams terrain around a distant guest and each game simulates its local enemy region; each side shows and can hit the other's enemies. Enable on both peers |
 | `AllowPassenger` | `1` | Allow a passenger on your bike |
+| `PartnerMarker` | `1` | Show your partner on the minimap and the world map |
 | `Discovery` | `0` | Developers: log engine details; F6 dumps the local pawn |
 | `MissionDiscovery` | `0` | Developers: trace mission/save function names and parameter layouts only; see [DEVELOPMENT.md](docs/DEVELOPMENT.md) |
 | `MenuDiscovery` | `0` | Developers: F6 dumps native menu classes/widget references and enables UI event tracing |
@@ -317,7 +319,7 @@ All keys are in the `[Coop]` section of `TheysGone.ini`.
 The plugin writes `TheysGone.log` next to itself. A healthy start looks like this:
 
 ```text
-Theys Gone … starting (protocol v9)
+Theys Gone … starting (protocol v10)
 ProcessEvent hook installed
 GNames via pointer at rva 0x…, … names
 network: listening on UDP 27777, …

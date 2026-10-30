@@ -17,7 +17,7 @@ import struct
 import time
 
 MAGIC = 0x4F434744
-VERSION = 9
+VERSION = 10
 HAS_PAWN = 1
 WORLD_STATE = 1 << 8
 SYNC_ENEMIES = 1 << 9
@@ -30,11 +30,13 @@ OBJECTIVE_PROGRESS_VERSION = 1
 OBJECTIVE_PROGRESS_FORMAT = '<IHBBII48s48s'
 OBJECTIVE_PROGRESS_SIZE = struct.calcsize(OBJECTIVE_PROGRESS_FORMAT)
 BASE_FORMAT = '<IHHII3fff3f16s'
-FORMAT = BASE_FORMAT + '6I7f4BIfBBIffBB'
+FORMAT = BASE_FORMAT + '6I7f4BIfBBIffBBB'
 SIZE = struct.calcsize(FORMAT)
-assert SIZE == 144
+assert SIZE == 145
 POSE_MAGIC = 0x534F5044
 ENEMY_INFO_MAGIC = 0x4E454D44
+ENEMY_INFO_VERSION = 2
+ENEMY_INFO_FRIENDLY = 1
 POSE_HEADER = '<IHBBIIIBBH3fff'
 ENEMY_INFO = '<IHBBII' + '120s' * 4
 POSE_ENEMY = 2
@@ -298,8 +300,8 @@ def decode_gear_datagram(data):
 def decode_enemy_datagram(data):
     """Returns ('info', entity, paths) or ('pose', entity, bones, root, alive) for enemy datagrams."""
     if len(data) == struct.calcsize(ENEMY_INFO) and struct.unpack_from('<I', data)[0] == ENEMY_INFO_MAGIC:
-        magic, version, count, reserved, session, entity, *paths = struct.unpack(ENEMY_INFO, data)
-        if version != 1 or not entity or not 1 <= count <= 4:
+        magic, version, count, flags, session, entity, *paths = struct.unpack(ENEMY_INFO, data)
+        if version != ENEMY_INFO_VERSION or not entity or not 1 <= count <= 4 or flags & ~ENEMY_INFO_FRIENDLY:
             return None
         return ('info', entity, [p.split(b'\0', 1)[0].decode('ascii', 'replace') for p in paths[:count]])
     if len(data) >= struct.calcsize(POSE_HEADER) and struct.unpack_from('<I', data)[0] == POSE_MAGIC:
@@ -326,13 +328,13 @@ def encode(seq, time_ms, pos, yaw, pitch, vel, name, flags=HAS_PAWN, *,
            damage=0.0, bike_pos=(0.0, 0.0, 0.0), bike_rotation=(0.0, 0.0, 0.0),
            jacket=0, trousers=0, cap_color=0, cap=1, attack_kind=0, health=100.0,
            actions=0, weapon_type=0, shot_sequence=0, world_time_of_day=0.0,
-           world_relative_time=0.0, world_weather=0, world_transition_rate=0):
+           world_relative_time=0.0, world_weather=0, world_transition_rate=0, story_mission=0):
     return struct.pack(FORMAT, MAGIC, VERSION, flags, seq & 0xFFFFFFFF, time_ms & 0xFFFFFFFF,
                        *pos, yaw, pitch, *vel, name.encode()[:15],
                        session, target_session, consent, target_consent, attack_id, attack_ack,
                        damage, *bike_pos, *bike_rotation, jacket, trousers, cap_color, cap, attack_kind, health,
                        actions, weapon_type, shot_sequence & 0xFFFFFFFF, world_time_of_day,
-                       world_relative_time, world_weather, world_transition_rate)
+                       world_relative_time, world_weather, world_transition_rate, story_mission)
 
 
 def decode(data):
@@ -343,7 +345,7 @@ def decode(data):
     session, target_session, consent, target_consent, attack_id, attack_ack = values[14:20]
     damage, bx, by, bz, bp, byaw, br = values[20:27]
     jacket, trousers, cap_color, cap, attack_kind, health, actions, weapon_type, shot_sequence = values[27:36]
-    world_time_of_day, world_relative_time, world_weather, world_transition_rate = values[36:]
+    world_time_of_day, world_relative_time, world_weather, world_transition_rate, story_mission = values[36:]
     if magic != MAGIC or version != VERSION or flags & ~2047:
         return None
     if any(not math.isfinite(v) or abs(v) > 1e8 for v in (x, y, z, yaw, pitch, vx, vy, vz, damage,
@@ -373,7 +375,8 @@ def decode(data):
             'cap_color': cap_color, 'cap': cap, 'attack_kind': attack_kind, 'health': health,
             'actions': actions, 'weapon_type': weapon_type, 'shot_sequence': shot_sequence,
             'world_time_of_day': world_time_of_day, 'world_relative_time': world_relative_time,
-            'world_weather': world_weather, 'world_transition_rate': world_transition_rate}
+            'world_weather': world_weather, 'world_transition_rate': world_transition_rate,
+            'story_mission': story_mission}
 
 
 def circle_state(anchor, t, radius, speed):

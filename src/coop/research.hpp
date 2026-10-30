@@ -118,6 +118,10 @@ void MissionWatchTick(double now);
 // Writes the job/mission managers' functions, every job's state, the active jobs' properties and the live
 // job-script objects to path.
 bool MissionState(const std::wstring& path, std::string& summary);
+// Read-only: every live minimap/map icon component with its owner, icon texture, type, colour and flags.
+bool MinimapProbe(const std::wstring& path, std::string& summary);
+// Read-only: streaming levels whose package name contains `filter` (case-insensitive), with their state.
+bool LevelProbe(const std::wstring& path, const std::string& filter, std::string& summary);
 struct ObjectiveProgress {
     std::string jobName;
     std::string identifier;

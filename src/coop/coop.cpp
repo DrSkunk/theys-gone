@@ -57,6 +57,7 @@ constexpr uint8_t kPrologue[19] = {0x40, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x5
 constexpr double kTickInterval = 1.0 / 60.0;
 constexpr double kSendInterval = 1.0 / 30.0;
 constexpr double kPeerTimeout = 5.0;
+constexpr float kFarTeleport = 20000.f; // cm; beyond this a teleport waits for the destination ground to load
 constexpr size_t kObjectiveProgressApplyPerTick = 16;
 // Who was reported as connected without a matching disconnect yet (empty: nobody).
 std::string g_announcedPartner;
@@ -69,7 +70,9 @@ struct ActiveMission {
     double sampledAt = -1e9;
     std::string code;
     uint16_t flags = 0;
-} g_mission;
+    uint8_t id = 0; // BendMissionData.MissionID
+} g_mission, g_peerMission; // the partner's, resolved from its state packets
+uint8_t g_peerMissionSky = 0xff; // TempDefaultWeather of the partner's mission while its weather level is streamed
 constexpr double kMissionSampleInterval = 1.0;
 SettingsMenu g_menu;
 std::atomic<DWORD> g_gameThread{0};
@@ -275,6 +278,7 @@ void DestroyBike();
 void DestroyEnemyReplicas();
 void ReceiveEnemyPose(const PosePacket& packet, double now);
 void ReceiveEnemyInfo(const char* data, int len, double now);
+bool LookAtCompanion();
 void ReceiveGear(const char* data, int len, double now);
 void ReceiveStory(const char* data, int len);
 void ReceiveObjectiveProgress(const char* data, int len);
@@ -459,7 +463,8 @@ bool ReadWorldSnapshot(UObject* manager, WorldSnapshot& state) {
     bool cinematicActive = cinematicAvailable && cinematic.get<bool>("ReturnValue");
     static ULONGLONG lastDiagnostic = 0;
     ULONGLONG now = GetTickCount64();
-    if (!missionAvailable || !cinematicAvailable || missionActive || cinematicActive) {
+    // Missions run only on the host, so its mission time and weather are sent too; cinematics set their own.
+    if (!missionAvailable || !cinematicAvailable || cinematicActive) {
         if (now - lastDiagnostic >= 10000) {
             Log("world sync: snapshot paused mission-api=%d cinematic-api=%d mission=%d cinematic=%d",
                 missionAvailable, cinematicAvailable, missionActive, cinematicActive);
@@ -491,11 +496,12 @@ bool ReadWorldSnapshot(UObject* manager, WorldSnapshot& state) {
     return state.valid;
 }
 
+// The joining player follows the host's time and weather unless its own game runs a mission script or a
+// cinematic. A reloaded host mission-start save marks a mission active without running it.
 bool WorldSyncAllowed(UObject* manager) {
-    if (!IsLive(manager)) return false;
-    Call mission(manager, "GetIsMissionActive"), cinematic(manager, "GetIsCinematicActive");
-    return mission.invoke() && cinematic.invoke() &&
-           !mission.get<bool>("ReturnValue") && !cinematic.get<bool>("ReturnValue");
+    if (!IsLive(manager) || !g_mission.code.empty()) return false;
+    Call cinematic(manager, "GetIsCinematicActive");
+    return cinematic.invoke() && !cinematic.get<bool>("ReturnValue");
 }
 
 void ApplyWorldSnapshot(UObject* manager, const WorldSnapshot& state) {
@@ -510,13 +516,15 @@ void ApplyWorldSnapshot(UObject* manager, const WorldSnapshot& state) {
                 Log("world sync: time %.3f -> %.3f", current.timeOfDay, state.timeOfDay);
     }
     bool transitioning = true;
-    if (current.weather != state.weather && GetProp(manager, "IsWeatherTransitioning", transitioning) &&
+    // While the host's mission weather level is streamed here, its sky preset comes from the mission data.
+    uint8_t weather = g_peerMissionSky != 0xff ? g_peerMissionSky : state.weather;
+    if (current.weather != weather && GetProp(manager, "IsWeatherTransitioning", transitioning) &&
         !transitioning) {
         if (Call(manager, "SelectWorldWeather")
-                .set("NewWeather", state.weather)
+                .set("NewWeather", weather)
                 .set("NewWeatherTransitionRate", state.transitionRate)
                 .set("RelativeTime", state.relativeTime).invoke())
-            Log("world sync: weather %u -> %u", current.weather, state.weather);
+            Log("world sync: weather %u -> %u", current.weather, weather);
     }
 }
 
@@ -1191,6 +1199,7 @@ void SendLocalState(UObject* pawn, double now) {
         p.worldWeather = g_worldState.weather;
         p.worldTransitionRate = g_worldState.transitionRate;
     }
+    p.storyMission = g_mission.id;
     if (g_settings.friendlyFire) p.flags |= kFriendlyFire;
     if (g_settings.motorcycles) p.flags |= kSyncBikes;
     if (g_settings.enemies) p.flags |= kSyncEnemies;
@@ -2282,6 +2291,23 @@ void UpdateDebugTools(double now) {
         if (!IsLive(g_pawn)) success = DebugError("mission-watch needs a gameplay pawn");
         else research::MissionWatch(command == DebugCommand::missionWatchOn);
     }
+    else if (command == DebugCommand::levelProbe) {
+        wchar_t arg[256]{};
+        GetPrivateProfileStringW(L"Debug", L"Arg", L"", arg, 256, path.c_str());
+        std::string summary;
+        success = research::LevelProbe(g_basePath + L"-levels.txt", Narrow(std::wstring(arg)), summary);
+        Log("research: %s: %s", text.c_str(), summary.c_str());
+        if (!success) DebugError(summary.c_str());
+    }
+    else if (command == DebugCommand::lookCompanion) {
+        if (!LookAtCompanion()) success = DebugError("look-companion needs a companion replica and a player");
+    }
+    else if (command == DebugCommand::minimapProbe) {
+        std::string summary;
+        success = research::MinimapProbe(g_basePath + L"-minimap.txt", summary);
+        Log("research: %s: %s", text.c_str(), summary.c_str());
+        if (!success) DebugError(summary.c_str());
+    }
     else if (command == DebugCommand::missionState || command == DebugCommand::missionAct) {
         std::string summary;
         if (command == DebugCommand::missionState) {
@@ -3047,6 +3073,17 @@ void UpdateAvatar(UObject* localPawn, double now) {
         }
         if (g_settingsError == "Partner passenger seat unavailable; waiting for the local bike") g_settingsError.clear();
     }
+    // A flashback mission plays in the past on one game; the other player does not belong in it.
+    bool flashback = ((g_mission.flags | g_peerMission.flags) & kMissionFlashback) != 0;
+    static bool flashbackLogged = false;
+    if (flashback != flashbackLogged) {
+        flashbackLogged = flashback;
+        Log("avatar: partner %s (flashback mission)", flashback ? "hidden" : "shown again");
+    }
+    if (flashback) {
+        SetAvatarHidden(true);
+        return;
+    }
     SetAvatarHidden(false);
     Call move(g_avatar.actor, "K2_SetActorLocationAndRotation");
     if (s.flags & kPassenger) facing = FRotator{0, s.yaw, 0};
@@ -3101,6 +3138,7 @@ struct EnemySource {
     std::vector<std::string> paths;
     double lastInfo = -10;
     double onGuest = -1e9; // last time it targeted the partner or the local proxy for them
+    bool friendly = false; // a story companion (BendBuddyController): streamed for display only
 };
 struct EnemyReplica {
     UObject* actor = nullptr;
@@ -3111,10 +3149,34 @@ struct EnemyReplica {
     std::vector<std::string> paths;
     double lastInfo = -10, lastSpawnAttempt = -10;
     bool missingLogged = false, alive = false;
+    bool friendly = false; // the host's story companion: never a hit target
+    bool incomplete = false; // built while some mesh parts were still loading
     FVector at{}; // feet, in local engine coordinates
 };
 std::vector<EnemySource> g_enemySources;
 std::unordered_map<uint32_t, EnemyReplica> g_enemyReplicas;
+
+// Debug: turns the camera to the nearest companion replica, to check it renders.
+bool LookAtCompanion() {
+    Call self(g_pawn, "K2_GetActorLocation");
+    if (!IsLive(g_pawn) || !IsLive(g_controller) || !self.invoke()) return false;
+    FVector me = self.get<FVector>("ReturnValue");
+    const EnemyReplica* nearest = nullptr;
+    float best = 1e30f;
+    for (const auto& [entity, replica] : g_enemyReplicas) {
+        if (!replica.friendly || !IsLive(replica.actor)) continue;
+        float dx = replica.at.x - me.x, dy = replica.at.y - me.y;
+        if (dx * dx + dy * dy < best) {
+            best = dx * dx + dy * dy;
+            nearest = &replica;
+        }
+    }
+    if (!nearest) return false;
+    float yaw = std::atan2(nearest->at.y - me.y, nearest->at.x - me.x) * 180.f / 3.14159265f;
+    Call(g_controller, "SetControlRotation").set("NewRotation", FRotator{-5, yaw, 0}).invoke();
+    Log("debug: looking at the companion replica %.0f m away (yaw %.0f)", std::sqrt(best) / 100, yaw);
+    return true;
+}
 uint32_t g_nextEnemyEntity = 1;
 double g_nextEnemySend = 0;
 struct EnemyStats {
@@ -3396,6 +3458,14 @@ bool SharedEnemy(UObject* ai, UObject* player) {
     return enemy.set("BendPawn", player).invoke() && enemy.get<bool>("ReturnValue");
 }
 
+// Story companions (Boozer, Rikki, Sarah...) exist only in the host's running mission, so the host streams
+// them to the joining player for display.
+bool CompanionAi(UObject* ai) {
+    static UObject* buddy = FindClass("BendBuddyController");
+    auto controller = Prop(ai, "Controller");
+    return buddy && IsLive(controller) && IsA(controller, buddy);
+}
+
 // Walks the object array in slices so finding enemies never stalls a frame.
 struct EnemyScan {
     int32_t cursor = 0;
@@ -3427,7 +3497,7 @@ void FinishEnemyScan(UObject* pawn) {
     // Together, the guest's only enemies are those it kept from its own region; the host owns the rest.
     bool keptOnly = !IsHost() && !separated;
     if ((g_peer.flags & kHasPawn) && !separated) players.push_back({g_peer.pos[0], g_peer.pos[1], g_peer.pos[2]});
-    struct Candidate { UObject* pawn; float distance; };
+    struct Candidate { UObject* pawn; float distance; bool friendly; };
     std::vector<Candidate> found;
     for (auto o : g_enemyScan.pawns) {
         bool kept = g_kept.count(o) != 0;
@@ -3437,7 +3507,14 @@ void FinishEnemyScan(UObject* pawn) {
         Call alive(o, "IsAlive");
         bool living = alive.invoke() && alive.get<bool>("ReturnValue");
         if (living && !IsLive(Prop(o, "Controller"))) continue;
-        if (IsPartnerProxy(o) || (living && !SharedEnemy(o, pawn))) continue;
+        bool companion = living && IsHost() && CompanionAi(o);
+        if (g_cfg.debugTools && living && !companion) {
+            static std::unordered_set<UObject*> seenClasses;
+            auto controller = Prop(o, "Controller");
+            if (IsLive(controller) && seenClasses.insert(o->cls).second)
+                Log("enemies: AI pawn class %s, controller %s", Name(o->cls).c_str(), Name(controller->cls).c_str());
+        }
+        if (IsPartnerProxy(o) || (living && !companion && !SharedEnemy(o, pawn))) continue;
         Call where(o, "K2_GetActorLocation");
         if (!where.invoke()) continue;
         auto p = where.get<FVector>("ReturnValue");
@@ -3448,8 +3525,8 @@ void FinishEnemyScan(UObject* pawn) {
             best = std::min(best, dx * dx + dy * dy + dz * dz);
         }
         // Kept enemies are fighting the other player, possibly beyond this player's radius; they sort first.
-        if (kept) found.push_back({o, -1.f});
-        else if (best <= kEnemyRadius * kEnemyRadius) found.push_back({o, best});
+        if (kept) found.push_back({o, -1.f, false});
+        else if (best <= kEnemyRadius * kEnemyRadius) found.push_back({o, best, companion});
     }
     std::sort(found.begin(), found.end(), [](const Candidate& a, const Candidate& b) { return a.distance < b.distance; });
     if (found.size() > kEnemyMaxStreamed) found.resize(kEnemyMaxStreamed);
@@ -3472,7 +3549,9 @@ void FinishEnemyScan(UObject* pawn) {
             if (!path.empty() && std::find(paths.begin(), paths.end(), path) == paths.end()) paths.push_back(path);
         }
         if (paths[0].empty()) continue;
-        if (paths != source.paths) source.lastInfo = -10;
+        if (paths != source.paths || source.friendly != candidate.friendly) source.lastInfo = -10;
+        if (candidate.friendly && !source.friendly) Log("enemies: streaming companion %s", Name(candidate.pawn).c_str());
+        source.friendly = candidate.friendly;
         source.paths = std::move(paths);
         next.push_back(std::move(source));
     }
@@ -3534,7 +3613,7 @@ void SendEnemy(EnemySource& e, const FVector& origin, uint32_t timeMs, double no
     if (e.subset.empty()) return;
     if (now - e.lastInfo >= kEnemyInfoInterval) {
         EnemyInfoPacket info;
-        if (EncodeEnemyInfo(g_session, e.entity, e.paths, info)) {
+        if (EncodeEnemyInfo(g_session, e.entity, e.paths, info, e.friendly ? kEnemyInfoFriendly : 0)) {
             g_net->SendRaw(&info, sizeof info);
             ++g_enemyStats.infos;
             g_enemyStats.bytes += sizeof info;
@@ -3640,6 +3719,7 @@ void ReceiveEnemyInfo(const char* data, int len, double now) {
         replica->missingLogged = false;
         replica->lastSpawnAttempt = -10;
     }
+    replica->friendly = (info.flags & kEnemyInfoFriendly) != 0;
     replica->lastInfo = now;
 }
 
@@ -3648,12 +3728,40 @@ void ReceiveEnemyPose(const PosePacket& packet, double now) {
     if (auto replica = ReplicaFor(packet.header.entity)) replica->poses.Push(packet, now);
 }
 
+// Asks the game's streaming manager to load an asset by object path, once per path. Meshes of the host's
+// story companions are not loaded on the joining player, whose game does not run the mission.
+void RequestAssetLoad(const std::string& path) {
+    static std::unordered_set<std::string> requested;
+    if (path.empty() || !requested.insert(path).second) return;
+    static UObject* manager = nullptr;
+    if (!IsLive(manager)) {
+        if (auto statics = FindDefaultObject("BendStreamingManager")) {
+            Call get(statics, "Get");
+            if (get.invoke()) manager = get.get<UObject*>("ReturnValue");
+        }
+    }
+    if (!IsLive(manager)) {
+        Log("assets: no streaming manager; cannot load %s", path.c_str());
+        return;
+    }
+    std::wstring wide(path.begin(), path.end());
+    struct StringRaw { const wchar_t* data; int32_t num, max; };
+    struct AssetPtr { uint64_t weak = 0; int32_t tag = 0, pad = 0; StringRaw name; } target{};
+    target.name = {wide.c_str(), static_cast<int32_t>(wide.size() + 1), static_cast<int32_t>(wide.size() + 1)};
+    static_assert(sizeof(AssetPtr) == 32, "TAssetPtr layout (UE 4.10)");
+    struct ScriptDelegate { uint64_t object = 0; FName function{}; } none{};
+    Call load(manager, "RequestAsyncLoadBPCallback");
+    bool ok = load.set("Target", target).set("DelegateToCall", none).invoke();
+    Log("assets: requested %s (%s)", path.c_str(), ok && load.get<bool>("ReturnValue") ? "loading" : "not started");
+}
+
 bool SpawnReplica(UObject* context, EnemyReplica& r, uint32_t entity, const FVector& at) {
     static UObject* meshClass = FindClass("SkeletalMesh");
     std::vector<UObject*> assets;
     for (const auto& path : r.paths) {
         auto asset = FindObject(path.c_str(), meshClass);
         if (!asset) {
+            RequestAssetLoad(path);
             if (!r.missingLogged) Log("enemies: replica %u skipped; %s is not loaded on this machine", entity, path.c_str());
             r.missingLogged = true;
             if (assets.empty()) return false;
@@ -3676,8 +3784,10 @@ bool SpawnReplica(UObject* context, EnemyReplica& r, uint32_t entity, const FVec
             Call(part, "SetMasterPoseComponent").set("NewMasterBoneComponent", r.pose).invoke())
             r.parts.push_back(part);
     }
-    Log("enemies: replica %u %s with %d bones and %d parts", entity, Name(assets[0]).c_str(),
-        static_cast<int>(r.writer.Table().names.size()), static_cast<int>(r.parts.size()));
+    r.incomplete = assets.size() < r.paths.size();
+    Log("enemies: replica %u %s with %d bones and %d parts%s", entity, Name(assets[0]).c_str(),
+        static_cast<int>(r.writer.Table().names.size()), static_cast<int>(r.parts.size()),
+        r.incomplete ? "; rebuilt once the rest has loaded" : "");
     return true;
 }
 
@@ -3702,9 +3812,27 @@ void UpdateEnemyReplicas(UObject* pawn, double now) {
             continue;
         }
         FVector at{frame.root[0] - origin.x, frame.root[1] - origin.y, frame.root[2] - origin.z};
+        if (IsLive(r.actor) && r.incomplete && now - r.lastSpawnAttempt >= 1.0) {
+            static UObject* meshClass = FindClass("SkeletalMesh");
+            r.lastSpawnAttempt = now;
+            bool loaded = std::all_of(r.paths.begin(), r.paths.end(),
+                                      [](const std::string& path) { return FindObject(path.c_str(), meshClass) != nullptr; });
+            if (loaded) DestroyReplica(r);
+        }
         if (!IsLive(r.actor) && now - r.lastSpawnAttempt >= 1.0) {
             r.lastSpawnAttempt = now;
             SpawnReplica(pawn, r, it->first, at);
+        }
+        if (IsLive(r.actor) && r.friendly && g_cfg.debugTools) {
+            static double nextReport = 0;
+            if (now >= nextReport) {
+                nextReport = now + 10;
+                Call self(pawn, "K2_GetActorLocation");
+                FVector me = self.invoke() ? self.get<FVector>("ReturnValue") : FVector{};
+                float dx = at.x - me.x, dy = at.y - me.y;
+                Log("enemies: companion replica %u at (%.0f %.0f %.0f), %.0f m from the local player", it->first, at.x, at.y,
+                    at.z, std::sqrt(dx * dx + dy * dy) / 100);
+            }
         }
         if (IsLive(r.actor)) {
             FRotator facing{0, frame.yaw, 0};
@@ -3744,7 +3872,7 @@ void QueueEnemyHit(bool melee, UObject* weapon) {
         start.z += 90;
         float yaw = (facing.get<FRotator>("ReturnValue").yaw + 90) * 3.14159265f / 180.f;
         for (const auto& [entity, r] : g_enemyReplicas) {
-            if (!r.alive || !IsLive(r.actor)) continue;
+            if (!r.alive || r.friendly || !IsLive(r.actor)) continue;
             FVector center{r.at.x, r.at.y, r.at.z + 90};
             float dx = center.x - start.x, dy = center.y - start.y, dz = center.z - start.z;
             float distance = std::sqrt(dx * dx + dy * dy);
@@ -3764,7 +3892,7 @@ void QueueEnemyHit(bool melee, UObject* weapon) {
         float s0[3]{start.x, start.y, start.z};
         float d[3]{std::cos(pitch) * std::cos(yaw), std::cos(pitch) * std::sin(yaw), std::sin(pitch)};
         for (const auto& [entity, replica] : g_enemyReplicas) {
-            if (!replica.alive || !IsLive(replica.actor)) continue;
+            if (!replica.alive || replica.friendly || !IsLive(replica.actor)) continue;
             float feet[3]{replica.at.x, replica.at.y, replica.at.z};
             float t = AimDistanceToBody(s0, d, feet);
             if (t < 0 || t >= bestDistance) continue;
@@ -3830,7 +3958,7 @@ void ReceiveEnemyHit(const char* data, int len, double now) {
     if (!g_pawn || !EnemyReplicationActive(now) || !g_enemyHits.dedupe.Accept(hit.session, hit.sequence)) return;
     auto source = std::find_if(g_enemySources.begin(), g_enemySources.end(),
         [&](const EnemySource& e) { return e.entity == hit.entity; });
-    if (source == g_enemySources.end() || !IsLive(source->pawn) || !Alive(source->pawn)) {
+    if (source == g_enemySources.end() || source->friendly || !IsLive(source->pawn) || !Alive(source->pawn)) {
         ++g_enemyHits.ignored;
         Log("enemies: partner hit on %u ignored; that enemy is gone", hit.entity);
         return;
@@ -3880,6 +4008,109 @@ bool WriteFloatProp(UObject* o, const char* name, float value) {
     if (!property) return false;
     std::memcpy(reinterpret_cast<uint8_t*>(o) + PropertyOffset(property), &value, sizeof value);
     return true;
+}
+
+// The partner on the minimap and the world map: a MapLocationActor, the game's own minimap/map icon holder,
+// kept on the partner's avatar. Its component is configured before FinishSpawningActor, where it registers.
+struct PartnerMarker {
+    UObject* actor = nullptr;
+    UObject* component = nullptr;
+    double nextSpawn = 0;
+    bool unavailableLogged = false, visible = false;
+} g_marker;
+
+// The marker is hidden, never destroyed: destroying it while the host travelled into a mission crashed the
+// game, apparently because the map manager kept its MapLocation. It goes with the world.
+void ShowPartnerMarker(bool visible) {
+    if (!IsLive(g_marker.component) || g_marker.visible == visible) return;
+    g_marker.visible = visible;
+    Call(g_marker.component, "SetVisibility").setBool("VisibleOnMiniMap", visible).setBool("VisibleOnMap", visible).invoke();
+    Log("map marker: partner marker %s", visible ? "shown" : "hidden");
+}
+
+UObject* PartnerMarkerIcon() {
+    static UObject* icon = nullptr;
+    if (IsLive(icon)) return icon;
+    for (auto path : {"/Game/Libraries/UI/Textures/RADAR_player_on_foot.RADAR_player_on_foot",
+                      "/Game/Libraries/UI/Textures/RADAR_player.RADAR_player",
+                      "/Game/Libraries/UI/Textures/MAP_player.MAP_player",
+                      "/Game/Libraries/UI/Textures/MAP_player_marker.MAP_player_marker"})
+        if (auto found = FindObject(path); IsLive(found)) return icon = found;
+    return nullptr;
+}
+
+bool SpawnPartnerMarker(const FVector& at, double now) {
+    g_marker.nextSpawn = now + 10;
+    static UObject* actorClass = FindClass("MapLocationActor");
+    auto icon = PartnerMarkerIcon();
+    if (!actorClass || !icon) {
+        if (!g_marker.unavailableLogged) Log("map marker: unavailable (actor class %d, icon %d)", actorClass != nullptr, icon != nullptr);
+        g_marker.unavailableLogged = true;
+        return false;
+    }
+    FTransform xf{};
+    xf.rotation = {0, 0, 0, 1};
+    xf.translation = at;
+    xf.scale = {1, 1, 1};
+    Call begin(C.statics, "BeginSpawningActorFromClass");
+    begin.set("WorldContextObject", g_pawn).set("ActorClass", actorClass).set("SpawnTransform", xf).setBool("bNoCollisionFail", true);
+    if (!begin.invoke()) return false;
+    auto actor = begin.get<UObject*>("ReturnValue");
+    UObject* component = IsLive(actor) ? Prop(actor, "MiniMapLocationComponent") : nullptr;
+    if (IsLive(component)) {
+        struct LinearColor { float r, g, b, a; } color{1.0f, 0.1f, 0.9f, 1.0f};
+        for (auto name : {"MinimapColor", "MarkerColor"})
+            if (auto property = FindChild(component->cls, name))
+                std::memcpy(reinterpret_cast<uint8_t*>(component) + PropertyOffset(property), &color, sizeof color);
+        std::memcpy(reinterpret_cast<uint8_t*>(component) + PropertyOffset(FindChild(component->cls, "MapIcon")), &icon,
+                    sizeof icon);
+        WriteFloatProp(component, "IconScale", 1.6f);
+        SetBoolProp(component, "bGetPositionFromOwner", false); // the actor has no root; Position is written each tick
+        SetBoolProp(component, "bHidden", false);
+        SetBoolProp(component, "bNoDirectionalIndicator", false);
+        // Location type and display rule as on the player's bike, which the minimap and map draw.
+        for (auto [name, value] : {std::pair{"LocationType", 1}, std::pair{"DisplayRule", 0}, std::pair{"EdgeDisplay", 1}})
+            if (auto property = FindChild(component->cls, name))
+                *(reinterpret_cast<uint8_t*>(component) + PropertyOffset(property)) = static_cast<uint8_t>(value);
+    }
+    Call finish(C.statics, "FinishSpawningActor");
+    finish.set("Actor", actor).set("SpawnTransform", xf);
+    if (!IsLive(actor) || !IsLive(component) || !finish.invoke()) {
+        if (IsLive(actor)) Call(actor, "K2_DestroyActor").invoke();
+        if (!g_marker.unavailableLogged) Log("map marker: could not spawn the partner marker");
+        g_marker.unavailableLogged = true;
+        return false;
+    }
+    Call(component, "SetVisibility").setBool("VisibleOnMiniMap", true).setBool("VisibleOnMap", true).invoke();
+    g_marker.actor = actor;
+    g_marker.component = component;
+    g_marker.visible = true;
+    Log("map marker: partner marker %s with icon %s", Name(actor).c_str(), Name(icon).c_str());
+    return true;
+}
+
+void UpdatePartnerMarker(double now) {
+    bool wanted = g_cfg.partnerMarker && IsLive(g_pawn) && IsLive(g_avatar.actor) && !g_avatar.hidden &&
+                  now - g_lastRecv < kPeerTimeout;
+    if (!wanted) {
+        ShowPartnerMarker(false);
+        return;
+    }
+    Call where(g_avatar.actor, "K2_GetActorLocation"), facing(g_avatar.actor, "K2_GetActorRotation");
+    if (!where.invoke()) return;
+    FVector at = where.get<FVector>("ReturnValue");
+    if (!IsLive(g_marker.actor) || !IsLive(g_marker.component)) {
+        g_marker.actor = g_marker.component = nullptr;
+        if (now >= g_marker.nextSpawn) SpawnPartnerMarker(at, now);
+        return;
+    }
+    ShowPartnerMarker(true);
+    FRotator yaw{0, facing.invoke() ? facing.get<FRotator>("ReturnValue").yaw : 0.f, 0};
+    Call(g_marker.actor, "K2_SetActorLocationAndRotation").set("NewLocation", at).set("NewRotation", yaw)
+        .setBool("bSweep", false).setBool("bTeleport", true).invoke();
+    // The minimap and map read the component's Position, which is not refreshed from this actor.
+    if (auto property = IsLive(g_marker.component) ? FindChild(g_marker.component->cls, "Position") : nullptr)
+        std::memcpy(reinterpret_cast<uint8_t*>(g_marker.component) + PropertyOffset(property), &at, sizeof at);
 }
 
 bool ProxyWanted(double now) {
@@ -3987,7 +4218,7 @@ void UpdatePartnerProxy(double now) {
         Call self(g_pawn, "K2_GetActorLocation");
         if (self.invoke()) localAt = self.get<FVector>("ReturnValue");
         for (const auto& e : g_enemySources) {
-            if (!IsLive(e.pawn) || !Alive(e.pawn)) continue;
+            if (e.friendly || !IsLive(e.pawn) || !Alive(e.pawn)) continue;
             Call loc(e.pawn, "K2_GetActorLocation");
             if (!loc.invoke()) continue;
             FVector p = loc.get<FVector>("ReturnValue");
@@ -4010,6 +4241,7 @@ void UpdatePartnerProxy(double now) {
         g_proxy.nextReport = now + 15;
         int onProxy = 0, onHost = 0, total = 0, dead = 0;
         for (const auto& e : g_enemySources) {
+            if (e.friendly) continue;
             if (!IsLive(e.pawn) || !Alive(e.pawn)) {
                 ++dead;
                 continue;
@@ -4116,7 +4348,7 @@ void UpdateHandoff(double now) {
         if (playerHere) {
             g_guestPresentAt = now;
             for (auto& e : g_enemySources) {
-                if (!IsLive(e.pawn) || !Alive(e.pawn)) continue;
+                if (e.friendly || !IsLive(e.pawn) || !Alive(e.pawn)) continue;
                 auto target = TargetOf(e.pawn);
                 if (target == player || (!IsHost() && IsLive(g_proxy.pawn) && target == g_proxy.pawn))
                     e.onGuest = now;
@@ -4131,6 +4363,7 @@ void UpdateHandoff(double now) {
         int dead = 0, others = 0;
         if (IsHost() == separated) {
             for (const auto& e : g_enemySources) {
+                if (e.friendly) continue;
                 if (!IsLive(e.pawn) || !Alive(e.pawn)) ++dead;
                 else if (!FightingAtHandoff(e.onGuest, now, playerHere, g_guestPresentAt)) ++others;
                 else g_kept[e.pawn] = {now, now};
@@ -4310,6 +4543,18 @@ void TeleportToPartner(UObject* pawn, double now) {
     float yaw = s.yaw * 3.14159265f / 180.f;
     FVector dest{s.pos.x - origin.x + std::cos(yaw) * 150.f, s.pos.y - origin.y + std::sin(yaw) * 150.f,
                  s.pos.z - origin.z + 120.f};
+    // Far away the ground at the partner is not loaded yet; the player is held there until it is, as with move-by.
+    Call me(pawn, "K2_GetActorLocation");
+    if (me.invoke()) {
+        auto at = me.get<FVector>("ReturnValue");
+        float dx = dest.x - at.x, dy = dest.y - at.y;
+        if (dx * dx + dy * dy > kFarTeleport * kFarTeleport) {
+            g_move = {true, {dest.x + origin.x, dest.y + origin.y, dest.z + origin.z}, now};
+            Log("teleported to partner %s; holding %.0f m away until the ground there loads", g_remoteName.c_str(),
+                std::sqrt(dx * dx + dy * dy) / 100);
+            return;
+        }
+    }
     if (!Call(pawn, "K2_SetActorLocation").set("NewLocation", dest).setBool("bSweep", false)
             .setBool("bTeleport", true).invoke()) {
         g_settingsError = "Teleport failed; check the plugin log";
@@ -4629,6 +4874,43 @@ void LoadAdoptedSave(double now) {
     if (!ReloadNewestSave()) Log("save transfer: cannot reload in place; quit to the main menu and Continue");
 }
 
+// Reloading the host's mission-start save in place sets the mission as active but never starts its script,
+// and the mission's start fade then stays black. The mission does not run here, so show the world again.
+bool LiftStuckMissionFade() {
+    auto mission = FindLive("BendGameMission");
+    UObject *script = nullptr, *data = nullptr;
+    if (!mission || (GetProp(mission, "ActiveMissionScript", script) && IsLive(script))) return false;
+    if (!GetProp(mission, "ActiveMissionData", data) || !IsLive(data)) return false;
+    Call black(mission, "GetIsBlackScreenActive");
+    if (!black.invoke() || !black.get<bool>("ReturnValue")) return false;
+    Call fade(mission, "CallFadeOutOfBlack");
+    fade.setBool("UnhideHudAtEnd", true);
+    bool lifted = fade.invoke() && fade.get<bool>("ReturnValue");
+    Log("save transfer: host's mission did not start here; lifting its black screen (%s)", lifted ? "ok" : "failed");
+    return lifted;
+}
+
+// The mission's start fade can turn black after the post-load check, so it is watched: black for 5 s with a
+// mission marked active but no mission script running.
+void WatchStuckMissionFade(double now) {
+    static double blackSince = -1;
+    auto mission = FindLive("BendGameMission");
+    UObject *script = nullptr, *data = nullptr;
+    Call black(mission, "GetIsBlackScreenActive");
+    uint8_t id = 0;
+    // Only the follower: the mission marked active here is the one the partner runs.
+    bool stuck = mission && g_peerMission.id && GetProp(mission, "ActiveMissionData", data) && IsLive(data) &&
+                 GetProp(data, "MissionID", id) && id == g_peerMission.id &&
+                 !(GetProp(mission, "ActiveMissionScript", script) && IsLive(script)) && black.invoke() &&
+                 black.get<bool>("ReturnValue");
+    if (!stuck) {
+        blackSince = -1;
+        return;
+    }
+    if (blackSince < 0) blackSince = now;
+    if (now - blackSince >= 5 && LiftStuckMissionFade()) blackSince = -1;
+}
+
 bool CinematicActive() {
     auto manager = FindWorldManager();
     if (!manager) return false;
@@ -4816,14 +5098,102 @@ void SampleStory(double now) {
     g_story.mine = ReadStory();
 }
 
+// The streaming level of a mission's weather (fog, rain, light), loaded on the game that does not run the
+// mission so both players see the same sky. Only the weather level: the mission level holds its script.
+UObject* g_peerWeatherLevel = nullptr;
+
+UObject* FindStreamingLevel(const std::string& package) {
+    static UObject* levelClass = FindClass("LevelStreaming");
+    auto tail = package.substr(package.rfind('/') + 1);
+    for (int32_t i = 0, n = ObjectCount(); levelClass && !tail.empty() && i < n; ++i) {
+        auto level = ObjectAt(i);
+        if (!IsLive(level) || IsDefaultOrArchetype(level) || !IsA(level, levelClass)) continue;
+        FName name{};
+        GetProp(level, "PackageNameToLoad", name);
+        if (!name.index) GetProp(level, "PackageName", name);
+        auto text = NameString(name.index);
+        if (text == package || (text.size() >= tail.size() && text.compare(text.size() - tail.size(), tail.size(), tail) == 0 &&
+                                (text.size() == tail.size() || text[text.size() - tail.size() - 1] == '/')))
+            return level;
+    }
+    return nullptr;
+}
+
+// Setting bShouldBeLoaded alone did not load the level; GameplayStatics.PerformActionOnStreamingLevels (a
+// Bend addition) forces it in, and ClearActionOnStreamingLevels hands it back to normal streaming.
+FName g_peerWeather{};
+
+bool StreamingAction(const char* function, FName level, bool perform) {
+    struct NameArray { FName* data; int32_t num, max; } names{&level, 1, 1};
+    Call action(C.statics, function);
+    action.set("WorldContextObject", g_pawn).set("LevelNames", names);
+    if (perform) action.setBool("bLoadAndSetInvisible", false).setBool("bBlockFromLoading", false);
+    return IsLive(g_pawn) && action.invoke();
+}
+
+void StreamPeerWeather(UObject* missionData) {
+    if (g_peerWeather.index) {
+        bool cleared = StreamingAction("ClearActionOnStreamingLevels", g_peerWeather, false);
+        Log("mission: released the partner's mission weather %s (%s)", NameString(g_peerWeather.index).c_str(),
+            cleared ? "ok" : "failed");
+    }
+    g_peerWeather = {};
+    g_peerWeatherLevel = nullptr;
+    g_peerMissionSky = 0xff;
+    FName weather{};
+    if (!IsLive(missionData) || !g_mission.code.empty() || !GetProp(missionData, "WeatherMap", weather) || !weather.index) return;
+    auto package = NameString(weather.index);
+    g_peerWeatherLevel = FindStreamingLevel(package);
+    if (!g_peerWeatherLevel) {
+        Log("mission: partner's mission weather %s has no streaming level here", package.c_str());
+        return;
+    }
+    FName level{};
+    GetProp(g_peerWeatherLevel, "PackageNameToLoad", level);
+    if (!level.index) GetProp(g_peerWeatherLevel, "PackageName", level);
+    bool ok = StreamingAction("PerformActionOnStreamingLevels", level, true);
+    uint8_t sky = 0xff;
+    if (ok) {
+        g_peerWeather = level;
+        if (GetProp(missionData, "TempDefaultWeather", sky)) g_peerMissionSky = sky;
+    }
+    Log("mission: streaming the partner's mission weather %s (%s), sky preset %u", NameString(level.index).c_str(),
+        ok ? "ok" : "failed", sky);
+}
+
+// The partner's story mission, from the MissionID in its state packets and this game's own mission data.
+void UpdatePeerMission() {
+    uint8_t id = Now() - g_lastRecv < kPeerTimeout ? g_peer.storyMission : 0;
+    if (id == g_peerMission.id) return;
+    g_peerMission = {};
+    g_peerMission.id = id;
+    UObject* data = nullptr;
+    if (id) {
+        Call lookup(FindLive("BendGameMission"), "GetMissionDataFromIDNew");
+        if (lookup.set<uint8_t>("MissionID", id).invoke()) data = lookup.get<UObject*>("ReturnValue");
+        if (IsLive(data)) g_peerMission.code = std::string(MissionCode(Name(data)));
+        g_peerMission.flags = MissionFlags(g_peerMission.code);
+    }
+    Log("mission: partner runs '%s' (id %u, policy flags 0x%03x)", g_peerMission.code.c_str(), id, g_peerMission.flags);
+    StreamPeerWeather(data);
+}
+
 // The story mission this game is running, from BendGameMission.ActiveMissionData.
 void UpdateActiveMission(double now) {
     if (now - g_mission.sampledAt < kMissionSampleInterval) return;
     g_mission.sampledAt = now;
     std::string code;
-    UObject* data = nullptr;
-    if (auto mission = FindLive("BendGameMission"); mission && GetProp(mission, "ActiveMissionData", data) && IsLive(data))
+    UObject *data = nullptr, *script = nullptr;
+    // A guest that reloads the host's mission-start save gets ActiveMissionData but no running mission script.
+    if (auto mission = FindLive("BendGameMission"); mission && GetProp(mission, "ActiveMissionData", data) && IsLive(data) &&
+        GetProp(mission, "ActiveMissionScript", script) && IsLive(script)) {
         code = std::string(MissionCode(Name(data)));
+        GetProp(data, "MissionID", g_mission.id);
+    } else {
+        g_mission.id = 0;
+    }
+    UpdatePeerMission();
+    WatchStuckMissionFade(now);
     if (g_cfg.debugTools) {
         static std::string lastProgress;
         auto progress = code.empty() ? std::string() : research::ActiveMissionProgress();
@@ -4916,6 +5286,16 @@ void UpdateStory(double now) {
     }
     if (g_story.mismatchSince < 0) g_story.mismatchSince = now;
     if (now - g_story.mismatchSince < kStoryResyncDelay || CinematicActive()) return;
+    // A host mission-start save puts this game in a mission state without the mission running: a black start
+    // fade, failure zones that respawn the player at the mission's staging point. The guest stays in the open
+    // world instead and catches up at the host's first save after the mission.
+    if (!StoryResyncAllowed(g_peerMission.id)) {
+        static uint8_t deferredFor = 0;
+        if (deferredFor != g_peerMission.id) Log("story: waiting for the host to finish mission '%s' before syncing",
+                                                 g_peerMission.code.c_str());
+        deferredFor = g_peerMission.id;
+        return;
+    }
     if (!SaveTransferResync()) return;
     g_story.pendingResync = g_story.host.savedSignature;
     g_story.mismatchSince = -1;
@@ -5122,9 +5502,11 @@ void Tick(bool hudFrame) {
         g_teleportAfterLoad = false;
         teleportAt = now + 5.0;
     }
+    // The host sends no world state during its cinematics, where it may stand far from where it will play.
     if (teleportAt >= 0 && now >= teleportAt && g_pawn && now >= g_localSettledAt && !g_motion.Empty() &&
-        now - g_lastRecv < kPeerTimeout) {
+        now - g_lastRecv < kPeerTimeout && (g_peer.flags & kWorldState)) {
         teleportAt = -1;
+        LiftStuckMissionFade();
         Log("save transfer: moving to the host after loading its save");
         TeleportToPartner(g_pawn, now);
     } else if (teleportAt >= 0 && now > teleportAt + 60) {
@@ -5136,6 +5518,7 @@ void Tick(bool hudFrame) {
     UpdateDamageScope(now);
     if (g_pawn && now - g_lastScan < kTickInterval && now >= g_localSettledAt) FindLocalBike(g_pawn);
     UpdateBike(g_pawn, now);
+    UpdatePartnerMarker(now);
     UpdatePassenger(now);
     PollMelee();
     if (now >= g_nextSend) {
@@ -5381,6 +5764,7 @@ Config LoadConfig(const std::wstring& ini) {
     c.menuDiscovery = GetPrivateProfileIntW(L"Coop", L"MenuDiscovery", 0, ini.c_str()) != 0;
     c.hostSave = GetPrivateProfileIntW(L"Coop", L"HostSave", 1, ini.c_str()) != 0;
     c.debugTools = GetPrivateProfileIntW(L"Coop", L"DebugTools", 0, ini.c_str()) != 0;
+    c.partnerMarker = GetPrivateProfileIntW(L"Coop", L"PartnerMarker", 1, ini.c_str()) != 0;
     c.animIdle = IniString(ini, L"AnimIdle", c.animIdle.c_str());
     c.animWalk = IniString(ini, L"AnimWalk", c.animWalk.c_str());
     c.animRun = IniString(ini, L"AnimRun", c.animRun.c_str());

@@ -7,7 +7,7 @@
 namespace coop {
 
 constexpr uint32_t kMagic = 0x4F434744; // "DGCO"
-constexpr uint16_t kProtocolVersion = 9;
+constexpr uint16_t kProtocolVersion = 10;
 
 enum StateFlags : uint16_t {
     kHasPawn = 1 << 0,
@@ -68,9 +68,10 @@ struct StatePacket {
     float worldRelativeTime;
     uint8_t worldWeather;
     uint8_t worldTransitionRate;
+    uint8_t storyMission; // MissionID of the story mission the sender's game runs (0 = none)
 };
 #pragma pack(pop)
-static_assert(sizeof(StatePacket) == 144, "wire format");
+static_assert(sizeof(StatePacket) == 145, "wire format");
 
 inline bool DecodeState(const char* data, int len, StatePacket& out) {
     if (len != static_cast<int>(sizeof(StatePacket))) return false;

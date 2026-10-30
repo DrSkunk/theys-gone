@@ -18,7 +18,8 @@ namespace coop {
 // its region's enemies; when the regions merge or split, enemies already fighting a player stay with their
 // owner until they die or lose interest (KeepHandedEnemy) instead of vanishing.
 constexpr uint32_t kEnemyInfoMagic = 0x4E454D44; // "DMEN"
-constexpr uint16_t kEnemyInfoVersion = 1;
+constexpr uint16_t kEnemyInfoVersion = 2;
+constexpr uint8_t kEnemyInfoFriendly = 1; // a story companion: shown, never hit or handed over
 constexpr size_t kEnemyMeshPaths = 4;      // body plus up to three modular parts
 constexpr size_t kEnemyPathLength = 120;
 constexpr size_t kEnemyMaxBones = 159; // at most three packets per enemy, including @root
@@ -63,7 +64,7 @@ inline bool KeepHandedEnemy(bool alive, double engaged, double since, double now
 struct EnemyInfoPacket {
     uint32_t magic;
     uint16_t version;
-    uint8_t paths, reserved;
+    uint8_t paths, flags;
     uint32_t session, entity;
     char path[kEnemyMeshPaths][kEnemyPathLength]; // "Package.Asset" object paths of SkeletalMesh assets
 };
@@ -73,7 +74,7 @@ inline bool DecodeEnemyInfo(const char* data, int len, EnemyInfoPacket& out) {
     if (len != static_cast<int>(sizeof(EnemyInfoPacket))) return false;
     std::memcpy(&out, data, sizeof out);
     if (out.magic != kEnemyInfoMagic || out.version != kEnemyInfoVersion || !out.entity || !out.paths ||
-        out.paths > kEnemyMeshPaths || out.reserved)
+        out.paths > kEnemyMeshPaths || (out.flags & ~kEnemyInfoFriendly))
         return false;
     for (size_t i = 0; i < kEnemyMeshPaths; ++i) {
         const char* p = out.path[i];
@@ -87,10 +88,12 @@ inline bool DecodeEnemyInfo(const char* data, int len, EnemyInfoPacket& out) {
     return true;
 }
 
-inline bool EncodeEnemyInfo(uint32_t session, uint32_t entity, const std::vector<std::string>& paths, EnemyInfoPacket& out) {
+inline bool EncodeEnemyInfo(uint32_t session, uint32_t entity, const std::vector<std::string>& paths, EnemyInfoPacket& out,
+                            uint8_t flags = 0) {
     out = EnemyInfoPacket{};
     out.magic = kEnemyInfoMagic;
     out.version = kEnemyInfoVersion;
+    out.flags = flags;
     out.session = session;
     out.entity = entity;
     for (const auto& p : paths) {

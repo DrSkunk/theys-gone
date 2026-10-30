@@ -48,7 +48,7 @@ class SaveTransferTest(unittest.TestCase):
 
 class ProtocolTest(unittest.TestCase):
     def test_wire_size_matches_plugin(self):
-        self.assertEqual(fake_peer.SIZE, 144)
+        self.assertEqual(fake_peer.SIZE, 145)
 
     def test_round_trip(self):
         data = fake_peer.encode(7, 1234, (1.0, -2.0, 3.5), 90.0, -5.0, (10.0, 0.0, -1.0), 'Boozer')
@@ -66,8 +66,14 @@ class ProtocolTest(unittest.TestCase):
 
     def test_enemy_datagrams(self):
         path = b'/Game/Characters/Freaker/Swarmer/parts_combo/swarmer_horde_c.swarmer_horde_c'
-        info = struct.pack(fake_peer.ENEMY_INFO, fake_peer.ENEMY_INFO_MAGIC, 1, 1, 0, 7, 3, path, b'', b'', b'')
+        info = struct.pack(fake_peer.ENEMY_INFO, fake_peer.ENEMY_INFO_MAGIC, fake_peer.ENEMY_INFO_VERSION, 1, 0, 7, 3,
+                           path, b'', b'', b'')
         self.assertEqual(fake_peer.decode_enemy_datagram(info), ('info', 3, [path.decode()]))
+        friendly = struct.pack(fake_peer.ENEMY_INFO, fake_peer.ENEMY_INFO_MAGIC, fake_peer.ENEMY_INFO_VERSION, 1,
+                               fake_peer.ENEMY_INFO_FRIENDLY, 7, 3, path, b'', b'', b'')
+        self.assertEqual(fake_peer.decode_enemy_datagram(friendly), ('info', 3, [path.decode()]))
+        old = struct.pack(fake_peer.ENEMY_INFO, fake_peer.ENEMY_INFO_MAGIC, 1, 1, 0, 7, 3, path, b'', b'', b'')
+        self.assertIsNone(fake_peer.decode_enemy_datagram(old))
         header = struct.pack(fake_peer.POSE_HEADER, fake_peer.POSE_MAGIC, fake_peer.POSE_VERSION,
                              fake_peer.POSE_ENEMY, 2, 7, 500, 3, 0, 1, 1, 1.0, 2.0, 3.0, 90.0, 50.0)
         full = struct.pack('<IB3h3h', 11, fake_peer.POSE_HAS_TRANSLATION, 0, 0, 0, 1, 2, 3)

@@ -38,7 +38,7 @@ testable rules live in headers (`enemy.hpp`, `protocol.hpp`, `streaming.hpp`,
 experiments live only in [`src/coop/research.cpp`](src/coop/research.cpp)
 behind `[Research]` INI keys; they are not part of normal play.
 
-## Current state (protocol v9)
+## Current state (protocol v10)
 
 Validated in paired live tests (two PCs, two games):
 
@@ -66,11 +66,18 @@ Implemented but **not yet validated live**:
   `OBR` and could not re-board). In stealth missions the partner's stand-in
   is only announced to enemies that are already fighting (paired `AON1` A/B:
   9 of 13 Rippers targeted it before, 0 after).
+- Lab-verified on one PC (two games, see [docs/COOP-ROADMAP.md](docs/COOP-ROADMAP.md)):
+  the guest's stuck mission fade is lifted; the partner shows on the minimap
+  and world map (`PartnerMarker`); the host's story companions (Boozer) are
+  streamed as friendly replicas (`DMEN` v2) with on-demand mesh loading;
+  time follows the host during its missions; each state packet carries the
+  sender's running mission (protocol v10) and both games hide the partner
+  during flashback missions.
 
 - Protocol v9 guest-side host proxy: lets guest-kept enemies target and
-  damage the host after a regroup. The only paired attempt was inconclusive
-  because the guest's debug pack never entered the streamed enemy sources
-  (see "Protocol-v9 guest-proxy attempt" in REPLICATION-RESEARCH.md).
+  damage the host after a regroup. Two paired attempts were inconclusive;
+  the second streamed the guest's debug pack, but debug-spawned pawns seem
+  to stay on the local player (see REPLICATION-RESEARCH.md).
 
 Known gaps, roughly in priority order:
 
