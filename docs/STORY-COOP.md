@@ -206,12 +206,14 @@ camp rally).
 
 ## 4. Co-op problems
 
-1. **Mission content is not shared live.** Missions that save at their start
-   reach the guest through the story resync: in a paired test the guest
-   reloaded the host's mission-start save and ran its own copy of `OBR`, with
-   its own Boozer. Between saves, the two copies of a mission (its NPCs,
-   sublevel props, forced weather and objectives) run independently. Companions are excluded from enemy streaming, so
-   the guest sees the host riding or walking next to nobody. Fix: stream
+1. **Missions run only on the host.** When the host starts a mission that
+   saves at its start, the guest reloads that save through the story resync,
+   but the mission does not start there: the guest gets `ActiveMissionData`
+   without a mission script, and the mission's start fade stayed black until
+   the mod lifted it (paired `OBR` tests, 2026-10-29). The guest therefore
+   has none of the mission's NPCs, sublevel props, forced weather or
+   objectives. Companions are excluded from enemy streaming, so the guest
+   sees the host riding or walking next to nobody. Fix: stream
    non-hostile mission actors (companions, their bikes, mission trucks) as
    display-only, non-colliding replicas, and send mission weather.
 2. **Passenger seat conflicts (P).** Lisa (`LOL2`, `RBC`) and Sarah (`WNG`,
@@ -239,10 +241,9 @@ camp rally).
    (`AHB5`). These suit co-op if guest hits apply on the host's enemies,
    which already works.
 5. **Captures (C).** `CRW` (Boozer), `TLL2` (caught), `PBC4` → `AON1` (Deacon
-   betrayed, gear and cut taken), `AHB5` (hanging). A free, armed partner
-   contradicts them. Candidate policy: while one is active, hide the guest's
-   avatar on the host, stop guest hits on mission enemies, and move the
-   guest to the host when it completes.
+   betrayed, gear and cut taken), `AHB5` (hanging). Decided 2026-10-30: no
+   restriction, like most co-op games; both players stay free and the
+   escape is a shared prison break.
 6. **Flashbacks (M).** `WNG`, `HGL`, `TSR`, `IPR`, `AQW` and the memorial
    stone jobs play in the past or in memory. The partner must not appear.
    `BendGameMission.OnFlashbackCinematicToggled` may signal the cinematic
@@ -269,11 +270,9 @@ by starting `OBR`); the per-mission table is
 [`mission_policy.hpp`](../src/coop/mission_policy.hpp), covered by
 `tools/test_protocol.cpp`; the passenger-seat rule (§4.2) uses it.
 
-1. Two local copies of a mission: in a paired `OBR` run the host's copy
-   progressed while the guest, after loading the host's mission-start save,
-   stayed on a black screen with no mission progress. Find out why before
-   deciding between shared copies and streaming the host's companions
-   (§4.1).
+1. Show the host's mission to the guest (§4.1): stream companions and
+   mission vehicles as display-only replicas, and send the mission weather.
+   Tracked in [COOP-ROADMAP.md](COOP-ROADMAP.md).
 2. Check whether enemies that are already fighting still switch to the
    partner in stealth missions (§4.3).
 3. Send the host's active mission code to the guest (a protocol change), so

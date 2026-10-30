@@ -271,14 +271,14 @@ Steamworks SDK code is bundled or linked:
   If the original owner leaves, the session ends instead of adopting Steam's
   replacement owner. In LAN mode, the player who chose Host is the host.
 
-### 4.2 State packet (protocol v9)
+### 4.2 State packet (protocol v10)
 
-[`protocol.hpp`](../src/coop/protocol.hpp) defines a fixed 144-byte
+[`protocol.hpp`](../src/coop/protocol.hpp) defines a fixed 145-byte
 little-endian packet, sent at 30 Hz:
 
 | Field | Type | Notes |
 |---|---|---|
-| magic, version | u32, u16 | `"DGCO"`, 9 |
+| magic, version | u32, u16 | `"DGCO"`, 10 |
 | flags | u16 | HasPawn, InVehicle, HasBike, Passenger, FriendlyFire, AcceptPassengers, Alive, SyncBikes, WorldState, SyncEnemies, Separated (host only: free roam split enemy ownership by region) |
 | seq, timeMs | u32 each | wrapping sequence; sender's frame clock |
 | pos[3], yaw, pitch, vel[3] | f32 | finite, within ±1e8 |
@@ -290,6 +290,7 @@ little-endian packet, sent at 30 Hz:
 | health | f32 | |
 | actions, weaponType, shotSequence | u8, u8, u32 | aiming/crouch/reload, weapon category, shots |
 | worldTimeOfDay, worldRelativeTime, worldWeather, worldTransitionRate | f32, f32, u8, u8 | host world state |
+| storyMission | u8 | `MissionID` of the story mission the sender's game runs, 0 for none |
 
 Decoding rejects a packet with the wrong size, magic, version or flags, or
 with non-finite or out-of-range values. Each frame processes at most 64
@@ -304,7 +305,7 @@ The same socket carries more types, each identified by its own magic:
 |---|---|---|
 | `DPOS` | Compressed skeleton pose: body, bike or enemy | body and bike 20 Hz (`PoseRate`); enemies 15 Hz |
 | `DMGR` | Held item: mesh asset path, socket and offset | on change and every 0.5 s |
-| `DMEN` | Enemy appearance: up to four mesh asset paths | every 1 s per enemy |
+| `DMEN` | Enemy or companion appearance (v2): up to four mesh asset paths, friendly flag | every 1 s per enemy |
 | `DGSV` | Save transfer: request, offer, chunk pull, 1 KB chunk | only while a guest downloads the host's save |
 | `DMST` | Story signature: host's live and last-saved job and mission progress | every 1 s from the host |
 | `DMEH` | Guest hit on a host enemy: entity, damage, shot or melee | per hit, sent twice |
@@ -454,15 +455,21 @@ This is consent and reliability handling, not authentication.
 ### 5.7 Time and weather
 
 The host reads its time with `GetWorldTimeOfDay`/`GetWorldTimeFractional`
-and its weather from the `WorldWeather` property, every 0.5 s, outside missions
-and cinematics, and sends them. The joining player:
+and its weather from the `WorldWeather` property, every 0.5 s, outside
+cinematics, and sends them. A mission's own fog or rain comes from its
+weather sublevel: the joining player, whose game does not run the mission,
+loads that level with `GameplayStatics.PerformActionOnStreamingLevels` and
+uses the mission's sky preset (`TempDefaultWeather`) instead of the host's
+`WorldWeather`. The joining player:
 
 - captures its own time and weather once;
 - applies the host's time when the difference is more than 0.02 h, using
   `SetWorldTimeOfDay`;
 - applies the host's weather with `SelectWorldWeather` when no weather
   transition is in progress;
-- pauses while either game is in a mission or cinematic;
+- keeps following the host during the host's missions, which run only on the
+  host, but pauses while either game plays a cinematic or the joining
+  player's own game runs a mission script;
 - restores its captured values on disconnect or a world change.
 
 None of this writes save data.
@@ -479,7 +486,13 @@ For story progress, each side hashes `BendJobManager`'s jobs and missions into
 a signature. The host sends its live signature and the one at its last save
 (`DMST`). A joining player whose signature differs from the host's saved one
 for 6 s downloads the new save and reloads. Missions are not mirrored live: the
-joining player's game only catches up at the host's saves.
+joining player's game only catches up at the host's saves. While the host runs
+a story mission (its state packets carry the mission's ID), the joining player
+waits: a mission-start save would put its game in a mission state without the
+mission running (a black start fade, failure zones that respawn the player at
+the mission's staging point). It catches up at the host's first save after
+the mission. A guest that joins while the host is already in a mission still
+loads that save; a black start fade there is lifted after 5 s.
 
 ### 5.9 Shared enemies and combat
 
@@ -491,6 +504,13 @@ non-colliding replica for each one. Its alive/health state disables further
 hit requests at zero health; it does not immediately destroy the visual
 corpse. A replica is removed after the host stops sending its pose/appearance
 packets for 1.5 s.
+
+The same stream carries the host's story companions (pawns with a
+`BendBuddyController`, such as Boozer), flagged friendly in `DMEN`: the
+joining player shows them but never hits them, and the host keeps them out of
+aggro and ownership handoff. Missing meshes, such as a companion's when the
+joining player's game does not run the mission, are requested from
+`BendStreamingManager`, and the replica is rebuilt once they have loaded.
 
 The joining player's own hostile AI is switched off: ambient generators,
 spawn areas and crowd generators are paused, and live hostile pawns are handed

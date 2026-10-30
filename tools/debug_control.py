@@ -34,8 +34,11 @@ COMMANDS = (
     "stream-focus",
     "stream-probe",
     "move-by",
+    "minimap-probe",
+    "look-companion",
+    "level-probe",
 )
-ARG_COMMANDS = ("mission-act", "stream-focus", "move-by")
+ARG_COMMANDS = ("mission-act", "stream-focus", "move-by", "level-probe")
 ARG_LIMIT = 240
 
 

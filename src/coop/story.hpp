@@ -173,6 +173,9 @@ inline bool StoryNeedsResync(const StoryPacket& host, const StorySignature& mine
            host.savedSignature != lastResyncedSignature && host.savedSignature != pendingResyncSignature;
 }
 
+// The joining player does not reload into the host's progress while the host runs a story mission.
+inline bool StoryResyncAllowed(uint8_t hostStoryMission) { return hostStoryMission == 0; }
+
 // An in-place reload can keep landing on an older local checkpoint, so it is retried a few times only.
 inline bool AdoptedReloadAllowed(int attemptsSoFar) { return attemptsSoFar < kAdoptedReloadAttempts; }
 

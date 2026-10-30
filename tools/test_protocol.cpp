@@ -469,6 +469,16 @@ void TestEnemy() {
     assert(!DecodeEnemyInfo(reinterpret_cast<const char*>(&bad), sizeof bad, decoded));
     assert(!EncodeEnemyInfo(3, 9, {}, info));
     assert(!EncodeEnemyInfo(3, 0, paths, info));
+    // Companions carry the friendly flag; unknown flags and the previous version are rejected.
+    assert(EncodeEnemyInfo(3, 9, paths, info, kEnemyInfoFriendly));
+    assert(DecodeEnemyInfo(raw, sizeof info, decoded) && decoded.flags == kEnemyInfoFriendly);
+    bad = info;
+    bad.flags = 2;
+    assert(!DecodeEnemyInfo(reinterpret_cast<const char*>(&bad), sizeof bad, decoded));
+    bad = info;
+    bad.version = 1;
+    assert(!DecodeEnemyInfo(reinterpret_cast<const char*>(&bad), sizeof bad, decoded));
+    assert(EncodeEnemyInfo(3, 9, paths, info));
 
     // Face/finger subtrees are dropped without orphaning any streamed bone.
     std::vector<std::string> names{"Align", "hips", "spine", "neck", "Head", "face_root", "face_lip_l", "jaw",
@@ -648,6 +658,11 @@ void TestMissionPolicy() {
     assert(!coop::ProxyAwarenessAllowed(coop::MissionFlags("AON1"), false));
     assert(coop::ProxyAwarenessAllowed(coop::MissionFlags("AON1"), true));
     std::puts("mission policy ok");
+}
+
+void TestStoryResyncDuringMission() {
+    assert(coop::StoryResyncAllowed(0));
+    assert(!coop::StoryResyncAllowed(3));
 }
 
 void TestAdoptedReloadLimit() {
@@ -1216,6 +1231,7 @@ int main() {
     TestStory();
     TestMissionPolicy();
     TestAdoptedReloadLimit();
+    TestStoryResyncDuringMission();
     TestObjectiveProgress();
     TestEnemyHit();
     using coop::DebugCommand;
@@ -1263,6 +1279,9 @@ int main() {
     assert(coop::ParseDebugCommand("mission-watch-on") == DebugCommand::missionWatchOn);
     assert(coop::ParseDebugCommand("mission-watch-off") == DebugCommand::missionWatchOff);
     assert(coop::ParseDebugCommand("mission-state") == DebugCommand::missionState);
+    assert(coop::ParseDebugCommand("minimap-probe") == DebugCommand::minimapProbe);
+    assert(coop::ParseDebugCommand("look-companion") == DebugCommand::lookCompanion);
+    assert(coop::ParseDebugCommand("level-probe") == DebugCommand::levelProbe);
     assert(coop::ParseDebugCommand("mission-act") == DebugCommand::missionAct);
     assert(coop::ParseDebugCommand("mission-act x") == DebugCommand::unknown);
     coop::DebugRequestGate gate;

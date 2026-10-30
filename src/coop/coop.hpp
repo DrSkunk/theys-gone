@@ -33,6 +33,7 @@ struct Config {
     bool steamPumpCallbacks = false; // also run SteamAPI_RunCallbacks from the mod (only if invites never arrive)
     std::string steamApp = "daysgone"; // Steam app for lobbies: daysgone or spacewar (app 480)
     bool freeRoam = false; // host: stream world tiles around a distant partner and hand them their region's enemies
+    bool partnerMarker = true; // show the partner on the minimap and the world map
 };
 
 Config LoadConfig(const std::wstring& iniPath);

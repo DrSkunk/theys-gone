@@ -159,6 +159,9 @@ poetry run python tools/debug_control.py --game-dir "/path/to/BendGame/Binaries/
 | `ride-test` | Toggle a **Ride with** prompt 3 m ahead, to test the native interact prompt alone |
 | `dump-reflection` | Write every loaded class, property and function to `TheysGone-reflection.txt` |
 | `dump-objects` | Write a census of live objects to `TheysGone-objects.txt` |
+| `level-probe` | Read-only: with `--arg "<text>"`, write the streaming levels whose package name contains the text, with their load and visibility state, to `TheysGone-levels.txt` |
+| `look-companion` | Turn the camera to the nearest story-companion replica (to check it renders) |
+| `minimap-probe` | Read-only: write every live `MiniMapLocationComponent` (owner, icon texture, location type, display rule, colour, flags, name) and an icon summary to `TheysGone-minimap.txt` |
 | `net-probe` | Write the engine's built-in networking state (net drivers, connections, controllers, roles, replicated actors and properties) to `TheysGone-net.txt` |
 | `net-listen` | Experimental, host: start the engine's built-in listen server (Steam P2P) on the live world; `[Research] ControllerClass=`, `PawnClass=`, `SpectatorJoin=` set what joining players get |
 | `net-connect` | Experimental, guest: join a built-in listen server at `[Research] ConnectUrl` (`steam.<host SteamID64>`) without reloading the map; `[Research] ClientNavigation=1` recreates the world's navigation system after the join |
@@ -178,7 +181,7 @@ poetry run python tools/debug_control.py --game-dir "/path/to/BendGame/Binaries/
 | `move-by` | Free roam: teleport the local pawn by `--arg "<east m> <north m>"` (each within 20 km) and hold it until a capsule sweep finds ground (30 s limit). Debug only; a large jump can land in unloaded terrain, so move in steps of a few hundred metres |
 
 `hit-enemy`, `story-*`, `reload-save`, `ride-test`, `dump-*`, `net-*`, `trace-*`,
-`stream-*`, `move-by` and `mission-*` work without `begin`. The research commands only read and log, except
+`stream-*`, `move-by`, `minimap-probe` and `mission-*` work without `begin`. The research commands only read and log, except
 `mission-act` and the experimental `net-*` commands, which drive the engine's own
 networking; see [REPLICATION-RESEARCH.md](REPLICATION-RESEARCH.md).
 
