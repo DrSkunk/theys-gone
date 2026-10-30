@@ -3544,3 +3544,47 @@ the lab's `shot` command captured the **host** for both instances:
 `WAYLAND_DISPLAY`. The host's 24 frames show no second Deacon, which says
 nothing about what the guest saw. The mod does not hide the partner avatar
 during cinematics; whether it shows up in a cutscene remains untested.
+
+## Paired mission copies, frame peaks and save reloads (2026-10-28/29, paired, one PC)
+
+Lab pair (host on the desktop Steam account, guest in the sandboxed second
+account, UDP over loopback). The host started `OBR` with
+`StartMissionFromID 3`; the guest followed through the mission-start save.
+With `DebugTools=1` both games logged `mission progress:` lines (checkpoint
+and objective states). Ten screenshot pairs were taken 45 s apart.
+
+**Full object scans froze the game.** A first version of the progress log
+fell back to `FindInstance("BendMissionScriptActor")`, a scan of every
+object, once a second whenever `ActiveMissionScript` was empty. On the build
+before #15 the host's tick mean went from 4–7 ms to about 1.9 s (0.5
+updates/s) as soon as the mission started, and the mission never ran: one
+full scan, with `IsLive` → `Readable` → `VirtualQuery` per object, cost about
+1.8–2 s under Proton. The fallback was removed.
+
+**Frame peaks (gap 4).** The same logs showed a recurring 610–645 ms peak in
+almost every 5 s window (45 of 55 windows in the 2026-10-28 passenger run).
+With #15 (`ReadableRegionCache`) and #17 the 2026-10-29 run had one window at
+or above 500 ms out of 120 on the host and none of 107 on the guest; most
+peaked below 100 ms.
+
+**Endless reload of an adopted save.** In one run the guest adopted the
+host's mission-start save, but each in-place `ReloadBecauseOfJobFailure`
+loaded its older checkpoint (`fa97ef49`, not the host's `aace70ce`), and it
+retried every 30 s for 20 minutes. With the new limit the guest logged
+`3 in-place reloads did not load the host's progress; stopped retrying`.
+
+**Mission copies (2026-10-29 run, current build).** The host's `OBR` ran
+on its own: `Obj_1` 0 → 1 → 2 and `Obj_2` 0 → 1 within two minutes, ending
+at the roadblock. The guest verified the host's progress `aace70ce` and
+reported `mission: active 'OBR'` 18 s after the host, and its mod ticked at
+about 60/s, but every guest screenshot was the same black frame and the
+guest logged no mission progress (`ActiveMissionScript` empty). The two
+copies were therefore not in step; why the guest stays black is not yet
+known.
+
+**Lab corrections.** Until this run, the lab's guest screenshots were
+captures of the host (`gamescopectl` reads `GAMESCOPE_WAYLAND_DISPLAY`), and
+after a reboot the desktop Steam client signed in to the sandbox's account,
+which left the host without Continue; both are fixed in `tools/lab/lab.sh`.
+Logs and screenshots: `~/TheysGone-lab/archive/sync-20261028-1139/`,
+`sync-20261029-2054/` and `reload-loop-20261028/` on cachy.

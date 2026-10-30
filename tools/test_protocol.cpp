@@ -650,6 +650,12 @@ void TestMissionPolicy() {
     std::puts("mission policy ok");
 }
 
+void TestAdoptedReloadLimit() {
+    assert(coop::AdoptedReloadAllowed(0));
+    assert(coop::AdoptedReloadAllowed(coop::kAdoptedReloadAttempts - 1));
+    assert(!coop::AdoptedReloadAllowed(coop::kAdoptedReloadAttempts));
+}
+
 void TestStory() {
     static_assert(sizeof(coop::StoryPacket) == 32, "story wire size");
     coop::StoryHasher a, b, c;
@@ -1209,6 +1215,7 @@ int main() {
     TestGear();
     TestStory();
     TestMissionPolicy();
+    TestAdoptedReloadLimit();
     TestObjectiveProgress();
     TestEnemyHit();
     using coop::DebugCommand;

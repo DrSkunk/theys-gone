@@ -17,6 +17,7 @@ constexpr double kObjectiveProgressInterval = 3.0; // host retries completed obj
 constexpr uint32_t kObjectiveProgressMagic = 0x424F4D44; // "DMOB"
 constexpr uint16_t kObjectiveProgressVersion = 1;
 constexpr size_t kObjectiveNameBytes = 48;
+constexpr int kAdoptedReloadAttempts = 3; // in-place reloads of one adopted host save before giving up
 
 #pragma pack(push, 1)
 struct StoryPacket {
@@ -171,6 +172,9 @@ inline bool StoryNeedsResync(const StoryPacket& host, const StorySignature& mine
     return mine.valid && host.savedSignature && host.savedSignature != mine.hash &&
            host.savedSignature != lastResyncedSignature && host.savedSignature != pendingResyncSignature;
 }
+
+// An in-place reload can keep landing on an older local checkpoint, so it is retried a few times only.
+inline bool AdoptedReloadAllowed(int attemptsSoFar) { return attemptsSoFar < kAdoptedReloadAttempts; }
 
 inline bool StoryResyncMatches(uint32_t expectedSignature, const StorySignature& loaded) {
     return expectedSignature && loaded.valid && expectedSignature == loaded.hash;

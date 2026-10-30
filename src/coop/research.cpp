@@ -2962,6 +2962,32 @@ void DumpCatalog(FILE* file, UObject* jobs, UObject* mission, int& jobCount, int
     }
 }
 
+std::string ActiveMissionProgress() {
+    auto mission = FindInstance("BendGameMission");
+    UObject* script = nullptr;
+    if (!IsLive(mission) || !ue::GetProp(mission, "ActiveMissionScript", script) || !IsLive(script)) return {};
+    std::string out;
+    Call checkpoint(script, "I_GetCurrentCheckpointCount");
+    if (checkpoint.invoke())
+        out = "checkpoint " + std::to_string(checkpoint.get<int32_t>("Count")) + "/" +
+              std::to_string(checkpoint.get<int32_t>("MaxCount"));
+    Call all(script, "GetAllObjectives");
+    if (!all.invoke()) return out;
+    auto list = all.get<ObjectArray>("ReturnValue");
+    if (list.count < 0 || list.count > 128 || (list.count && !list.data) ||
+        (list.count && !ReadableMemory(list.data, static_cast<size_t>(list.count) * sizeof(UObject*))))
+        return out;
+    for (int32_t i = 0; i < list.count; ++i) {
+        UObject* objective = list.data[i];
+        FName id{};
+        if (!IsLive(objective) || !ue::GetProp(objective, "ObjectiveIdentifierID", id)) continue;
+        Call state(objective, "GetCurrentObjectiveState");
+        auto name = NameString(id.index) + (id.number ? "_" + std::to_string(id.number - 1) : std::string());
+        out += " " + name + "=" + (state.invoke() ? std::to_string(state.get<uint8_t>("ReturnValue")) : "?");
+    }
+    return out;
+}
+
 bool MissionState(const std::wstring& path, std::string& summary) {
     auto jobs = FindInstance("BendJobManager");
     auto mission = FindInstance("BendGameMission");
