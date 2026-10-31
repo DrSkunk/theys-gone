@@ -1,140 +1,99 @@
-# Co-op roadmap: what is missing
+# Co-op roadmap
 
-Working list of the gaps between Theys Gone today and complete two-player
-campaign co-op, in the order they are being worked on. Each item says how it
-will be verified; "done" means verified in a paired lab session
-([tools/lab/README.md](../tools/lab/README.md)) with the evidence in
-[REPLICATION-RESEARCH.md](REPLICATION-RESEARCH.md). Background on the story
-side is in [STORY-COOP.md](STORY-COOP.md).
+The goal is reliable, shared story co-op—not full engine replication. The host
+owns the save and story; the joining player helps in the host's world.
 
-Status: `[ ]` open, `[~]` in progress, `[x]` done (verified), `[!]` blocked.
+Status means:
 
-## Already done
+- `[x]` demonstrated in a paired lab session; the scope of the test is stated.
+- `[~]` implemented or partly tested, but required validation or coverage is
+  still missing.
+- `[ ]` not implemented or not yet tested.
 
-- [x] Passenger seat reserved for story characters in pillion missions (#11).
-- [x] Partner stand-in no longer alerts enemies in stealth missions (#14).
-- [x] Frame-time peaks from `VirtualQuery` in object scans (#15, #17).
-- [x] Endless in-place reload of an adopted host save, capped at 3 (#18).
-- [x] Headless two-game lab on one PC (#12, fixes in #18).
+Paired lab tests may run two game instances on one PC. They are useful evidence,
+but do not replace a two-PC test when a task specifically needs one. See the
+[lab guide](../tools/lab/README.md) and
+[research log](REPLICATION-RESEARCH.md) for test setup and evidence.
 
-## Open, in working order
+## Done
 
-1. [x] **Guest stuck on a black screen after the host starts a mission.**
-   Loading the host's mission-start save in place marks the mission active
-   on the guest but never starts it, and its start fade stays black. Fix:
-   lift the fade (`CallFadeOutOfBlack`) when no mission script runs, then
-   move the guest to the host. Verify: guest frames change and show the
-   world after the host starts `OBR`.
-2. [x] **Guest treats a mission it is not running as active.** The guest's
-   `ActiveMissionData` stays set without a mission script, so the guest
-   applies mission policies (passenger seat, stealth) for a mission it does
-   not play. Use "mission script running" for local policy. Verify: guest
-   `status` reports no mission after following the host.
-3. [x] **Partner on the minimap and the world map.** Each game shows the
-   other player with a `MiniMapLocationComponent` marker that follows the
-   partner avatar. First find a friendly icon in use (`minimap-probe`).
-   Verify: screenshots of both minimaps and maps show the partner marker at
-   the right place.
-4. [x] **Corrections to merged docs.** `STORY-COOP.md` and the research log
-   still say the guest "runs its own copy of the mission with its own
-   Boozer"; that was based on host screenshots mislabelled as the guest's.
-5. [~] **Host's companions and mission vehicles on the guest.** The guest
-   cannot run its own copy of a mission, so it sees the host riding with
-   nobody. Stream non-hostile mission actors (Boozer, Rikki, Sarah, their
-   bikes, the turret truck) as display-only replicas, like enemies. Protocol
-   change. Verify: the guest sees Boozer next to the host in `OBR`.
-6. [~] **Partner avatar during cutscenes and flashbacks.** Hide the partner
-   while the local game plays a cinematic or a flashback mission (`WNG`,
-   `HGL`, `TSR`, `IPR`, `AQW`); check what the guest sees while the host is
-   in a cutscene. Verify: screenshots from both games during `OBR`'s intro.
-7. [!] **Protocol v9 guest-side proxy** (AGENTS gap 1): guest-kept enemies
-   targeting and damaging the host after a regroup. Now testable with two
-   real games. Verify: proxy targeting on the guest and a host health drop.
-8. [ ] **Pillion character joining mid-mission** (Lisa in `RBC`): the seat
-   rule while the host rides with the guest before Lisa boards.
-9. [ ] **Stealth: enemies already fighting** still switch to the partner;
-   confirm nothing else alerts the camp (native sight of the stand-in).
-10. [x] **Capture missions** (`CRW`, `TLL2`, `PBC4`/`AON1`, `AHB5`): decided
-    2026-10-30: no restriction, as in most co-op games; both players stay
-    free and the escape is a shared prison break. That is the current
-    behaviour (no capture policy is applied).
-11. [ ] **Region transitions** (`RNA1` south, `LRH1` north): the guest
-    follows the host's save; verify it lands next to the host.
-12. [ ] **Shared world state** (AGENTS gap 2): interactions, pickups and
-    mission state in the guest's region are not host-authoritative.
-13. [ ] **Enemy identity on ownership release** (AGENTS gap 3).
-14. [ ] **Steam transport in the lab**: the sandboxed Steam client is not
-    reachable from the mod, so lab sessions use UDP only.
+- [x] Headless two-game lab on one PC.
+- [x] Lift the joining player's stuck mission-start fade and move them next to
+  the host.
+- [x] Determine the local mission from its running script, not stale
+  `ActiveMissionData`.
+- [x] Show the partner on the minimap and world map.
+- [x] Reduce frame-time peaks caused by `VirtualQuery` in object scans.
+- [x] Cap repeated in-place reloads of an adopted host save.
+- [x] Send the host's running mission in protocol v10 and hide the partner
+  during flashback missions. Tested with `WNG`; broader cinematic coverage
+  remains open below.
+- [x] Apply the host's mission weather on the joining player's game. Matched
+  fog was observed in `OBR`.
+- [x] Stream Boozer as a friendly, textured replica and show Boozer's bike in
+  the `OBR` one-PC paired lab. Other companions and vehicles are not covered
+  by this result.
+- [x] Capture-mission policy decision: do not restrict either player; keep the
+  shared escape as the current behavior.
 
-## Log
+## Still to do
 
-- 2026-10-29: list created. Item 1 done (guest logged "lifting its black
-  screen (ok)"; ten guest screenshots showed the world). Item 4 done. New
-  observation for item 5: the guest also lacks the host's mission weather
-  (fog at the host, sun at the guest).
-- Item 2 done: during `OBR` the host's `status` reports `mission='OBR'`, the
-  guest's `mission=''`.
-- Item 3: a spawned `MapLocationActor` registers a `MapLocation` that the
-  minimap list includes. It has no root component, so `bGetPositionFromOwner`
-  left it at the world origin; with that flag off and `Position` written each
-  tick, the host's world map drew the partner icon 280 m away, and the
-  guest's marker sits at the host's position. The icon keeps its own colours
-  (the tint is ignored). Minimap A/B at 35 m: with `PartnerMarker=1` the
-  host's minimap shows an extra triangle at the partner's offset, absent with
-  `PartnerMarker=0`. Item 3 done; polish left: a more distinct icon.
-- Item 6: in a paired `OBR` intro (real captures of both games) the host's
-  20 frames showed no stray partner; the guest saw the host's avatar. No
-  change needed so far; flashbacks not yet tested.
-- Item 5, weather: time now follows the host during its missions (guest
-  went to 12.5 h with the host), but the mission fog comes from the
-  mission's weather sublevel, not `WorldWeather` (0 at the host); syncing it
-  needs the host's mission code on the guest (new item 15).
-- Item 5, companions (in progress): the host now streams pawns with a
-  `BendBuddyController` (Boozer: `BoozerPawn_C_0`) with a friendly flag
-  (`DMEN` v2), excluded from hits, aggro and handoff. The guest requests
-  missing meshes from `BendStreamingManager.RequestAsyncLoadBPCallback` and
-  rebuilds the replica once they load (Boozer: head and 3 parts after 5 s).
-  With the guest's camera turned to the replica (`look-companion`), the
-  guest's screenshot showed a Boozer-shaped figure walking at Boozer's
-  position, 12 m away, but grey and blue rather than textured. Open: his
-  materials/textures, and Boozer's bike (item 16).
+1. [~] **Validate story passenger-seat and stealth policies in-game.** The
+   mission-policy code is implemented, but the paired in-game tests are not
+   complete.
+   - In `RBC`, test the guest riding before Lisa boards; confirm the story
+     passenger seat is reserved and the guest can safely dismount.
+   - In a stealth mission, confirm enemies already fighting can target the
+     partner stand-in, while enemies not already fighting are not alerted.
+   - Record both outcomes in the research log before marking this complete.
 
-## Added
+2. [ ] **Validate the guest-side host proxy after regrouping.** Previous tests
+   used debug-spawned enemies and did not exercise the required path.
+   - Use naturally spawned, guest-owned enemies while the players are apart.
+   - Confirm the host replica is present before regrouping.
+   - Regroup; confirm those enemies target the host and the host loses health.
+   - Archive both game logs and record the result. Keep the feature experimental
+     if the test remains inconclusive.
 
-15. [~] **Host mission code to the guest** (protocol change): lets the guest
-    load the mission's weather sublevel, hide the partner in flashbacks and
-    apply capture policies.
-16. [~] **Companion vehicles**: stream companion bikes (and mission trucks)
-    like the partner's bike.
-17. [ ] **Partner marker icon**: the tint is ignored, so pick a texture that
-    differs from the player's own icon.
-- Item 7 blocked on a test setup: the guest now streams a debug-spawned pack
-  while separated (the first attempt's blocker), but after the regroup all 8
-  kept targeting the guest even 146 m away, likely because debug-spawned
-  pawns stay on the local player. Needs natural guest-owned enemies.
-- Item 15 (protocol v10): each state packet carries the sender's running
-  `MissionID`; the guest resolves the host's mission (`partner runs 'WNG'`).
-  Used so far for item 6: both games hide the partner during flashback
-  missions. Weather sublevel and capture policies still open.
-- Fixed a crash found on the way: destroying the partner's map marker while
-  the host travelled into a mission crashed the game; the marker is now
-  hidden instead.
-- Item 5/15, mission weather done: the guest streams the host mission's
-  weather level (`PerformActionOnStreamingLevels`) and applies the mission's
-  sky preset; the guest's view matched the host's fog in `OBR`.
-- Item 11: far teleports now wait for ground; the post-load teleport waits
-  for the host's cinematic; the guest no longer follows the host into
-  mission saves (resync deferred until the host's first save after the
-  mission). A real region-transition test needs a save that has reached
-  `RNA1`/`LRH1`; out-of-order starts from the act-2 save leave the guest in
-  locked regions.
-- Item 5, companion look: the host sends each companion mesh's slot
-  materials and their scalar overrides (`DMMT`); the guest sets them on
-  dynamic instances. Boozer's shirt was invisible without the host's
-  `HC_ON=0`. In `OBR` the guest's crops show Boozer fully textured. Left for
-  item 5: other companions, and Boozer's bike (item 16).
-- Item 16: vehicles near the host other than its own bike are streamed as
-  blueprint class plus transform (`DMVH`), and the guest spawns the same
-  class for display. In `OBR` the guest saw Boozer's bike riding off with
-  Boozer and the host and parked next to the host. Open: the ride prompt on
-  the replica, mission trucks, wheel animation.
+3. [~] **Validate real region transitions.** Far-teleport and save-resync
+   handling is implemented, but a valid `RNA1`/`LRH1` transition has not been
+   demonstrated.
+   - Use a save that has legitimately reached the relevant region.
+   - Have the host cross the boundary and save; verify the guest loads into the
+     correct region and appears near the host.
+   - Record any locked-region or resync behavior that prevents the test.
+
+4. [~] **Broaden companion and mission-vehicle replicas.** Boozer and his bike
+   are the only demonstrated companion cases.
+   - Test other companions and their meshes/materials.
+   - Test mission vehicles such as trucks, plus replica appearance and
+     animation while moving.
+   - Decide whether interactions such as the ride prompt should work on
+     display-only replicas; document the intended behavior.
+
+5. [ ] **Share world authority when players are apart.**
+   - Define host-authoritative behavior for interactions, pickups, and mission
+     progress in the guest's region.
+   - Implement synchronization and conflict handling.
+   - Test both players acting on the same object and verify save/resync results.
+
+6. [ ] **Preserve enemy identity across ownership changes.**
+   - Carry a stable enemy identity through ownership release and reacquisition.
+   - Test split, regroup, death, unload, and reload without duplicate or
+     forgotten enemies.
+
+7. [ ] **Polish the partner map icon.**
+   - Choose a marker texture that is distinguishable from the player's icon.
+   - Verify placement and readability on both minimap and world map.
+
+8. [~] **Check partner visibility through additional cinematics.** Flashback
+   hiding is implemented and `WNG` was tested; the `OBR` intro was also
+   observed. Test additional cutscenes and confirm the partner returns when a
+   flashback ends.
+
+## Out of scope for this roadmap
+
+Full Unreal engine replication with the guest as a thin client remains a
+separate research effort. Steam sessions between two PCs have been tested;
+the one-PC lab uses UDP because its sandboxed Steam client is not reachable
+from the mod.
