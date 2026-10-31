@@ -6,6 +6,7 @@
 #include "../src/coop/debug_commands.hpp"
 #include "../src/coop/pose.hpp"
 #include "../src/coop/enemy.hpp"
+#include "../src/coop/vehicle.hpp"
 #include "../src/coop/gear.hpp"
 #include "../src/coop/story.hpp"
 #include "../src/coop/mission_policy.hpp"
@@ -541,6 +542,40 @@ void TestEnemy() {
     }));
     PoseFrame frame;
     assert(buffer.Sample(500, frame) && frame.root[0] == 250000.f && (frame.flags & kPoseAlive) && FindBone(frame, kRootBoneHash));
+}
+
+void TestVehicle() {
+    using namespace coop;
+    const std::string cls = "/Game/Vehicles/Bikes/BP_bike03Boozers.BP_bike03Boozers_C";
+    float at[3]{100, 200, 300}, rot[3]{0, 170, 5};
+    VehiclePacket p, d;
+    assert(EncodeVehicle(7, 3, 1000, at, rot, cls, kVehicleDriven, p));
+    assert(DecodeVehicle(reinterpret_cast<const char*>(&p), sizeof p, d) && d.entity == 3 && d.flags == kVehicleDriven &&
+           std::string(d.cls) == cls && d.position[2] == 300);
+    assert(!DecodeVehicle(reinterpret_cast<const char*>(&p), sizeof p - 1, d));
+    auto bad = p;
+    bad.flags = 2;
+    assert(!DecodeVehicle(reinterpret_cast<const char*>(&bad), sizeof bad, d));
+    bad = p;
+    bad.position[0] = NAN;
+    assert(!DecodeVehicle(reinterpret_cast<const char*>(&bad), sizeof bad, d));
+    assert(!EncodeVehicle(7, 0, 1000, at, rot, cls, 0, p));
+    assert(!EncodeVehicle(7, 3, 1000, at, rot, "BP_bike03Boozers_C", 0, p));
+
+    // Interpolation between samples; yaw takes the short way across +-180; before/after the range it holds.
+    VehicleTrack track;
+    VehicleTrack::Sample s;
+    assert(!track.At(1000, s));
+    float at2[3]{200, 200, 300}, rot2[3]{0, -170, 5};
+    assert(EncodeVehicle(7, 3, 1000, at, rot, cls, 0, p));
+    track.Push(p);
+    assert(EncodeVehicle(7, 3, 1100, at2, rot2, cls, 0, p));
+    track.Push(p);
+    track.Push(p); // duplicate timestamp ignored
+    assert(track.At(1050, s) && std::fabs(s.position[0] - 150) < 1e-3f && std::fabs(std::fabs(s.rotation[1]) - 180) < 1e-3f);
+    assert(track.At(900, s) && s.position[0] == 100);
+    assert(track.At(5000, s) && s.position[0] == 200 && s.rotation[1] == -170);
+    std::puts("vehicle ok");
 }
 
 void TestGear() {
@@ -1252,6 +1287,7 @@ int main() {
     TestPose();
     TestSteamAbi();
     TestEnemy();
+    TestVehicle();
     TestGear();
     TestStory();
     TestMissionPolicy();
@@ -1308,6 +1344,8 @@ int main() {
     assert(coop::ParseDebugCommand("look-companion") == DebugCommand::lookCompanion);
     assert(coop::ParseDebugCommand("level-probe") == DebugCommand::levelProbe);
     assert(coop::ParseDebugCommand("material-probe") == DebugCommand::materialProbe);
+    assert(coop::ParseDebugCommand("vehicle-probe") == DebugCommand::vehicleProbe);
+    assert(coop::ParseDebugCommand("spawn-actor") == DebugCommand::spawnActor);
     assert(coop::ParseDebugCommand("mission-act") == DebugCommand::missionAct);
     assert(coop::ParseDebugCommand("mission-act x") == DebugCommand::unknown);
     coop::DebugRequestGate gate;

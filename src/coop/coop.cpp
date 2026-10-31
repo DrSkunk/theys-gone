@@ -26,6 +26,7 @@
 #define COOP_VERSION "dev"
 #endif
 #include "enemy.hpp"
+#include "vehicle.hpp"
 #include "gear.hpp"
 #include "pose.hpp"
 #include "skeleton.hpp"
@@ -276,6 +277,9 @@ double g_localSettledAt = 0;
 void DestroyAvatar();
 void DestroyBike();
 void DestroyEnemyReplicas();
+void ReceiveVehicle(const char* data, int len, double now);
+bool VehicleReplicaAt(const FVector& at);
+bool AcceptEnemies(double now);
 void ReceiveEnemyPose(const PosePacket& packet, double now);
 void ReceiveEnemyInfo(const char* data, int len, double now);
 void ReceiveEnemyMaterials(const char* data, int len, double now);
@@ -285,6 +289,9 @@ void SendCompanionMaterials(const EnemySource& e);
 void ApplyReplicaMaterials(EnemyReplica& r);
 bool LookAtCompanion();
 void ProbeCompanionMaterials();
+void ProbeVehicles(UObject* pawn);
+bool DebugSpawnActor(UObject* pawn, const std::string& name, std::string& summary);
+void RequestAssetLoad(const std::string& path);
 void ReceiveGear(const char* data, int len, double now);
 void ReceiveStory(const char* data, int len);
 void ReceiveObjectiveProgress(const char* data, int len);
@@ -1331,6 +1338,10 @@ void ReceivePose(const char* data, int len, double now) {
         ReceiveEnemyInfo(data, len, now);
         return;
     }
+    if (magic == kVehicleMagic) {
+        ReceiveVehicle(data, len, now);
+        return;
+    }
     if (magic == kGearMagic) {
         ReceiveGear(data, len, now);
         return;
@@ -1516,21 +1527,23 @@ void DestroyBike() {
     g_bike = {};
 }
 
+// The player's own bike, ridden or parked.
+UObject* PlayerVehicle(UObject* pawn) {
+    Call mode(C.statics, "GetGameMode");
+    if (!mode.set("WorldContextObject", pawn).invoke()) return nullptr;
+    auto gameMode = mode.get<UObject*>("ReturnValue");
+    auto vehicleClass = Prop(gameMode, "CurrentPlayerVehicle");
+    Call vehicle(gameMode, "GetVehicle");
+    UObject* bike = vehicleClass && vehicle.set("VehicleClass", vehicleClass).invoke() ? vehicle.get<UObject*>("ReturnValue")
+                                                                                       : nullptr;
+    return IsLive(bike) ? bike : nullptr;
+}
+
 void FindLocalBike(UObject* pawn) {
     UObject* bike = nullptr;
     Call riding(pawn, "GetVehicle");
     if (riding.invoke()) bike = riding.get<UObject*>("ReturnValue");
-    if (!IsLive(bike)) {
-        Call mode(C.statics, "GetGameMode");
-        if (mode.set("WorldContextObject", pawn).invoke()) {
-            auto gameMode = mode.get<UObject*>("ReturnValue");
-            if (auto vehicleClass = Prop(gameMode, "CurrentPlayerVehicle")) {
-                Call vehicle(gameMode, "GetVehicle");
-                if (vehicle.set("VehicleClass", vehicleClass).invoke())
-                    bike = vehicle.get<UObject*>("ReturnValue");
-            }
-        }
-    }
+    if (!IsLive(bike)) bike = PlayerVehicle(pawn);
     bike = IsLive(bike) ? bike : nullptr;
     if (g_localBike != bike) {
         Log("bike: local bike %s", FullName(bike).c_str());
@@ -1630,13 +1643,13 @@ void UpdateBike(UObject* pawn, double now) {
     Snapshot sample{};
     bool have = g_settings.motorcycles && pawn && now - g_lastRecv < kPeerTimeout &&
                 SampleRemote(now, sample) && (sample.flags & kHasBike) && now >= g_localSettledAt;
-    if (!have || !IsLive(g_localBike)) {
+    FVector origin = WorldOrigin(pawn);
+    FVector position{sample.bikePos.x - origin.x, sample.bikePos.y - origin.y, sample.bikePos.z - origin.z};
+    if (!have || !IsLive(g_localBike) || VehicleReplicaAt(position)) {
         if (IsLive(g_bike.actor)) DestroyBike();
         return;
     }
     if (IsLive(g_bike.actor) && g_bike.source != Prop(Prop(g_localBike, "VehicleMesh"), "SkeletalMesh")) DestroyBike();
-    FVector origin = WorldOrigin(pawn);
-    FVector position{sample.bikePos.x - origin.x, sample.bikePos.y - origin.y, sample.bikePos.z - origin.z};
     if (!IsLive(g_bike.actor)) {
         if (now - g_lastBikeSpawn < 2) return;
         g_lastBikeSpawn = now;
@@ -2310,6 +2323,17 @@ void UpdateDebugTools(double now) {
         if (!success) DebugError(summary.c_str());
     }
     else if (command == DebugCommand::materialProbe) ProbeCompanionMaterials();
+    else if (command == DebugCommand::spawnActor) {
+        wchar_t arg[256]{};
+        GetPrivateProfileStringW(L"Debug", L"Arg", L"", arg, 256, path.c_str());
+        std::string summary;
+        if (!IsLive(g_pawn) || !DebugSpawnActor(g_pawn, Narrow(std::wstring(arg)), summary)) success = DebugError(summary.c_str());
+        Log("debug: spawn-actor %s", summary.c_str());
+    }
+    else if (command == DebugCommand::vehicleProbe) {
+        if (!IsLive(g_pawn)) success = DebugError("vehicle-probe needs a gameplay pawn");
+        else ProbeVehicles(g_pawn);
+    }
     else if (command == DebugCommand::lookCompanion) {
         if (!LookAtCompanion()) success = DebugError("look-companion needs a companion replica and a player");
     }
@@ -3525,7 +3549,8 @@ struct EnemyScan {
     int32_t cursor = 0;
     std::vector<UObject*> pawns;
     std::unordered_map<UObject*, std::vector<UObject*>> components;
-    std::unordered_map<UObject*, uint8_t> kinds; // class -> 0 other, 1 skeletal mesh component, 2 AI pawn
+    std::vector<UObject*> vehicles;
+    std::unordered_map<UObject*, uint8_t> kinds; // class -> 0 other, 1 skeletal mesh component, 2 AI pawn, 3 vehicle
     double time = 0;
 } g_enemyScan;
 
@@ -3537,8 +3562,10 @@ bool ClassIsA(UObject* cls, UObject* base) {
 
 uint8_t EnemyClassKind(UObject* cls) {
     static UObject* aiClass = FindClass("BendAIPawn");
+    static UObject* vehicleClass = FindClass("VehiclePawn");
     auto [it, added] = g_enemyScan.kinds.try_emplace(cls, 0);
-    if (added) it->second = ClassIsA(cls, C.skelMeshComponent) ? 1 : ClassIsA(cls, aiClass) ? 2 : 0;
+    if (added)
+        it->second = ClassIsA(cls, C.skelMeshComponent) ? 1 : ClassIsA(cls, aiClass) ? 2 : ClassIsA(cls, vehicleClass) ? 3 : 0;
     return it->second;
 }
 
@@ -3587,6 +3614,252 @@ void ProbeCompanionMaterials() {
     Log("materials: %d companion sources, %d companion replicas", sources, replicas);
 }
 
+// Debug: every live vehicle with its driver and mesh parts, to see what a companion's bike is made of.
+void ProbeVehicles(UObject* pawn) {
+    static UObject* vehicleClass = FindClass("VehiclePawn");
+    Call self(pawn, "K2_GetActorLocation");
+    FVector me = self.invoke() ? self.get<FVector>("ReturnValue") : FVector{};
+    std::vector<UObject*> vehicles;
+    for (int32_t i = 0, n = ObjectCount(); i < n && vehicleClass; ++i) {
+        auto o = ObjectAt(i);
+        if (o && IsLive(o) && !IsDefaultOrArchetype(o) && IsA(o, vehicleClass)) vehicles.push_back(o);
+    }
+    for (auto vehicle : vehicles) {
+        Call where(vehicle, "K2_GetActorLocation");
+        FVector at = where.invoke() ? where.get<FVector>("ReturnValue") : FVector{};
+        float dx = at.x - me.x, dy = at.y - me.y;
+        Call driver(vehicle, "GetDriverOrIncomingDriver");
+        UObject* rider = driver.invoke() ? driver.get<UObject*>("ReturnValue") : nullptr;
+        Log("vehicles: %s (%s) %.0f m, driver %s%s, chassis %s", FullName(vehicle).c_str(), AssetPath(vehicle->cls).c_str(),
+            std::sqrt(dx * dx + dy * dy) / 100,
+            IsLive(rider) ? Name(rider).c_str() : "none", vehicle == g_localBike ? " (local bike)" : "",
+            AssetPath(Prop(Prop(vehicle, "VehicleMesh"), "SkeletalMesh")).c_str());
+        Call parts(vehicle, "GetComponentsByClass");
+        if (!parts.set("ComponentClass", FindClass("MeshComponent")).invoke()) continue;
+        struct Array { UObject** data; int32_t count, capacity; } list = parts.get<Array>("ReturnValue");
+        for (int32_t p = 0; list.data && p < list.count && p < 48; ++p) {
+            auto c = list.data[p];
+            if (!IsLive(c)) continue;
+            Call visible(c, "IsVisible");
+            FName socket{};
+            GetProp(c, "AttachSocketName", socket);
+            auto mesh = Prop(c, IsA(c, C.skelMeshComponent) ? "SkeletalMesh" : "StaticMesh");
+            Log("vehicles:   %s %s mesh=%s parent=%s socket=%s master=%s visible=%d", Name(c->cls).c_str(), Name(c).c_str(),
+                AssetPath(mesh).c_str(), Name(Prop(c, "AttachParent")).c_str(), NameString(socket.index).c_str(),
+                Name(WeakProp(c, "MasterPoseComponent")).c_str(), visible.invoke() && visible.get<bool>("ReturnValue"));
+        }
+    }
+    for (const auto& e : g_enemySources) {
+        if (!e.friendly || !IsLive(e.pawn)) continue;
+        Call riding(e.pawn, "GetVehicle");
+        Log("vehicles: companion %s rides %s", Name(e.pawn).c_str(),
+            riding.invoke() ? FullName(riding.get<UObject*>("ReturnValue")).c_str() : "(no GetVehicle)");
+    }
+    Log("vehicles: %d live", static_cast<int>(vehicles.size()));
+}
+
+// Debug: spawn any actor class next to the player, to see how a blueprint behaves outside its mission.
+bool DebugSpawnActor(UObject* pawn, const std::string& name, std::string& summary) {
+    if (name.empty()) return summary = "needs --arg <class path or name>", false;
+    static UObject* classClass = FindClass("Class");
+    UObject* cls = name.find('/') == std::string::npos ? FindClass(name.c_str()) : FindObject(name.c_str(), classClass);
+    if (!IsLive(cls)) {
+        if (name.find('/') != std::string::npos) RequestAssetLoad(name);
+        return summary = name + " is not loaded; load requested, repeat the command", false;
+    }
+    Call where(pawn, "K2_GetActorLocation");
+    Call ahead(pawn, "GetActorForwardVector");
+    if (!where.invoke() || !ahead.invoke()) return summary = "no player location", false;
+    FVector at = where.get<FVector>("ReturnValue"), forward = ahead.get<FVector>("ReturnValue");
+    FTransform xf{};
+    xf.rotation = {0, 0, 0, 1};
+    xf.translation = {at.x + forward.x * 600, at.y + forward.y * 600, at.z};
+    xf.scale = {1, 1, 1};
+    Call begin(C.statics, "BeginSpawningActorFromClass");
+    begin.set("WorldContextObject", pawn).set("ActorClass", cls).set("SpawnTransform", xf).setBool("bNoCollisionFail", true);
+    UObject* actor = begin.invoke() ? begin.get<UObject*>("ReturnValue") : nullptr;
+    if (!actor) return summary = "BeginSpawningActorFromClass failed for " + FullName(cls), false;
+    Call(C.statics, "FinishSpawningActor").set("Actor", actor).set("SpawnTransform", xf).invoke();
+    if (!IsLive(actor)) return summary = "the actor did not survive FinishSpawningActor", false;
+    if (auto body = Prop(actor, "VehicleMesh")) Call(body, "SetSimulatePhysics").setBool("bSimulate", false).invoke();
+    Call parts(actor, "GetComponentsByClass");
+    struct Array { UObject** data; int32_t count, capacity; };
+    int meshes = parts.set("ComponentClass", FindClass("MeshComponent")).invoke() ? parts.get<Array>("ReturnValue").count : 0;
+    summary = "spawned " + FullName(actor) + " with " + std::to_string(meshes) + " mesh components";
+    return true;
+}
+
+// ---- Other vehicles (companion bikes, mission trucks) ---------------------------------------------------------
+
+struct VehicleSource {
+    UObject* vehicle = nullptr;
+    uint32_t entity = 0;
+    std::string cls;
+};
+std::vector<VehicleSource> g_vehicleSources;
+uint32_t g_nextVehicleEntity = 1;
+
+struct VehicleReplica {
+    UObject* actor = nullptr;
+    std::string cls;
+    VehicleTrack track;
+    double lastArrival = -10, lastSpawnAttempt = -10;
+    bool missingLogged = false;
+};
+std::unordered_map<uint32_t, VehicleReplica> g_vehicleReplicas;
+
+// Host: every live vehicle near the host except its own bike, which the partner already shows as the host's bike.
+void SelectVehicles(UObject* pawn, const FVector& host) {
+    UObject* own = PlayerVehicle(pawn);
+    struct Candidate { UObject* vehicle; float distance; };
+    std::vector<Candidate> found;
+    for (auto v : g_enemyScan.vehicles) {
+        if (v == own || !IsLive(v) || !IsLive(Prop(v, "VehicleMesh"))) continue;
+        Call where(v, "K2_GetActorLocation");
+        if (!where.invoke()) continue;
+        auto p = where.get<FVector>("ReturnValue");
+        float dx = p.x - host.x, dy = p.y - host.y, dz = p.z - host.z, d = dx * dx + dy * dy + dz * dz;
+        if (d <= kVehicleRadius * kVehicleRadius) found.push_back({v, d});
+    }
+    std::sort(found.begin(), found.end(), [](const Candidate& a, const Candidate& b) { return a.distance < b.distance; });
+    if (found.size() > kVehicleMaxStreamed) found.resize(kVehicleMaxStreamed);
+    std::vector<VehicleSource> next;
+    for (const auto& c : found) {
+        auto existing = std::find_if(g_vehicleSources.begin(), g_vehicleSources.end(),
+                                     [&](const VehicleSource& s) { return s.vehicle == c.vehicle; });
+        if (existing != g_vehicleSources.end()) {
+            next.push_back(std::move(*existing));
+            continue;
+        }
+        VehicleSource source{c.vehicle, g_nextVehicleEntity++, AssetPath(c.vehicle->cls)};
+        if (!g_nextVehicleEntity) g_nextVehicleEntity = 1;
+        if (source.cls.empty()) continue;
+        Log("vehicles: streaming %s (%s)", Name(c.vehicle).c_str(), source.cls.c_str());
+        next.push_back(std::move(source));
+    }
+    g_vehicleSources = std::move(next);
+}
+
+void SendVehicles(const FVector& origin, uint32_t timeMs) {
+    for (const auto& s : g_vehicleSources) {
+        if (!IsLive(s.vehicle)) continue;
+        Call location(s.vehicle, "K2_GetActorLocation"), rotation(s.vehicle, "K2_GetActorRotation");
+        if (!location.invoke() || !rotation.invoke()) continue;
+        auto at = location.get<FVector>("ReturnValue");
+        auto r = rotation.get<FRotator>("ReturnValue");
+        float position[3]{at.x + origin.x, at.y + origin.y, at.z + origin.z}, angles[3]{r.pitch, r.yaw, r.roll};
+        Call driver(s.vehicle, "GetDriver");
+        uint8_t flags = driver.invoke() && IsLive(driver.get<UObject*>("ReturnValue")) ? kVehicleDriven : 0;
+        VehiclePacket packet;
+        if (EncodeVehicle(g_session, s.entity, timeMs, position, angles, s.cls, flags, packet)) {
+            g_net->SendRaw(&packet, sizeof packet);
+            g_enemyStats.bytes += sizeof packet;
+        }
+    }
+}
+
+void ReceiveVehicle(const char* data, int len, double now) {
+    VehiclePacket packet;
+    if (!DecodeVehicle(data, len, packet) || packet.session != g_peer.session || !g_peer.session) {
+        ++g_enemyStats.rejected;
+        return;
+    }
+    if (!AcceptEnemies(now)) return;
+    auto it = g_vehicleReplicas.find(packet.entity);
+    if (it == g_vehicleReplicas.end()) {
+        if (g_vehicleReplicas.size() >= kVehicleMaxStreamed * 2) return;
+        it = g_vehicleReplicas.emplace(packet.entity, VehicleReplica{}).first;
+    }
+    auto& r = it->second;
+    if (r.cls != packet.cls) {
+        if (IsLive(r.actor)) Call(r.actor, "K2_DestroyActor").invoke();
+        r = VehicleReplica{};
+        r.cls = packet.cls;
+    }
+    r.track.Push(packet);
+    r.lastArrival = now;
+}
+
+void DestroyVehicleReplicas() {
+    for (auto& [entity, r] : g_vehicleReplicas)
+        if (IsLive(r.actor)) Call(r.actor, "K2_DestroyActor").invoke();
+    if (!g_vehicleReplicas.empty()) Log("vehicles: removed %d replicas", static_cast<int>(g_vehicleReplicas.size()));
+    g_vehicleReplicas.clear();
+}
+
+// A display-only copy of the host's vehicle: the same blueprint, without physics or collision.
+UObject* SpawnVehicleReplica(UObject* context, VehicleReplica& r, uint32_t entity, const FTransform& xf) {
+    static UObject* classClass = FindClass("Class");
+    UObject* cls = FindObject(r.cls.c_str(), classClass);
+    if (!IsLive(cls)) {
+        RequestAssetLoad(r.cls);
+        if (!r.missingLogged) Log("vehicles: replica %u waits for %s to load", entity, r.cls.c_str());
+        r.missingLogged = true;
+        return nullptr;
+    }
+    Call begin(C.statics, "BeginSpawningActorFromClass");
+    begin.set("WorldContextObject", context).set("ActorClass", cls).set("SpawnTransform", xf).setBool("bNoCollisionFail", true);
+    UObject* actor = begin.invoke() ? begin.get<UObject*>("ReturnValue") : nullptr;
+    if (!actor) return nullptr;
+    Call(C.statics, "FinishSpawningActor").set("Actor", actor).set("SpawnTransform", xf).invoke();
+    if (!IsLive(actor)) return nullptr;
+    if (auto body = Prop(actor, "VehicleMesh")) Call(body, "SetSimulatePhysics").setBool("bSimulate", false).invoke();
+    Call(actor, "SetActorEnableCollision").setBool("bNewActorEnableCollision", false).invoke();
+    Log("vehicles: replica %u is a %s", entity, Name(cls).c_str());
+    return actor;
+}
+
+void UpdateVehicleReplicas(UObject* pawn, double now) {
+    FVector origin = WorldOrigin(pawn);
+    double senderMs = g_motion.SenderMs();
+    for (auto it = g_vehicleReplicas.begin(); it != g_vehicleReplicas.end();) {
+        auto& r = it->second;
+        if (now - r.lastArrival > kVehicleTimeout) {
+            if (IsLive(r.actor)) {
+                Log("vehicles: replica %u expired", it->first);
+                Call(r.actor, "K2_DestroyActor").invoke();
+            }
+            it = g_vehicleReplicas.erase(it);
+            continue;
+        }
+        VehicleTrack::Sample s;
+        if (!r.track.At(senderMs, s)) {
+            ++it;
+            continue;
+        }
+        FVector at{s.position[0] - origin.x, s.position[1] - origin.y, s.position[2] - origin.z};
+        FRotator facing{s.rotation[0], s.rotation[1], s.rotation[2]};
+        if (!IsLive(r.actor) && now - r.lastSpawnAttempt >= 1.0) {
+            r.lastSpawnAttempt = now;
+            FTransform xf{};
+            float q[4];
+            RotatorToQuat(facing.pitch, facing.yaw, facing.roll, q);
+            xf.rotation = {q[0], q[1], q[2], q[3]};
+            xf.translation = at;
+            xf.scale = {1, 1, 1};
+            r.actor = SpawnVehicleReplica(pawn, r, it->first, xf);
+        }
+        if (IsLive(r.actor))
+            Call(r.actor, "K2_SetActorLocationAndRotation").set("NewLocation", at).set("NewRotation", facing)
+                .setBool("bSweep", false).setBool("bTeleport", true).invoke();
+        ++it;
+    }
+}
+
+// The host's state reports a bike wherever it rides, also as a passenger on a companion's bike; the partner's
+// cloned bike stays away when a vehicle replica already sits there.
+bool VehicleReplicaAt(const FVector& at) {
+    for (const auto& [entity, r] : g_vehicleReplicas) {
+        if (!IsLive(r.actor)) continue;
+        Call where(r.actor, "K2_GetActorLocation");
+        if (!where.invoke()) continue;
+        auto p = where.get<FVector>("ReturnValue");
+        float dx = p.x - at.x, dy = p.y - at.y, dz = p.z - at.z;
+        if (dx * dx + dy * dy + dz * dz < 250.f * 250.f) return true;
+    }
+    return false;
+}
+
 void FinishEnemyScan(UObject* pawn) {
     Call me(pawn, "K2_GetActorLocation");
     if (!me.invoke()) return;
@@ -3627,6 +3900,7 @@ void FinishEnemyScan(UObject* pawn) {
         if (kept) found.push_back({o, -1.f, false});
         else if (best <= kEnemyRadius * kEnemyRadius) found.push_back({o, best, companion});
     }
+    if (IsHost()) SelectVehicles(pawn, at);
     std::sort(found.begin(), found.end(), [](const Candidate& a, const Candidate& b) { return a.distance < b.distance; });
     if (found.size() > kEnemyMaxStreamed) found.resize(kEnemyMaxStreamed);
     std::vector<EnemySource> next;
@@ -3678,12 +3952,15 @@ void StepEnemyScan(UObject* pawn) {
             g_enemyScan.components[o->outer].push_back(o);
         else if (kind == 2 && IsLive(o))
             g_enemyScan.pawns.push_back(o);
+        else if (kind == 3 && IsLive(o))
+            g_enemyScan.vehicles.push_back(o);
     }
     g_enemyScan.cursor = end;
     if (end >= count) {
         FinishEnemyScan(pawn);
         g_enemyScan.cursor = 0;
         g_enemyScan.pawns.clear();
+        g_enemyScan.vehicles.clear();
         g_enemyScan.components.clear();
     }
     g_enemyScan.time += Now() - start;
@@ -3765,8 +4042,10 @@ void SendEnemies(UObject* pawn, double now) {
         !EnemyStreamSendAllowed(IsHost(), peerEnabled, PlayersSeparated(), !g_kept.empty())) {
         if (!g_enemySources.empty()) Log("enemies: stopped streaming");
         g_enemySources.clear();
+        g_vehicleSources.clear();
         g_enemyScan.cursor = 0;
         g_enemyScan.pawns.clear();
+        g_enemyScan.vehicles.clear();
         g_enemyScan.components.clear();
         if (!pawn) g_enemyScan.kinds.clear();
         return;
@@ -3778,6 +4057,7 @@ void SendEnemies(UObject* pawn, double now) {
     FVector origin = WorldOrigin(pawn);
     auto timeMs = static_cast<uint32_t>(static_cast<uint64_t>(now * 1000.0));
     for (auto& e : g_enemySources) SendEnemy(e, origin, timeMs, now);
+    SendVehicles(origin, timeMs);
 }
 
 void DestroyReplica(EnemyReplica& r) {
@@ -3788,6 +4068,7 @@ void DestroyReplica(EnemyReplica& r) {
 }
 
 void DestroyEnemyReplicas() {
+    DestroyVehicleReplicas();
     for (auto& [entity, replica] : g_enemyReplicas) DestroyReplica(replica);
     if (!g_enemyReplicas.empty()) Log("enemies: removed %d replicas", static_cast<int>(g_enemyReplicas.size()));
     g_enemyReplicas.clear();
@@ -3999,6 +4280,7 @@ void UpdateEnemyReplicas(UObject* pawn, double now) {
         DestroyEnemyReplicas();
         return;
     }
+    UpdateVehicleReplicas(pawn, now);
     FVector origin = WorldOrigin(pawn);
     double senderMs = g_motion.SenderMs();
     for (auto it = g_enemyReplicas.begin(); it != g_enemyReplicas.end();) {
