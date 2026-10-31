@@ -271,15 +271,15 @@ Steamworks SDK code is bundled or linked:
   If the original owner leaves, the session ends instead of adopting Steam's
   replacement owner. In LAN mode, the player who chose Host is the host.
 
-### 4.2 State packet (protocol v10)
+### 4.2 State packet (protocol v11)
 
 [`protocol.hpp`](../src/coop/protocol.hpp) defines a fixed 145-byte
 little-endian packet, sent at 30 Hz:
 
 | Field | Type | Notes |
 |---|---|---|
-| magic, version | u32, u16 | `"DGCO"`, 10 |
-| flags | u16 | HasPawn, InVehicle, HasBike, Passenger, FriendlyFire, AcceptPassengers, Alive, SyncBikes, WorldState, SyncEnemies, Separated (host only: free roam split enemy ownership by region) |
+| magic, version | u32, u16 | `"DGCO"`, 11 |
+| flags | u16 | HasPawn, InVehicle, HasBike, Passenger, FriendlyFire, AcceptPassengers, Alive, SyncBikes, WorldState, SyncEnemies, Separated (host only: free roam split enemy ownership by region), MenuPause (sender's native pause/map/inventory menu is open) |
 | seq, timeMs | u32 each | wrapping sequence; sender's frame clock |
 | pos[3], yaw, pitch, vel[3] | f32 | finite, within ±1e8 |
 | name | char[16] | |
@@ -438,6 +438,19 @@ backend. A setup thread creates a dummy D3D11 swap chain to find the shared
 publishes an immutable frame under a mutex; `Present` draws it and restores
 D3D state. Input comes from the keyboard, the mouse and XInput (`xinput1_3`,
 `xinput1_4`, `xinput9_1_0`). Gameplay input is blocked while the menu is open.
+
+The native weapon/crafting wheel keeps its selection UI, but only its
+`WeaponWheel_DID` slowdown request is removed while a partner is connected.
+Focus and combat dilation requests remain intact. If the partner disconnects
+with the wheel still open, its native request is recreated.
+
+Native pause, map and inventory menus publish `kMenuPause` in each state
+packet. While connected, a menu pauses its world only when the partner also
+has such a menu open. Closing either player's menu resumes both worlds after
+the next state update. Transport polling and state packets continue during a
+shared pause. Disconnecting restores native single-player pause behavior.
+Only these menu pauses are controlled; the F8 overlay does not vote for a
+pause, and unrelated scripted/cinematic pauses are not blanket-reset.
 
 ### 5.6 Friendly fire
 

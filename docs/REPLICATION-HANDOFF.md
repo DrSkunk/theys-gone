@@ -107,6 +107,14 @@ every finding in docs/REPLICATION-RESEARCH.md as you go.
 
 ## Where things stand
 
+**Menu timing implementation (2026-10-31, protocol v11):** the connected
+weapon/crafting wheel removes only its own dilation request. Native pause,
+map and inventory now carry a `kMenuPause` vote: gameplay pauses only while
+both players have a menu open, and resumes when either closes. Disconnect
+restores single-player behavior. This is not a blanket reset of focus/combat
+or scripted pauses. See the timing section in REPLICATION-RESEARCH.md for
+the candidate's paired-test evidence and remaining coverage.
+
 **Free roam implemented and paired-validated (2026-10-27):** with
 `FreeRoam=1` on both peers, the host's native dual-focus streaming hook keeps
 the guest's region loaded. When the players are more than 250 m apart, the

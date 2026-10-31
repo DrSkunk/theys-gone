@@ -17,6 +17,7 @@
 #include "../src/coop/research.hpp"
 #include "../src/coop/streaming.hpp"
 #include "../src/coop/region_cache.hpp"
+#include "../src/coop/menu_time.hpp"
 
 #include <cassert>
 #include <cstring>
@@ -1277,7 +1278,46 @@ void TestReadableRegionCache() {
     std::puts("readable region cache ok");
 }
 
+void TestWheelTimePolicy() {
+    using namespace coop;
+    WheelTimePolicy policy;
+    assert(policy.Evaluate(false, true, 0) == WheelTimeAction::none);
+    assert(policy.Evaluate(true, false, 0) == WheelTimeAction::none);
+    assert(policy.Evaluate(true, true, -1) == WheelTimeAction::none);
+    assert(policy.Evaluate(true, true, 0) == WheelTimeAction::suppress);
+    assert(policy.Evaluate(true, true, 0) == WheelTimeAction::suppress);
+    policy.Suppressed(0);
+    assert(policy.Evaluate(true, true, 0) == WheelTimeAction::none);
+    assert(policy.Evaluate(false, true, 0) == WheelTimeAction::restore);
+    policy.Clear();
+    assert(policy.Evaluate(false, true, 0) == WheelTimeAction::none);
+    policy.Suppressed(1);
+    assert(policy.Evaluate(true, true, 2) == WheelTimeAction::suppress);
+    policy.Suppressed(2);
+    assert(policy.Evaluate(false, false, 2) == WheelTimeAction::none);
+    assert(policy.Evaluate(false, true, 2) == WheelTimeAction::none);
+    policy.Suppressed(3);
+    assert(policy.Evaluate(false, true, 4) == WheelTimeAction::none);
+    assert(policy.Evaluate(false, true, 3) == WheelTimeAction::none);
+    constexpr int32_t wrapped = std::numeric_limits<int32_t>::min();
+    assert(policy.Evaluate(true, true, wrapped) == WheelTimeAction::suppress);
+    policy.Suppressed(wrapped);
+    assert(policy.Evaluate(false, true, wrapped) == WheelTimeAction::restore);
+    for (bool connected : {false, true}) {
+        for (bool local : {false, true}) {
+            for (bool peer : {false, true}) {
+                for (bool managed : {false, true}) {
+                    auto target = MenuPauseTarget(connected, local, peer, managed);
+                    assert(target.has_value() == ((connected && local) || managed));
+                    if (target) assert(*target == (connected && local ? peer : local));
+                }
+            }
+        }
+    }
+}
+
 int main() {
+    TestWheelTimePolicy();
     TestReadableRegionCache();
     TestStreamingMerge();
     TestResearchLifetime();
@@ -1346,6 +1386,7 @@ int main() {
     assert(coop::ParseDebugCommand("material-probe") == DebugCommand::materialProbe);
     assert(coop::ParseDebugCommand("vehicle-probe") == DebugCommand::vehicleProbe);
     assert(coop::ParseDebugCommand("spawn-actor") == DebugCommand::spawnActor);
+    assert(coop::ParseDebugCommand("time-probe") == DebugCommand::timeProbe);
     assert(coop::ParseDebugCommand("mission-act") == DebugCommand::missionAct);
     assert(coop::ParseDebugCommand("mission-act x") == DebugCommand::unknown);
     coop::DebugRequestGate gate;
@@ -1419,7 +1460,9 @@ int main() {
     assert(coop::DecodeState(data, sizeof packet, decoded));
     packet.flags |= coop::kSeparated | coop::kSyncEnemies;
     assert(coop::DecodeState(data, sizeof packet, decoded) && (decoded.flags & coop::kSeparated));
-    packet.flags = static_cast<uint16_t>(packet.flags | (1u << 11));
+    packet.flags |= coop::kMenuPause;
+    assert(coop::DecodeState(data, sizeof packet, decoded) && (decoded.flags & coop::kMenuPause));
+    packet.flags = static_cast<uint16_t>(packet.flags | (1u << 12));
     assert(!coop::DecodeState(data, sizeof packet, decoded));
     packet.flags = coop::kPassenger | coop::kHasPawn | coop::kInVehicle;
     packet.attackKind = 2;
@@ -1433,6 +1476,9 @@ int main() {
     assert(!coop::DecodeState(data, sizeof packet, decoded));
     packet = {};
     packet.magic = coop::kMagic;
+    packet.version = coop::kProtocolVersion;
+    packet.version = 10;
+    assert(!coop::DecodeState(data, sizeof packet, decoded));
     packet.version = coop::kProtocolVersion;
     packet.flags = coop::kHasPawn;
     packet.version++;

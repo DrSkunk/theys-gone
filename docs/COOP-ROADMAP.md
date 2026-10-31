@@ -35,6 +35,10 @@ but do not replace a two-PC test when a task specifically needs one. See the
   by this result.
 - [x] Capture-mission policy decision: do not restrict either player; keep the
   shared escape as the current behavior.
+- [x] One-PC paired menu timing: both real games' weapon wheels run at normal
+  speed; Escape/map/inventory pause both worlds only while both players have
+  a menu open. Either close resumes; disconnect restores native pausing.
+  Both playthrough clocks froze and networking continued during shared pause.
 
 ## Still to do
 
@@ -90,6 +94,16 @@ but do not replace a two-PC test when a task specifically needs one. See the
    hiding is implemented and `WNG` was tested; the `OBR` intro was also
    observed. Test additional cutscenes and confirm the partner returns when a
    flashback ends.
+
+9. [~] **Broaden menu timing QA.** Wheel opening/closing and shared pause
+   passed the one-PC paired lab. A simulated-peer test also covered joining
+   with a wheel already open and preservation of another slowdown.
+   - Repeat with separate PCs and Steam, including joins/disconnects while a
+     wheel is open and actual focus/combat overlap.
+   - Cover photo mode and scripted/cinematic pause transitions without
+     accidentally sharing or cancelling their pauses.
+   - Investigate focus loss, other scripted menus and cinematic timing before
+     changing them; these paths remain unchanged.
 
 ## Out of scope for this roadmap
 

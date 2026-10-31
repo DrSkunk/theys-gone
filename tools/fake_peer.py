@@ -17,10 +17,11 @@ import struct
 import time
 
 MAGIC = 0x4F434744
-VERSION = 10
+VERSION = 11
 HAS_PAWN = 1
 WORLD_STATE = 1 << 8
 SYNC_ENEMIES = 1 << 9
+MENU_PAUSE = 1 << 11
 STORY_MAGIC = 0x54534D44
 STORY_VERSION = 3
 STORY_FORMAT = '<IHBBIIIIHHI'
@@ -346,7 +347,7 @@ def decode(data):
     damage, bx, by, bz, bp, byaw, br = values[20:27]
     jacket, trousers, cap_color, cap, attack_kind, health, actions, weapon_type, shot_sequence = values[27:36]
     world_time_of_day, world_relative_time, world_weather, world_transition_rate, story_mission = values[36:]
-    if magic != MAGIC or version != VERSION or flags & ~2047:
+    if magic != MAGIC or version != VERSION or flags & ~4095:
         return None
     if any(not math.isfinite(v) or abs(v) > 1e8 for v in (x, y, z, yaw, pitch, vx, vy, vz, damage,
                                                         bx, by, bz, bp, byaw, br, health,

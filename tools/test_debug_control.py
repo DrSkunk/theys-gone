@@ -28,6 +28,7 @@ class DebugControlTests(unittest.TestCase):
         result = self.directory / "TheysGone-debug-result.ini"
         for command, state in (("continue-title", "ok"), ("continue-title", "error"),
                                ("ui-probe", "ok"), ("ui-probe", "error"),
+                               ("time-probe", "ok"), ("time-probe", "error"),
                                ("enemy-health-all-on", "ok"), ("enemy-health-all-on", "error"),
                                ("kill-owned-enemy", "ok"), ("kill-owned-enemy", "error")):
             def respond(_):

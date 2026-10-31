@@ -92,6 +92,8 @@ but still need paired in-game validation.
    and mission progress authoritative across both regions.
 5. **Preserve enemy identity across ownership changes** and polish the
    partner's map icon.
+6. **Finish co-op menu timing QA.** Check weapon-wheel and shared-pause
+   behavior on separate PCs, plus focus/combat and cinematic coverage.
 
 The detailed status, verification steps, and test evidence are in the
 [co-op roadmap](docs/COOP-ROADMAP.md); live-test evidence is recorded in
@@ -278,6 +280,19 @@ their own enemies; each side shows the other's enemies as replicas.
 The game window must be focused. The F8 settings overlay does not pause the
 game. Session hosting/joining is in the native title/pause **CO-OP** menu.
 
+While a partner is connected, the weapon/crafting wheel stays usable but its
+slow-motion request is removed. Focus and combat slow motion are not changed.
+Normal weapon-wheel slowdown returns when playing alone, including when a
+partner disconnects while the wheel is still open. This is experimental:
+paired testing with two real game instances on one PC passed; separate-PC
+validation is still pending.
+
+While connected, opening the native pause menu, map or inventory keeps
+gameplay running unless **both players** have one of these menus open.
+Closing either player's menu resumes gameplay. When the partner disconnects,
+normal single-player pausing returns. The F8 settings overlay and weapon
+wheel do not count as pause requests. Both players need protocol v11.
+
 On a **Steam Deck**, the mod reads XInput, not Steam Input actions. If the
 gamepad shortcuts do nothing, pick the *Gamepad With Joystick Trackpad*
 template under *Controller Settings → Current Layout → Templates*.
@@ -353,7 +368,7 @@ All keys are in the `[Coop]` section of `TheysGone.ini`.
 The plugin writes `TheysGone.log` next to itself. A healthy start looks like this:
 
 ```text
-Theys Gone … starting (protocol v10)
+Theys Gone … starting (protocol v11)
 ProcessEvent hook installed
 GNames via pointer at rva 0x…, … names
 network: listening on UDP 27777, …
