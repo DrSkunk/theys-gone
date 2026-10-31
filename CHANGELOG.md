@@ -1,5 +1,39 @@
 # Changelog
 
+## [0.6.0](https://github.com/DrSkunk/theys-gone/compare/v0.5.1...v0.6.0) (2026-10-31)
+
+
+### ⚠ BREAKING CHANGES
+
+* coordinate co-op menu pause and weapon-wheel timing ([#23](https://github.com/DrSkunk/theys-gone/issues/23))
+* protocol v10 (state packet gains storyMission) and DMEN v2; both players need this release.
+
+### Features
+
+* coordinate co-op menu pause and weapon-wheel timing ([#23](https://github.com/DrSkunk/theys-gone/issues/23)) ([90a03af](https://github.com/DrSkunk/theys-gone/commit/90a03af131c6b6b6674f49ce71675f577f9047b1))
+* **enemies:** companion replicas wear the host's materials ([#20](https://github.com/DrSkunk/theys-gone/issues/20)) ([34fc543](https://github.com/DrSkunk/theys-gone/commit/34fc543fd6d8ff2a53ae58940ac3ab499d811ac7))
+* guest follows the host's missions from the open world (protocol v10) ([#19](https://github.com/DrSkunk/theys-gone/issues/19)) ([07e7573](https://github.com/DrSkunk/theys-gone/commit/07e75737e18fd3010a2df6eba472bed280c6979a))
+* **steam:** optional Spacewar (app 480) lobbies ([#16](https://github.com/DrSkunk/theys-gone/issues/16)) ([417ad05](https://github.com/DrSkunk/theys-gone/commit/417ad055c2060b50d8d6fa9fedde6116fb82af60))
+* story mission map and passenger seat rule for co-op ([#11](https://github.com/DrSkunk/theys-gone/issues/11)) ([138199c](https://github.com/DrSkunk/theys-gone/commit/138199c4f53b5c790c83fbb6207e2820b7a1743e))
+* **vehicles:** show vehicles near the host, such as Boozer's bike ([#21](https://github.com/DrSkunk/theys-gone/issues/21)) ([cf8cc8a](https://github.com/DrSkunk/theys-gone/commit/cf8cc8a6517cfc6dc86b268a1983f475febcc90a))
+
+
+### Bug Fixes
+
+* cap adopted-save reloads; mission progress log; lab fixes ([#18](https://github.com/DrSkunk/theys-gone/issues/18)) ([af18bac](https://github.com/DrSkunk/theys-gone/commit/af18bacd498d29fa1f4835453a411499c4c90fe0))
+* stop the partner stand-in from alerting enemies in stealth missions ([#14](https://github.com/DrSkunk/theys-gone/issues/14)) ([49944c5](https://github.com/DrSkunk/theys-gone/commit/49944c54f1997cf3b5f750019b2d0f0023b9204c))
+
+
+### Performance
+
+* cache VirtualQuery results and GNames misses; hide the ride prompt instead of respawning it ([#15](https://github.com/DrSkunk/theys-gone/issues/15)) ([1e7607f](https://github.com/DrSkunk/theys-gone/commit/1e7607fdc67e5b7d3e9a1862ab3d16eb747e495b))
+* **coop:** stop scanning for the controller every tick without one ([#17](https://github.com/DrSkunk/theys-gone/issues/17)) ([8bc7935](https://github.com/DrSkunk/theys-gone/commit/8bc7935c2d6f582c51ec5320c8083336b44136b1))
+
+
+### Documentation
+
+* clarify co-op roadmap ([#22](https://github.com/DrSkunk/theys-gone/issues/22)) ([64579e5](https://github.com/DrSkunk/theys-gone/commit/64579e58dbdf886b9c5a66180e3e50d07d6531cf))
+
 ## [0.5.1](https://github.com/DrSkunk/theys-gone/compare/v0.5.0...v0.5.1) (2026-10-27)
 
 
