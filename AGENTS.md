@@ -38,7 +38,7 @@ testable rules live in headers (`enemy.hpp`, `protocol.hpp`, `streaming.hpp`,
 experiments live only in [`src/coop/research.cpp`](src/coop/research.cpp)
 behind `[Research]` INI keys; they are not part of normal play.
 
-## Current state (protocol v10)
+## Current state (protocol v11)
 
 Validated in paired live tests (two PCs, two games):
 
@@ -57,7 +57,7 @@ Validated in paired live tests (two PCs, two games):
   stay with their owner across a split or regroup until they die, lose
   interest for 6 s, or hit 180 s.
 
-Implemented but **not yet validated live**:
+Implemented; **broader or two-PC validation still pending**:
 
 - Story mission policy ([docs/STORY-COOP.md](docs/STORY-COOP.md),
   `mission_policy.hpp`): each game reads its running mission; during
@@ -80,6 +80,22 @@ Implemented but **not yet validated live**:
   damage the host after a regroup. Two paired attempts were inconclusive;
   the second streamed the guest's debug pack, but debug-spawned pawns seem
   to stay on the local player (see REPLICATION-RESEARCH.md).
+
+- Weapon-wheel timing: while connected, remove only `WeaponWheel_DID` with
+  `ResetBendTimeDilation`, leaving focus/combat effects unchanged. Restore the
+  wheel's request on disconnect if it remains open. Both real games opened
+  and closed their wheels at global dilation 1 in the one-PC paired lab.
+  A simulated-peer test also covered joins, disconnects and preserving a
+  separate slowdown; two-PC and actual focus/combat validation are pending.
+  `time-probe` reports timing/pause state.
+
+- Shared menu pause (protocol v11): Escape, map and inventory keep gameplay
+  running while connected unless both players have a pause menu open.
+  Closing either menu resumes; disconnect restores single-player pausing.
+  The F8 overlay and weapon wheel do not vote for a pause. One-PC paired
+  validation passed: both playthrough clocks froze while both menus were
+  open, networking continued, either close resumed, and disconnect restored
+  native pausing. Separate-PC and scripted/cinematic coverage remain open.
 
 Known gaps, roughly in priority order:
 

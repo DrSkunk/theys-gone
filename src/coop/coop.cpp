@@ -9,6 +9,7 @@
 #include "mission_policy.hpp"
 #include "streaming.hpp"
 #include "streaming_hook.hpp"
+#include "menu_time.hpp"
 #include "menu.hpp"
 #include "native_ui.hpp"
 #include "session.hpp"
@@ -361,6 +362,64 @@ UObject* Prop(UObject* obj, const char* name) {
 UObject* WeakProp(UObject* obj, const char* name) {
     uint64_t v = 0;
     return obj && GetProp(obj, name, v) ? ResolveWeak(v) : nullptr;
+}
+
+struct WheelTimeState {
+    UObject* controller = nullptr;
+    UObject* statics = nullptr;
+    int requestOffset = -1;
+    BoundFunction reset, set;
+    WheelTimePolicy policy;
+    float dilation = 1;
+    bool ready = false, failed = false;
+} g_wheelTime;
+
+void UpdateWeaponWheelTime(double now);
+bool DebugError(const char* message);
+
+struct MenuPauseState {
+    UObject* controller = nullptr;
+    BoundFunction status, set;
+    bool localMenu = false, managed = false, ready = false, failed = false;
+} g_menuPause;
+
+void UpdateMenuPause(double now);
+
+bool ReadPauseMenu(bool& open) {
+    Call pause(g_controller, "IsPauseMenuActive");
+    if (!pause.invoke()) return false;
+    Call get(FindDefaultObject("UIManager"), "GetUIManager");
+    if (!get.invoke()) return false;
+    auto manager = get.get<UObject*>("ReturnValue");
+    // Escape belongs to the controller; UIManager's query covers map/inventory, not Escape.
+    Call active(manager, "IsPauseMenuActive");
+    if (!IsLive(manager) || !active.invoke()) return false;
+    open = pause.get<bool>("ReturnValue") || active.get<bool>("ReturnValue");
+    return true;
+}
+
+bool ProbeMenuTime() {
+    if (!IsLive(g_controller)) return DebugError("time-probe needs a local controller");
+    bool wheel = false;
+    int32_t request = -1, focusRequest = -1;
+    float scale = 0;
+    Call dilation(C.statics, "GetGlobalTimeDilation"), paused(g_controller, "GetPausedStatus"),
+        active(g_controller, "IsPauseMenuActive");
+    if (!GetBoolProp(g_controller, "WeaponWheelActive", wheel) ||
+        !GetProp(g_controller, "WeaponWheel_DID", request) ||
+        !GetProp(g_controller, "WeaponWheelTimeDilation", scale) ||
+        !GetProp(g_controller, "FocusSlowMo_DID", focusRequest) ||
+        !dilation.set("WorldContextObject", g_controller).invoke() || !paused.invoke() || !active.invoke())
+        return DebugError("time-probe could not resolve menu timing state");
+    Log("menu time: wheel=%d request=%d scale=%.4f global=%.4f paused=%d camera-tick=%d focus-request=%d",
+        wheel, request, scale, dilation.get<float>("ReturnValue"), paused.get<bool>("IsGamePaused"),
+        paused.get<bool>("CameraTickEnabled"), focusRequest);
+    Log("menu pause: native-menu=%d local=%d peer=%d managed=%d",
+        active.get<bool>("ReturnValue"), g_menuPause.localMenu, (g_peer.flags & kMenuPause) != 0, g_menuPause.managed);
+    bool menu = false;
+    if (!ReadPauseMenu(menu)) return DebugError("time-probe could not read the UI menu state");
+    Log("menu pause: ui-menu=%d", menu);
+    return true;
 }
 
 // Modular character parts: Bend "look part" components, or anything slaved to the body mesh.
@@ -1217,6 +1276,7 @@ void SendLocalState(UObject* pawn, double now) {
     if (g_settings.motorcycles) p.flags |= kSyncBikes;
     if (g_settings.enemies) p.flags |= kSyncEnemies;
     if (IsHost() && g_separated) p.flags |= kSeparated;
+    if (g_menuPause.localMenu) p.flags |= kMenuPause;
     if (PassengerSeatOffered(g_settings.passengers, g_mission.flags)) p.flags |= kAcceptPassengers;
     std::snprintf(p.name, sizeof p.name, "%s", session::TruncateUtf8(LocalName(), sizeof p.name - 1).c_str());
     g_damage.Fill(p);
@@ -2365,6 +2425,7 @@ void UpdateDebugTools(double now) {
         else success = SetStreamFocus(Narrow(std::wstring(arg)));
     }
     else if (command == DebugCommand::streamProbe) success = ProbePartnerStreaming();
+    else if (command == DebugCommand::timeProbe) success = ProbeMenuTime();
     else if (command == DebugCommand::moveBy) {
         wchar_t arg[256]{};
         GetPrivateProfileStringW(L"Debug", L"Arg", L"", arg, 256, path.c_str());
@@ -5084,6 +5145,138 @@ bool PartnerConnected(double now) {
     return now - g_lastRecv < kPeerTimeout;
 }
 
+void UpdateMenuPause(double now) {
+    if (g_menuPause.controller != g_controller) {
+        g_menuPause = {};
+        g_menuPause.controller = g_controller;
+    }
+    if (!IsLive(g_controller) || g_menuPause.failed) return;
+    bool connected = PartnerConnected(now);
+    if (!g_menuPause.ready) {
+        if (!connected) return;
+        if (!IsLive(C.statics) ||
+            !g_menuPause.status.Bind(g_controller->cls, "GetPausedStatus", {"IsGamePaused", "CameraTickEnabled"}) ||
+            !g_menuPause.set.Bind(C.statics->cls, "SetGamePaused", {"WorldContextObject", "bPaused", "ReturnValue"})) {
+            g_menuPause.failed = true;
+            Log("menu pause: native pause APIs unavailable; pause unchanged");
+            return;
+        }
+        g_menuPause.ready = true;
+    }
+    bool menu = false;
+    if (!ReadPauseMenu(menu) || !g_menuPause.status.Invoke(g_controller)) {
+        g_menuPause.failed = true;
+        g_menuPause.localMenu = false;
+        Log("menu pause: could not read menu/pause state; timing control disabled");
+        return;
+    }
+    g_menuPause.localMenu = IsLive(g_pawn) && menu;
+    auto target = MenuPauseTarget(connected, g_menuPause.localMenu, (g_peer.flags & kMenuPause) != 0,
+                                 g_menuPause.managed);
+    if (!target) return;
+    if (*target != g_menuPause.status.Get<bool>(0)) {
+        g_menuPause.set.Set(0, g_controller);
+        g_menuPause.set.Set(1, *target);
+        // This build returns false after a successful unpause; verify the resulting state instead.
+        if (!g_menuPause.set.Invoke(C.statics) || !g_menuPause.status.Invoke(g_controller) ||
+            g_menuPause.status.Get<bool>(0) != *target) {
+            g_menuPause.failed = true;
+            g_menuPause.localMenu = false;
+            Log("menu pause: could not %s game; timing control disabled", *target ? "pause" : "resume");
+            return;
+        }
+        Log("menu pause: %s local=%d peer=%d connected=%d", *target ? "paused" : "running",
+            g_menuPause.localMenu, (g_peer.flags & kMenuPause) != 0, connected);
+    }
+    g_menuPause.managed = connected && g_menuPause.localMenu;
+}
+
+void UpdateWeaponWheelTime(double now) {
+    if (g_wheelTime.controller != g_controller) {
+        g_wheelTime = {};
+        g_wheelTime.controller = g_controller;
+    }
+    if (!IsLive(g_controller) || g_wheelTime.failed) return;
+    if (!g_wheelTime.ready) {
+        if (!PartnerConnected(now)) return;
+        auto property = FindChild(g_controller->cls, "WeaponWheel_DID");
+        g_wheelTime.statics = FindDefaultObject("BendGameplayStatics");
+        if (!property || Name(property->cls) != "IntProperty" ||
+            !IsLive(g_wheelTime.statics) ||
+            !g_wheelTime.reset.Bind(g_wheelTime.statics->cls, "ResetBendTimeDilation", {"DilationID"}) ||
+            !g_wheelTime.set.Bind(g_wheelTime.statics->cls, "SetBendTimeDilation", {"TimeDilation", "DilationID"})) {
+            g_wheelTime.failed = true;
+            Log("menu time: weapon-wheel timing APIs unavailable; slowdown unchanged");
+            return;
+        }
+        g_wheelTime.requestOffset = PropertyOffset(property);
+        if (g_wheelTime.requestOffset < 0) {
+            g_wheelTime.failed = true;
+            Log("menu time: invalid weapon-wheel request property; slowdown unchanged");
+            return;
+        }
+        g_wheelTime.ready = true;
+    }
+    bool open = false;
+    if (!GetBoolProp(g_controller, "WeaponWheelActive", open)) {
+        g_wheelTime.failed = true;
+        Log("menu time: weapon-wheel state unavailable; slowdown unchanged");
+        return;
+    }
+    auto request = reinterpret_cast<int32_t*>(reinterpret_cast<uint8_t*>(g_controller) + g_wheelTime.requestOffset);
+    auto action = g_wheelTime.policy.Evaluate(PartnerConnected(now), open, *request);
+    if (action == WheelTimeAction::none) return;
+    if (action == WheelTimeAction::suppress) {
+        float scale = 0;
+        auto settingsClass = FindDefaultObject("GameUserSettings");
+        Call settings(settingsClass, "GetGameUserSettings");
+        if (!GetProp(g_controller, "WeaponWheelTimeDilation", scale) || !settings.invoke()) {
+            g_wheelTime.failed = true;
+            Log("menu time: weapon-wheel scale unavailable; slowdown unchanged");
+            return;
+        }
+        Call speed(settings.get<UObject*>("ReturnValue"), "GetGameSpeedFloat");
+        if (!speed.invoke()) {
+            g_wheelTime.failed = true;
+            Log("menu time: game-speed multiplier unavailable; slowdown unchanged");
+            return;
+        }
+        g_wheelTime.dilation = scale * speed.get<float>("ReturnValue");
+        // Native scale 1 creates no request, leaving a stale ID that may belong to another effect.
+        if (!std::isfinite(g_wheelTime.dilation) || g_wheelTime.dilation <= 0 || g_wheelTime.dilation == 1) {
+            g_wheelTime.failed = true;
+            Log("menu time: unsupported weapon-wheel dilation %.4f; timing control disabled", g_wheelTime.dilation);
+            return;
+        }
+        g_wheelTime.reset.Set(0, *request);
+        if (!g_wheelTime.reset.Invoke(g_wheelTime.statics)) {
+            g_wheelTime.failed = true;
+            Log("menu time: could not remove weapon-wheel slowdown");
+            return;
+        }
+        // Remove only the wheel's request; resetting global time would also erase focus and combat effects.
+        g_wheelTime.policy.Suppressed(*request);
+        Log("menu time: removed weapon-wheel slowdown request=%d scale=%.4f", *request, g_wheelTime.dilation);
+    } else {
+        g_wheelTime.set.Set(0, g_wheelTime.dilation);
+        g_wheelTime.set.Set(1, int32_t{-1});
+        if (!g_wheelTime.set.Invoke(g_wheelTime.statics)) {
+            g_wheelTime.failed = true;
+            Log("menu time: could not restore single-player weapon-wheel slowdown");
+            return;
+        }
+        auto restored = g_wheelTime.set.Get<int32_t>(1);
+        if (restored == -1) {
+            g_wheelTime.failed = true;
+            Log("menu time: single-player weapon-wheel slowdown returned no request ID");
+            return;
+        }
+        *request = restored;
+        g_wheelTime.policy.Clear();
+        Log("menu time: restored single-player weapon-wheel slowdown request=%d", *request);
+    }
+}
+
 std::string PartnerName() {
     std::string steamName = g_kind == session::Kind::Steam ? g_steam.PartnerName() : std::string();
     return !steamName.empty() ? steamName : g_remoteName.empty() ? "Your partner" : g_remoteName;
@@ -5914,6 +6107,7 @@ void Tick(bool hudFrame) {
     }
     double now = g_frameClock.Update(wall, engineTime, engineValid);
     g_tickNow = now;
+    UpdateWeaponWheelTime(now);
     // Without a controller (title menu, loads) FindLocalController walks every UObject; don't do that per tick.
     if (now - g_lastScan >= (IsLive(g_controller) ? 1.0 : 0.5)) {
         g_lastScan = now;
@@ -5960,6 +6154,7 @@ void Tick(bool hudFrame) {
     g_net->Poll(now);
     if (g_net != &g_steam) g_steam.Poll(now);
     ReceiveRemote(now);
+    UpdateMenuPause(now);
     UpdateSession(now);
     if (g_cfg.menuDiscovery) {
         static bool held = false;
@@ -6200,6 +6395,12 @@ void HookedProcessEvent(UObject* obj, UObject* fn, void* parms) {
     if (g_ready && g_cfg.hostSave && GetCurrentThreadId() == g_gameThread)
         ObserveSaveEvent(obj, fn, parms);
     g.processEvent(obj, fn, parms);
+    if (ownUi && obj == g_controller) {
+        g_inTick = true;
+        UpdateWeaponWheelTime(Now());
+        UpdateMenuPause(Now());
+        g_inTick = false;
+    }
     if (ownUi && IsLive(obj)) {
         g_inTick = true;
         ui::AfterEvent(obj, fn);

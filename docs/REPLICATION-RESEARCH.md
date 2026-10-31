@@ -1,5 +1,153 @@
 # Built-in Unreal replication: feasibility research
 
+## Weapon-wheel and pause timing investigation (2026-10-31)
+
+Read-only analysis used the isolated `run1` executable, verified against
+Steam build 19221447 (SHA-256
+`17c2fca01d566914147a6d4924d038cb1f5a822c2829e4c45862e2bf837730b3`),
+and a fresh full reflection dump from a disposable `time-control` lab clone.
+No real game install or saves were modified.
+
+The runtime controller Blueprint exposes `WeaponWheel_DID` (IntProperty),
+`WeaponWheelTimeDilation` (FloatProperty), and the native bitfield
+`WeaponWheelActive`. `OpenWeaponWheelAction` has locals for
+`GetGameSpeedFloat`, multiplication, and `SetBendTimeDilation`'s output ID.
+These are resolved by reflection in the implementation, not hard-coded
+offsets.
+
+Static disassembly confirms `BendGameplayStatics.SetBendTimeDilation`'s
+native thunk at RVA `0x13beab0` calls `0x5bd0f0`. Requests are stored as
+float/ID pairs; the lowest request determines world dilation.
+`ResetBendTimeDilation`'s thunk at `0x13b7eb0` calls `0x5b9f70`, which removes
+only the matching request before recomputing dilation. Removing the wheel's
+own request therefore does not clear focus, combat, or other requests.
+Setting global dilation to 1, or resetting all requests, would not provide
+that isolation.
+
+The plugin now removes the wheel request while connected, checks again after
+controller events so an opening wheel is handled promptly, and recreates the
+request if the partner disconnects while the wheel is open. No INI values,
+game files, or network packet layouts are changed. The debug-only
+`time-probe` reports the wheel and focus request IDs, wheel scale, global
+dilation, and pause/camera-tick state.
+
+| Path found | Evidence and current policy |
+|---|---|
+| Weapon/crafting wheel | Dedicated `WeaponWheel_DID`; only this request is removed while connected |
+| Focus aiming | `FocusSlowMo_DID`, `FocusTimeDilation`; kept unchanged |
+| Vehicle aiming | `VehicleManualAimTimeDilation`; separate native request path, kept unchanged |
+| Melee hit effects | `GetTimeDilationValueForMeleeCriticalHit`, `GetTimeDilationValueForMeleeHitOnBike`; kept unchanged |
+| Native pause menu | `OpenPauseMenu`, `TogglePauseMenu`, `GetPausedStatus`, `SetPauseWithCameraTick`; no shared-pause behavior implemented |
+| Focus loss | Controller `PauseOnFocusLost`/`PauseOnFocusGained` and a static focus-loss handler; unchanged |
+| Cinematic pause | `TurnOnCinematicPause`, world-settings `MatineeTimeDilation` and `Pauser`; not overridden |
+| Map/inventory | Both observed with `paused=1`, `camera-tick=0`, `global=1.0000`; this is a true local pause, not a wheel-style dilation request |
+| Other scripted menus | Need individual in-game observations |
+
+### Isolated single-game smoke test
+
+One real game in the disposable `time-control` clone, plus
+`tools/fake_peer.py` on loopback UDP, exercised the connection transitions.
+This is **not a paired game or two-PC validation**. The final candidate ASI
+SHA-256 was
+`1df5b0baf889f80748324e386837a85b21080930930115b686a1b91fc3cb117f`.
+
+| Check | Recorded result |
+|---|---|
+| Standalone wheel (Q held) | Final log `21:16:33.791`: `wheel=1`, request `-2147483647`, `global=0.2000` |
+| Join with wheel already open | `21:16:50.925`: peer connected; `21:16:50.941`: removed wheel request `-2147483647` |
+| Preserve another slowdown | A separate `SetBendTimeDilation(0.1)` request `-2147483646` remained active after joining (`21:16:59.226`) and closing the wheel (`21:17:00.774`): `global=0.1000` |
+| Reopen while connected | After explicitly removing only the injected request, `21:17:02.808`: visible wheel, `wheel=1`, `global=1.0000` |
+| Disconnect with wheel open | `21:17:30.936`: restored request `-2147483644`; `21:17:44.040`: `wheel=1`, `global=0.2000` |
+| Close after disconnect | `21:17:45.557`: `wheel=0`, `global=1.0000`; no stuck slowdown |
+| Escape pause menu and M map | First candidate log `21:11:27.230` and `21:11:30.316`: `paused=1`, `camera-tick=0`, `global=1.0000`, with the simulator connected |
+| I inventory | Final log `21:17:47.093`: `paused=1`, `camera-tick=0`, `global=1.0000`, playing alone |
+
+The first candidate also demonstrated connected opening/closing at
+`21:10:54.130` / `21:10:56.197` and disconnect restoration at
+`21:12:20.143`. The final candidate adds guards for invalid scales, the
+native scale-1/no-request case, and a missing restoration ID. The native
+request IDs are negative in these runs; only `-1` is treated as invalid.
+
+Logs and screenshots are archived on Cachy outside the repo at
+`~/TheysGone-lab/archive/time-control-20261031/`: `baseline.log`,
+`candidate-first.log`, `candidate-final.log`, `wheel-single.png`,
+`wheel-final.png`, `pause.png`, `map.png`, and `inventory-final.png`.
+The base ASI matched the clone's pre-test backup
+(`251025671c43a00cb850a80da76ec88ba7755767e42e440132a2dbb294539945`);
+the base INI also matched. The disposable clone was stopped and removed
+after archiving, leaving the base install and saves untouched.
+
+Remaining after this smoke test (the paired run below covers opening/closing):
+two real games opening/closing independently, joins and
+disconnects in both host/guest roles, actual focus/combat overlap, focus
+loss, and mission/cinematic coverage. The injected request proves selective
+removal, not those gameplay paths. An aim/middle-click attempt did not
+activate focus (`focus-request=0`); it is not counted as a focus test.
+Pause/map/inventory were unchanged in that candidate. The subsequent policy
+and paired verification are recorded below.
+
+## Shared menu pause: paired lab verification (2026-10-31)
+
+User-selected policy: one player's pause menu keeps gameplay running; both
+players opening pause/map/inventory pauses both worlds. Closing either menu
+resumes. Protocol v11 adds state flag `kMenuPause` without changing the
+145-byte layout; v10 peers are rejected. Standalone/disconnected games keep
+native pause and wheel timing.
+
+Two **real game instances on one PC**, using disposable `pause-host` and
+`pause-guest` reflink clones on Cachy, connected over loopback UDP
+27883/27884. The guest used the existing sandboxed Steam client and native
+host-save transfer (`HostSave=1`). Both gameplay pawns had health 121.875 at
+`21:46:16.290` / `21:46:16.592`, with partner avatars/poses streaming.
+This is paired in-game validation, **not a separate-PC or Steam-network test**.
+Both ASIs had SHA-256
+`49b4311def3b59db7e04ac0d6e869a4695252603b9317248f9989d970b3f9144`.
+
+Reflection and live probes established two complementary queries:
+`BendPlayerController.IsPauseMenuActive` detects Escape but not map;
+`UIManager.IsPauseMenuActive` detects map/inventory but not Escape.
+The implementation uses their logical OR, not the world's effective paused
+flag, to publish menu intent. This keeps a vote active after suppressing the
+native pause and avoids a feedback loop.
+
+`GameplayStatics.SetGamePaused(false)` returned false even though
+`GetPausedStatus` confirmed a successful unpause in the diagnostic run.
+The final candidate verifies the actual pause state after invocation instead
+of interpreting that return as failure. No hard-coded engine offsets,
+global-dilation override, or full object scans were introduced.
+
+| Paired check | Evidence |
+|---|---|
+| Host Escape only | `21:46:18.868`: host `paused=0 local=1 peer=0`; `21:46:20.151`: guest `paused=0 local=0 peer=1` |
+| World keeps running with one menu | `GetTimeSincePlaythroughStart` advanced host 2473.36 → 2476.85 (`21:46:19.516` / `21:46:23.131`), guest 2417.86 → 2420.81 (`21:46:20.800` / `21:46:23.884`) |
+| Both Escape menus | `21:46:37.228` host and `21:46:38.542` guest: `paused=1 local=1 peer=1`; both menus remained visible |
+| Both worlds actually freeze | Host playthrough time stayed exactly 2488.65 from `21:46:37.859` to `21:46:43.456`; guest stayed exactly 2431.77 from `21:46:39.190` to `21:46:43.789` |
+| Network stays responsive during shared pause | Host `21:46:43.496`: send 29.4/s, recv 28.6/s; guest `21:46:41.521`: send 28.5/s, recv 29.3/s |
+| Host closes; guest Escape stays open | `21:46:46.362` host / `21:46:46.705` guest: both `paused=0`; guest still `local=1 peer=0` |
+| Host map only | `21:47:12.247` / `21:47:12.592`: both `paused=0`, host vote 1, guest vote 0 |
+| Host map + guest inventory | `21:47:14.798` / `21:47:15.646`: both `paused=1 local=1 peer=1`; screenshots verify the two different menus |
+| Guest closes inventory; host map stays open | `21:47:18.363` / `21:47:18.726`: both `paused=0`; host still `local=1` |
+| Host wheel only | `21:47:20.406` / `21:47:20.776`: host `wheel=1`, guest `wheel=0`, both `global=1.0000 paused=0` |
+| Both wheels, then close | `21:47:21.936` / `21:47:22.812`: both `wheel=1 global=1.0000`, no menu-pause votes. `21:47:24.479` / `21:47:24.856`: both closed, global still 1 |
+| Disconnect with host menu open | Before guest stop, `21:47:53.472`: host `paused=0`. Timeout `21:47:58.507` restored native pause; `21:48:02.627`: `paused=1 connected=0` |
+| Standalone restoration | Close at `21:48:04.176`: `paused=0`. Wheel open `21:48:05.710`: `global=0.2000`; close `21:48:07.259`: global 1 |
+
+The final logs contain no menu timing-control failures. Evidence is archived
+outside the repo at `~/TheysGone-lab/archive/shared-pause-20261031/`:
+`pause-host-final.log`, `pause-guest-final.log`, diagnostic-run logs, and
+screenshots under `pause-host/` and `pause-guest/` (`both-paused.png`,
+`map-inventory.png`, `wheels.png`; host also `menu-navigation.png`).
+Before cleanup, base ASI/INI and the complete base Saved tree matched each
+clone's pre-test backup. Both games were stopped and the disposable clones
+removed; real installs, saves and account configuration were not changed.
+
+Still pending: separate-PC/Steam coverage, two-game joins while a wheel is
+already open, actual focus/combat overlap, focus loss, photo mode, and
+mission/cinematic pause transitions. The F8 overlay and wheel do not request
+a shared pause. No blanket unpause is applied outside a controlled menu.
+
+## Engine replication research scope
+
 Status: investigation in progress (2026-10-21). Nothing here is shipped; the
 mod still uses its own datagram layer described in [HOW-IT-WORKS.md](HOW-IT-WORKS.md).
 

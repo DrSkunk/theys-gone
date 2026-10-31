@@ -50,6 +50,18 @@ class ProtocolTest(unittest.TestCase):
     def test_wire_size_matches_plugin(self):
         self.assertEqual(fake_peer.SIZE, 145)
 
+    def test_menu_pause_and_protocol_version(self):
+        header = Path(__file__).parents[1] / 'src/coop/protocol.hpp'
+        match = re.search(r'kProtocolVersion\s*=\s*(\d+)', header.read_text())
+        self.assertEqual(fake_peer.VERSION, int(match.group(1)))
+        data = fake_peer.encode(1, 0, (0, 0, 0), 0, 0, (0, 0, 0), 'x',
+                                flags=fake_peer.HAS_PAWN | fake_peer.MENU_PAUSE)
+        self.assertTrue(fake_peer.decode(data)['flags'] & fake_peer.MENU_PAUSE)
+        old = data[:4] + struct.pack('<H', 10) + data[6:]
+        self.assertIsNone(fake_peer.decode(old))
+        unknown = data[:6] + struct.pack('<H', 1 << 12) + data[8:]
+        self.assertIsNone(fake_peer.decode(unknown))
+
     def test_round_trip(self):
         data = fake_peer.encode(7, 1234, (1.0, -2.0, 3.5), 90.0, -5.0, (10.0, 0.0, -1.0), 'Boozer')
         state = fake_peer.decode(data)

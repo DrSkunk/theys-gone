@@ -143,6 +143,7 @@ poetry run python tools/debug_control.py --game-dir "/path/to/BendGame/Binaries/
 | `spawn-single` | Spawn one swarmer with its native AI, about 6 m ahead |
 | `spawn-pack` | Spawn eight independent swarmers (at most 16 owned at a time) |
 | `status` | Log player and enemy health, controllers and movement, and the running story mission code and policy flags |
+| `time-probe` | Read-only: log weapon-wheel state/request/scale, effective global dilation, game pause and camera-tick flags, focus slowdown request, and local/peer menu-pause votes |
 | `continue-title` | In-game bot: run the visible title splash's native button animation, or invoke Continue only when it is the first visible title-menu row |
 | `ui-probe` | Log native startup/menu objects, visibility, option counts, first label, cached versus freshly queried save availability, and every `Image` in an on-screen widget with its brush texture; does not activate a menu action |
 | `probe-player` / `probe-enemy` | Apply 5 base damage and check the health change |
@@ -184,7 +185,7 @@ poetry run python tools/debug_control.py --game-dir "/path/to/BendGame/Binaries/
 | `move-by` | Free roam: teleport the local pawn by `--arg "<east m> <north m>"` (each within 20 km) and hold it until a capsule sweep finds ground (30 s limit). Debug only; a large jump can land in unloaded terrain, so move in steps of a few hundred metres |
 
 `hit-enemy`, `story-*`, `reload-save`, `ride-test`, `dump-*`, `net-*`, `trace-*`,
-`stream-*`, `move-by`, `minimap-probe` and `mission-*` work without `begin`. The research commands only read and log, except
+`stream-*`, `move-by`, `minimap-probe`, `time-probe` and `mission-*` work without `begin`. The research commands only read and log, except
 `mission-act` and the experimental `net-*` commands, which drive the engine's own
 networking; see [REPLICATION-RESEARCH.md](REPLICATION-RESEARCH.md).
 
