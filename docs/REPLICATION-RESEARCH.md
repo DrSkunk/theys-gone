@@ -3777,3 +3777,37 @@ two of its scalar overrides. `material-probe` lists each slot on both games.
   crops show Boozer fully textured: shirt, burnt hands, pants and boots.
 
 Not tested: other companions, Boozer's bike, a two-PC run.
+
+## Companion vehicles on the guest (2026-10-30, paired, one PC)
+
+`vehicle-probe` (all live `VehiclePawn`s with their parts). In free roam
+the only live vehicle is the player's own bike. In `OBR` the host gets
+`BP_bike03Boozers_C` (`/Game/Vehicles/Bikes/BP_bike03Boozers.BP_bike03Boozers_C`):
+Boozer drives and the host rides as a passenger, so the host's
+`GetVehicle` (its "local bike") becomes Boozer's bike for about a minute.
+Later the bike is parked 1 m from the host. It has 20 mesh components:
+skeletal parts on sockets, parts that share the chassis skeleton, and static
+wheels.
+
+`spawn-actor` with that class on the guest (`spawn-20261030-2320`) built
+the bike with the same 20 mesh components, fully textured. The guest's own
+bike did not change. With physics off it hovered at the spawn height, and a
+marker icon shows above it, as on the host's real bike.
+
+`DMVH` (own version 1) streams every vehicle near the host except its own
+bike; the guest spawns the class and interpolates the transform.
+`vreplica-20261030-2332` and `-2338`:
+
+- The host logged `vehicles: streaming BP_bike03Boozers_C_0` when Boozer's
+  bike appeared, and the guest logged `vehicles: replica 1 is a
+  BP_bike03Boozers_C` 0.1 s later.
+- While the host rode on Boozer's bike, the guest did not clone its own
+  bike there. The clone came back when the host dismounted, at the host's
+  parked bike.
+- One guest frame during the ride shows Boozer and the host on the bike,
+  driving off across a bridge.
+- Three guest frames after parking show Boozer's bike standing on the road
+  next to the host, as in the host's frame.
+
+Not tested: whether the guest can interact with the replica (ride prompt),
+mission trucks, frame time with several vehicles, two PCs.

@@ -38,8 +38,10 @@ COMMANDS = (
     "look-companion",
     "level-probe",
     "material-probe",
+    "vehicle-probe",
+    "spawn-actor",
 )
-ARG_COMMANDS = ("mission-act", "stream-focus", "move-by", "level-probe")
+ARG_COMMANDS = ("mission-act", "stream-focus", "move-by", "level-probe", "spawn-actor")
 ARG_LIMIT = 240
 
 

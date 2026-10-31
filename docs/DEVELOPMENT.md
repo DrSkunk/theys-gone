@@ -40,7 +40,7 @@ Python simulator and analysis tools. They don't replace testing in the game.
 | [`src/coop/ue.hpp`](../src/coop/ue.hpp), [`ue.cpp`](../src/coop/ue.cpp) | Build-specific UE4 Bend reflection layer |
 | [`src/coop/protocol.hpp`](../src/coop/protocol.hpp) | State packet |
 | [`src/coop/pose.hpp`](../src/coop/pose.hpp), [`skeleton.cpp`](../src/coop/skeleton.cpp) | Pose compression, reading and writing skeletons |
-| [`src/coop/gear.hpp`](../src/coop/gear.hpp), [`enemy.hpp`](../src/coop/enemy.hpp) | Held-item and enemy datagrams |
+| [`src/coop/gear.hpp`](../src/coop/gear.hpp), [`enemy.hpp`](../src/coop/enemy.hpp), [`vehicle.hpp`](../src/coop/vehicle.hpp) | Held-item, enemy and vehicle datagrams |
 | [`src/coop/motion.hpp`](../src/coop/motion.hpp), [`frameclock.hpp`](../src/coop/frameclock.hpp) | Interpolation and frame clock |
 | [`src/coop/combat.hpp`](../src/coop/combat.hpp) | Friendly-fire delivery queue |
 | [`src/coop/appearance.cpp`](../src/coop/appearance.cpp) | Garment tinting |
@@ -161,6 +161,8 @@ poetry run python tools/debug_control.py --game-dir "/path/to/BendGame/Binaries/
 | `dump-objects` | Write a census of live objects to `TheysGone-objects.txt` |
 | `level-probe` | Read-only: with `--arg "<text>"`, write the streaming levels whose package name contains the text, with their load and visibility state, to `TheysGone-levels.txt` |
 | `material-probe` | Log the materials of the host's companion meshes and of the guest's companion replicas |
+| `vehicle-probe` | Log every live vehicle: class, distance, driver, and its mesh components with their attachment |
+| `spawn-actor` | Spawn `--arg <class path or name>` 6 m ahead of the player with physics off; loads the class first if needed (repeat the command) |
 | `look-companion` | Move the player 6 m from the nearest story-companion replica, along the camera direction (to check it renders) |
 | `minimap-probe` | Read-only: write every live `MiniMapLocationComponent` (owner, icon texture, location type, display rule, colour, flags, name) and an icon summary to `TheysGone-minimap.txt` |
 | `net-probe` | Write the engine's built-in networking state (net drivers, connections, controllers, roles, replicated actors and properties) to `TheysGone-net.txt` |
