@@ -65,6 +65,40 @@ the host progress. Host and join sessions through Steam or your local network.
 - Outfit models. Your partner is drawn with *your* Deacon outfit, tinted with
   *their* chosen colors.
 
+## Roadmap
+
+The goal is reliable, shared story co-op—not full engine replication. The host
+continues to own the save and story; the joining player helps in the host's
+world.
+
+**Done:** the two-player session, host-save transfer and sandbox, partner and
+enemy replication, free-roam ownership handoff, map marker, and the tested
+mission-start recovery. In the one-PC paired lab, Boozer and his bike appear
+as replicas, mission weather follows the host, and the partner is hidden
+during flashbacks. Passenger-seat and stealth mission policies are implemented
+but still need paired in-game validation.
+
+**Still to do:**
+
+1. **Finish mission and region QA.** Verify story passenger-seat and stealth
+   behavior in their target missions, test a real region transition with a
+   suitable save, and check partner visibility through more cinematics.
+2. **Validate enemy ownership handoff end to end.** Use naturally
+   guest-owned enemies; confirm they target and damage the host after a
+   regroup.
+3. **Broaden companion replication.** Test other companions, mission
+   vehicles, and replica behavior beyond Boozer and his bike.
+4. **Share the world while players are apart.** Make interactions, pickups,
+   and mission progress authoritative across both regions.
+5. **Preserve enemy identity across ownership changes** and polish the
+   partner's map icon.
+
+The detailed status, verification steps, and test evidence are in the
+[co-op roadmap](docs/COOP-ROADMAP.md); live-test evidence is recorded in
+[REPLICATION-RESEARCH.md](docs/REPLICATION-RESEARCH.md). Full engine
+replication with the guest as a thin client remains research, not a prerequisite
+for the current roadmap.
+
 ## Requirements
 
 - Days Gone on **Steam, build 19221447**. The mod checks the executable and
