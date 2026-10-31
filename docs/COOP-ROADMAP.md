@@ -104,7 +104,7 @@ Status: `[ ]` open, `[~]` in progress, `[x]` done (verified), `[!]` blocked.
 15. [~] **Host mission code to the guest** (protocol change): lets the guest
     load the mission's weather sublevel, hide the partner in flashbacks and
     apply capture policies.
-16. [ ] **Companion vehicles**: stream companion bikes (and mission trucks)
+16. [~] **Companion vehicles**: stream companion bikes (and mission trucks)
     like the partner's bike.
 17. [ ] **Partner marker icon**: the tint is ignored, so pick a texture that
     differs from the player's own icon.
@@ -133,3 +133,8 @@ Status: `[ ]` open, `[~]` in progress, `[x]` done (verified), `[!]` blocked.
   dynamic instances. Boozer's shirt was invisible without the host's
   `HC_ON=0`. In `OBR` the guest's crops show Boozer fully textured. Left for
   item 5: other companions, and Boozer's bike (item 16).
+- Item 16: vehicles near the host other than its own bike are streamed as
+  blueprint class plus transform (`DMVH`), and the guest spawns the same
+  class for display. In `OBR` the guest saw Boozer's bike riding off with
+  Boozer and the host and parked next to the host. Open: the ride prompt on
+  the replica, mission trucks, wheel animation.

@@ -306,6 +306,7 @@ The same socket carries more types, each identified by its own magic:
 | `DPOS` | Compressed skeleton pose: body, bike or enemy | body and bike 20 Hz (`PoseRate`); enemies 15 Hz |
 | `DMGR` | Held item: mesh asset path, socket and offset | on change and every 0.5 s |
 | `DMEN` | Enemy or companion appearance (v2): up to four mesh asset paths, friendly flag | every 1 s per enemy |
+| `DMVH` | Other vehicle near the host (companion bike, mission truck): blueprint class, position, rotation | 15 Hz per vehicle |
 | `DMMT` | Companion materials: one mesh's slot material assets and up to two runtime scalar overrides per slot | every 2 s per companion mesh |
 | `DGSV` | Save transfer: request, offer, chunk pull, 1 KB chunk | only while a guest downloads the host's save |
 | `DMST` | Story signature: host's live and last-saved job and mission progress | every 1 s from the host |
@@ -516,6 +517,13 @@ sends each companion mesh's slot materials (`DMMT`): the asset behind every
 runtime instance, plus its scalar overrides. The joining player loads those
 assets the same way and sets them, on a dynamic instance where overrides
 apply, so companions keep their clothes and textures.
+
+Vehicles other than the host's own bike (up to six within 150 m, such as
+Boozer's bike) travel as their blueprint class and transform (`DMVH`). The
+joining player spawns the same class without physics or collision, so every
+part comes with it, and moves it along the host's samples. While the host
+rides such a vehicle, the joining player does not also show the host's own
+bike there. Wheels and suspension do not animate.
 
 The joining player's own hostile AI is switched off: ambient generators,
 spawn areas and crowd generators are paused, and live hostile pawns are handed
