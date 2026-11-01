@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Stops the simulated partner and restores the normal (host-mode) co-op ini.
+# Legacy: defaults to the real Steam installation; use the isolated lab instead.
 set -uo pipefail
 game_dir="${DAYS_GONE_DIR:-$HOME/.local/share/Steam/steamapps/common/Days Gone/BendGame/Binaries/Win64}"
 ini="$game_dir/TheysGone.ini"

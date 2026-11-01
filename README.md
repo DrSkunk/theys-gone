@@ -1,4 +1,4 @@
-![Theys Gone](./docs/theys_gone.avif)
+![Theys Gone](https://raw.githubusercontent.com/DrSkunk/theys-gone/main/docs/theys_gone.avif)
 
 [![CI](https://github.com/DrSkunk/theys-gone/actions/workflows/ci.yml/badge.svg)](https://github.com/DrSkunk/theys-gone/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/DrSkunk/theys-gone?include_prereleases&sort=semver)](https://github.com/DrSkunk/theys-gone/releases)
@@ -14,97 +14,43 @@ the host progress. Host and join sessions through Steam or your local network.
 > This is **not** full campaign co-op. Each player still runs their own copy of
 > the game. The joining player starts from the host's save and is resynced when
 > the host's story moves on, but missions, inventory and loot are not mirrored
-> live. The UDP/LAN transport is unauthenticated and should only be used on a
-> trusted local network. Back up your saves before you try it.
+> live. Back up saves: the guest's save guard can fail. LAN UDP is
+> unauthenticated; use it only on a trusted network.
 
-> [!NOTE]
-> **AI-assisted project.** Most of this mod was written with AI coding
-> assistants: the code, the reverse-engineering analysis and the documentation.
-> A human directed the work and tested it in the real game on real hardware.
-> See [How it was built](#how-it-was-built).
+## Features and limitations
 
-## Features
+- See your partner's movement, animation, held items and motorcycle; ride as
+  their passenger, find them on the map or teleport nearby.
+- Play on the host's save, fight host-owned enemies and follow the host's time
+  and weather. Friendly fire requires both players to opt in each session.
+- `FreeRoam=1` on both PCs lets distant players simulate enemies in their own
+  regions. A fight in progress can remain with its owner when players split or
+  regroup. Guest-owned enemies attacking the host after regrouping are still
+  unverified.
+- `MissionObjectiveSync=1` on both PCs optionally shares completed objectives;
+  starting and completing jobs still requires host-save catch-up.
+- One-PC paired tests have shown Boozer and his bike as display replicas,
+  story passenger-seat and stealth policies, mission weather, flashback
+  hiding, and shared menu pause. These do not establish coverage for all
+  missions or separate PCs.
 
-| Feature | What you get |
-|---|---|
-| Partner avatar | Your partner appears as a Deacon in your world, with smoothed movement |
-| Animation mirroring | The partner's real skeleton pose is streamed, so walking, strafing, aiming, crouching and riding match their screen |
-| Held items | The weapon or tool in your partner's hands is shown in the same hand |
-| Motorcycles | The partner's bike is shown with its parts, steering and suspension |
-| Passenger riding | Walk up to your partner's bike and hold the native **Ride with** prompt (experimental) |
-| Host-first progress | The joining player plays on a copy of the host's save; their own saves are never touched |
-| Story sync | When the host saves with new story progress, the joining player is reloaded onto it |
-| Objective sync (opt-in) | Completed mission objectives reach the joining player within seconds, without waiting for a host save (experimental) |
-| Shared enemies | In standard mode, the host's hostile AI (up to 16 within 80 m) appears for the joining player instead of their own |
-| Free roam (opt-in) | Beyond 250 m, each player's game simulates enemies in its own region and shows the other's as replicas; hits reach either side's enemies, and a fight in progress stays with its owner when the players split or regroup |
-| Shared combat | The joining player's shots and melee damage the host's enemies; those enemies attack and damage the joining player |
-| Time and weather | The joining player's time of day and weather follow the host |
-| Appearance | Seven color presets for jacket, trousers and cap, and an option to hide the cap |
-| Friendly fire | Optional. Both players must opt in each session |
-| Teleport | Jump next to your partner |
-| Partner on the map | Your partner appears on the minimap and the world map |
-| In-game menu | Settings overlay usable with keyboard, mouse or gamepad |
+Live mission state, inventory, pickups, doors and camp NPCs are not shared.
+Up to 16 nearby hostile and friendly companion pawns share the stream limit,
+so hordes are incomplete. Enemy melee damage is estimated; real aimed attacks
+and ranged enemy damage need further testing. Projectiles and hit effects,
+motorcycle physics, fuel, damage and upgrades are not synchronized. Your
+partner uses your outfit model with their chosen colors.
 
-### What is not synchronized
-
-- Live mission state, inventory, loot and doors. The joining player's story
-  is resynced when the host saves; with `MissionObjectiveSync=1`, completed
-  objectives also arrive live. Starting or completing a job still waits for
-  the host's next save.
-- Camp NPCs and companions: each player keeps their own.
-- In free roam, each enemy's AI and health stay with the game that owns it;
-  the other player sees its pose and their hits are applied by the owner.
-  Protocol v9 adds a hidden host proxy in the guest's world while guest-owned
-  fights survive a regroup, so those enemies can target the host. This path
-  still needs paired validation. Missions, pickups, and world interactions
-  are not shared live.
-- Ranged enemy attacks on the joining player. Only melee swings at the
-  joining player are forwarded, and their damage per enemy type is an estimate.
-- Projectiles, muzzle flashes and hit effects.
-- Motorcycle physics, fuel, damage and upgrades.
-- Outfit models. Your partner is drawn with *your* Deacon outfit, tinted with
-  *their* chosen colors.
-
-## Roadmap
-
-The goal is reliable, shared story co-op—not full engine replication. The host
-continues to own the save and story; the joining player helps in the host's
-world.
-
-**Done:** the two-player session, host-save transfer and sandbox, partner and
-enemy replication, free-roam ownership handoff, map marker, and the tested
-mission-start recovery. In the one-PC paired lab, Boozer and his bike appear
-as replicas, mission weather follows the host, and the partner is hidden
-during flashbacks. Passenger-seat and stealth mission policies are implemented
-but still need paired in-game validation.
-
-**Still to do:**
-
-1. **Finish mission and region QA.** Verify story passenger-seat and stealth
-   behavior in their target missions, test a real region transition with a
-   suitable save, and check partner visibility through more cinematics.
-2. **Validate enemy ownership handoff end to end.** Use naturally
-   guest-owned enemies; confirm they target and damage the host after a
-   regroup.
-3. **Broaden companion replication.** Test other companions, mission
-   vehicles, and replica behavior beyond Boozer and his bike.
-4. **Share the world while players are apart.** Make interactions, pickups,
-   and mission progress authoritative across both regions.
-5. **Preserve enemy identity across ownership changes** and polish the
-   partner's map icon.
-6. **Finish co-op menu timing QA.** Check weapon-wheel and shared-pause
-   behavior on separate PCs, plus focus/combat and cinematic coverage.
-
-The detailed status, verification steps, and test evidence are in the
-[co-op roadmap](docs/COOP-ROADMAP.md); live-test evidence is recorded in
-[REPLICATION-RESEARCH.md](docs/REPLICATION-RESEARCH.md). Full engine
-replication with the guest as a thin client remains research, not a prerequisite
-for the current roadmap.
+The [co-op roadmap](https://github.com/DrSkunk/theys-gone/blob/main/docs/COOP-ROADMAP.md)
+tracks the current source, exact test scope and next work.
 
 ## Requirements
 
-- Days Gone on **Steam, build 19221447**. The mod checks the executable and
-  disables itself on any other build, for example after a game update.
+- Days Gone on **Steam, build 19221447** (Patch 1.13, July 2025, which
+  includes the free *Remastered* update). The mod checks the executable and
+  disables itself on any other build, for example after a game update or on
+  the `Classic` (1.07) beta branch. The *Broken Road* DLC modes have not been
+  tested.
 - Windows, or Linux / Steam Deck with Proton. It has been tested under Proton
   on a desktop Linux PC and a Steam Deck. Native Windows has not been tested.
 - [Ultimate ASI Loader](https://github.com/ThirteenAG/Ultimate-ASI-Loader)
@@ -187,7 +133,7 @@ PlayerName=Partner
   for example with `sudo ufw allow from 192.168.1.0/24 to any port 27777 proto udp`.
   **Never** forward this port to the Internet: the protocol has no encryption
   or authentication.
-- The host loads their save. The joining player is given the host's save
+- With `HostSave=1` and an active guest sandbox, the host's save transfers
   automatically; see below.
 - Settings are read when the game starts. Restart after editing the INI;
   switching sessions from CO-OP does not require a restart.
@@ -196,28 +142,40 @@ PlayerName=Partner
 
 With `HostSave=1` (the default), the host's save is the one that counts:
 
-1. The host loads their game. Their newest save is sent to whoever joins.
-2. The joining player connects from the title or pause menu. From that moment
-   every save write on their PC goes to a throw-away sandbox
-   (`TheysGone-guest-saves`, wiped at each join), so their own saves are never
-   touched.
+1. The host loads their game. A snapshot of their saves is sent to the guest.
+2. The joining player connects from the title or pause menu. If the save
+   guard starts successfully, guest save writes go to a throw-away sandbox
+   (`TheysGone-guest-saves`), reset when first activated in that game run.
 3. The host's save is downloaded (a few seconds for about 7 MB on a LAN) and
    loaded. If the joining player is already in the game, it reloads in place.
    They spawn next to the host.
 4. Each time the host saves, the host's story state (jobs and missions) is
    compared. If the joining player's story differs, they download the new save
-   and are reloaded onto it.
+   and are reloaded onto it. Catch-up is deferred while the host is running a
+   story mission and waits for a later host save.
 
-**Nothing the joining player does in that session is kept.** They are there to
-help the host progress. Set `HostSave=0` on both PCs to have everybody play
-their own save instead.
+> [!WARNING]
+> The guard can fail without blocking the session, leaving real guest saves
+> unprotected. After joining, check `TheysGone.log` for
+> `save guard: guest save sandbox active until restart`. If it is absent or
+> F8 says `Save sandbox failed; host save disabled`, stop playing and restore
+> your backup if needed.
+
+With the sandbox active, guest progress is disposable, including after the
+host leaves, until the guest restarts the game. Set `HostSave=0` on both PCs
+to play on separate saves instead. A cached snapshot can lag a recent host
+save, so check progress after a transfer.
+
+In one paired fast-travel test, the guest received the host's new position and
+time but stayed about 466 m behind. Use teleport to regroup if needed.
+Free-roam handoff at that distance and bedroll sleep have not been tested.
 
 ### Steam sessions (experimental)
 
 > [!WARNING]
-> Two-account Steam sessions have been tested between separate machines.
-> Internet/NAT traversal has not been independently verified. Send your
-> `TheysGone.log` if connection or gameplay fails.
+> Two-account Steam sessions reached gameplay on separate machines, but
+> host-save transfer, invite acceptance and newer gameplay paths over Steam
+> remain unverified. Internet/NAT traversal has not been independently verified.
 
 Steam mode uses Steam Networking, so it does not require manual port
 forwarding. Steam provides authenticated, encrypted transport and can use
@@ -247,8 +205,8 @@ Visibility=friends
 By default the mod uses the game's own Steam connection, so lobbies belong to
 Days Gone. `SteamApp=spacewar` instead runs the lobby under Spacewar (app 480),
 Valve's public test app, through a second copy of the Steam API. Use it when a
-copy of the game has no Steam connection of its own, such as one bought
-outside Steam.
+supported game has no Steam connection of its own; the supported executable
+requirement is unchanged.
 
 1. Set `SteamApp=spacewar` in `TheysGone.ini`, and keep the Steam client running.
 2. On first use the mod copies the game's `steam_api64.dll` next to the game
@@ -281,11 +239,12 @@ The game window must be focused. The F8 settings overlay does not pause the
 game. Session hosting/joining is in the native title/pause **CO-OP** menu.
 
 While a partner is connected, the weapon/crafting wheel stays usable but its
-slow-motion request is removed. Focus and combat slow motion are not changed.
+slow-motion request is removed without intentionally changing focus or combat
+slow motion.
 Normal weapon-wheel slowdown returns when playing alone, including when a
 partner disconnects while the wheel is still open. This is experimental:
-paired testing with two real game instances on one PC passed; separate-PC
-validation is still pending.
+paired testing on one PC passed; separate-PC and actual focus/combat overlap
+are still untested.
 
 While connected, opening the native pause menu, map or inventory keeps
 gameplay running unless **both players** have one of these menus open.
@@ -299,22 +258,9 @@ template under *Controller Settings → Current Layout → Templates*.
 
 ### Gameplay settings (F8)
 
-| Row | Effect |
-|---|---|
-| Jacket / Trousers / Cap color | Original, Crimson, Ocean, Forest, Sand, Charcoal, Violet |
-| Cap | Show or hide your cap |
-| Sync motorcycles | Show your partner's bike and send yours |
-| Allow a passenger | Let your partner ride on your bike |
-| Friendly fire | Real, lethal damage. Both players must turn it on, and it needs a second confirmation |
-| Sync host's enemies | Host: send nearby enemies and take the joining player's hits. Joining player: replace your own enemies with the host's |
-| Join / leave partner's bike | Same as F9 |
-| Teleport to partner | Same as F7 |
-| Steam lobby | Steam mode only: host a lobby, or leave the current one |
-| Invite a Steam friend | Steam mode only: opens the Steam overlay invite dialog |
-| Join a Steam friend | Steam mode only: Left/Right picks a friend who is hosting, A/Enter joins |
-
-Menu changes are saved to the INI right away, except friendly fire. Friendly
-fire starts off in every session and is never saved.
+The overlay controls appearance, motorcycle and enemy sync, passenger riding,
+teleport and Steam lobby actions. Changes are saved to the INI immediately,
+except friendly fire: both players must enable and confirm it each session.
 
 ### Passenger riding
 
@@ -333,39 +279,17 @@ the prompt does not appear, and a partner already riding is let off.
 
 ## Configuration reference
 
-All keys are in the `[Coop]` section of `TheysGone.ini`.
-
-| Key | Default | Meaning |
-|---|---|---|
-| `Port` | `27777` | Local UDP port |
-| `PeerHost` | *(empty)* | With `Transport=udp`: empty = host; otherwise host IP or hostname |
-| `PeerPort` | same as `Port` | Host's UDP port (joining player only) |
-| `PlayerName` | *(empty)* | Uses the Steam persona name; optional LAN override (state packets hold 15 UTF-8 bytes) |
-| `TeleportKey` | `118` (F7) | Windows virtual-key code for teleport |
-| `JacketColor`, `TrousersColor`, `CapColor` | `0` | 0 Original … 6 Violet |
-| `ShowCap` | `1` | Show your cap |
-| `SyncMotorcycles` | `1` | Bike sync |
-| `SyncEnemies` | `1` | Host enemy sync |
-| `FreeRoam` | `0` | Experimental, supported game build only: host streams terrain around a distant guest and each game simulates its local enemy region; each side shows and can hit the other's enemies. Enable on both peers |
-| `AllowPassenger` | `1` | Allow a passenger on your bike |
-| `PartnerMarker` | `1` | Show your partner on the minimap and the world map |
-| `Discovery` | `0` | Developers: log engine details; F6 dumps the local pawn |
-| `MissionDiscovery` | `0` | Developers: trace mission/save function names and parameter layouts only; see [DEVELOPMENT.md](docs/DEVELOPMENT.md) |
-| `MenuDiscovery` | `0` | Developers: F6 dumps native menu classes/widget references and enables UI event tracing |
-| `MissionObjectiveSync` | `0` | Experimental: the host also sends completed objectives live instead of only at its next save. Needs `HostSave=1`; enable on both peers. The host save remains the fallback |
-| `HostSave` | `1` | Host-first progress: the host shares their save; the joining player's save writes go to a throw-away sandbox and the host's save is loaded (see [Playing on the host's save](#playing-on-the-hosts-save)). `0`: everybody plays their own save |
-| `DebugTools` | `0` | Developers: enable test tools (see [DEVELOPMENT.md](docs/DEVELOPMENT.md)) |
-| `AnimIdle`, `AnimWalk`, `AnimRun`, `AnimSprint` | Deacon clips | Fallback animations used when no pose stream arrives |
-| `PoseRate` | `20` | Player and bike pose updates per second (10-30). Lower saves bandwidth |
-| `PoseFace` | `0` | `1` also streams the face rig (about 280 more bones, much more bandwidth) |
-| `Transport` | `menu` | Choose Steam/LAN in CO-OP; `udp` automatically hosts/joins LAN using the INI |
-| `Visibility` | `friends` | Steam: `private` (invite only), `friends`, or `public`; adjustable while hosting |
-| `SteamPumpCallbacks` | `0` | `1` also pumps Steam callbacks from the mod. Try it if invites never arrive |
-| `SteamApp` | `daysgone` | Steam app for lobbies: `daysgone` (the game's own), or `spacewar` (app 480 through a copy of the Steam API; see [Spacewar](#spacewar-optional-untested)). Both players must match |
+`TheysGone.ini` documents its `[Coop]` settings and defaults. `HostSave=1`
+is on by default; `FreeRoam=1` and `MissionObjectiveSync=1` are experimental,
+off by default and must be enabled on both PCs. The latter also requires
+`HostSave=1`. Set `PartnerMarker=0` under `[Coop]` to hide the partner's
+minimap and world-map marker; it defaults to `1`.
 
 ## Troubleshooting
 
-The plugin writes `TheysGone.log` next to itself. A healthy start looks like this:
+The plugin writes `TheysGone.log` next to itself. Review and redact player
+names, account IDs, IP addresses and local paths before sharing it. A healthy
+start looks like this:
 
 ```text
 Theys Gone … starting (protocol v11)
@@ -380,6 +304,7 @@ avatar: spawned …
 |---|---|
 | No log file | The ASI loader isn't loading. Check `version.dll` and, on Proton, the `WINEDLLOVERRIDES` launch option |
 | `FATAL: unsupported DaysGone.exe` | Wrong game version. The mod disables itself; wait for an updated release |
+| `Save sandbox failed; host save disabled` | Guest saves may be unprotected. Stop playing and check the log and your backup |
 | Never connects | Wrong `PeerHost`/port, firewall, a mod version mismatch, or a player hasn't loaded a save |
 | Connected but no partner visible | You are far apart (try F7), or the partner just loaded and the avatar is being rebuilt (wait about 5 seconds) |
 
@@ -392,11 +317,11 @@ Close the game and delete `TheysGone.asi`, `TheysGone.ini` and the
 `TheysGone*.log`/`.txt` files. Remove `version.dll`, and the launch option,
 only if no other mod uses the ASI loader.
 Delete `BendGame/Content/Paks/pakchunk99-TheysGone_Brand_P.pak` to restore
-the original logos.
+the original logos. If you enabled Spacewar, delete `steam_spacewar.dll` too.
 
 Upgrading: both players must run the same release. Releases that change the
-network protocol, such as 0.5.0 (protocol v9), cannot connect to older ones;
-the changelog marks these as breaking changes.
+network protocol cannot connect to older ones; the changelog marks these as
+breaking changes.
 
 Upgrading from the older *Days Gone Together* builds: delete the old
 `DaysGoneTogether.*` files first. Settings are not migrated, and old builds
@@ -404,13 +329,11 @@ cannot connect to Theys Gone.
 
 ## How it was built
 
-The mod is a C++20 DLL cross-compiled with MinGW-w64. It hooks Unreal Engine
-4's `UObject::ProcessEvent` and then drives the game through the engine's own
-reflection system, calling functions by name. Game files on disk are never
-modified. The only game content shipped is the optional branding pak, which
-overrides five logo textures and loads alongside the original paks. The full write-up covers the
-reverse engineering, hooking, networking and synchronization:
-[docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md).
+The mod is a C++20 DLL that hooks Unreal Engine 4's `UObject::ProcessEvent`
+and uses reflection to drive the game. The optional branding pak loads
+alongside the original game files. See
+[how it works](https://github.com/DrSkunk/theys-gone/blob/main/docs/HOW-IT-WORKS.md)
+for the design and reverse engineering.
 
 **Use of AI:** most of this project was developed with AI coding assistants
 (GitHub Copilot and large language models). That covers code, the static and
@@ -421,9 +344,10 @@ report anything wrong.
 
 ## Development
 
-Building, testing, the simulated partner, debug tools and the release process
-are covered in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md). Contributions are
-welcome; see [CONTRIBUTING.md](CONTRIBUTING.md).
+Building, testing and releases are covered in the
+[development guide](https://github.com/DrSkunk/theys-gone/blob/main/docs/DEVELOPMENT.md).
+Contributions are welcome; see
+[CONTRIBUTING.md](https://github.com/DrSkunk/theys-gone/blob/main/CONTRIBUTING.md).
 
 The save file research and the save editor (CLI and browser) live in the
 separate [days-gone-save-editor](https://github.com/drskunk/days-gone-save-editor)

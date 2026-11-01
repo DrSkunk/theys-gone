@@ -3586,7 +3586,7 @@ void UpdateGear(UObject* localPawn, double now) {
 }
 
 // Enemies the host owns for both players: freakers, animals, and anyone hostile to the local player.
-// Camp NPCs and companions stay local on each machine so they are never doubled.
+// Camp NPCs stay local; story companions have a separate display-only stream.
 bool SharedEnemy(UObject* ai, UObject* player) {
     static UObject* freaker = FindClass("BendFreakerController");
     static UObject* animal = FindClass("BendAnimalController");

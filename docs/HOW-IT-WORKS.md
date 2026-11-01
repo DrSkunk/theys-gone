@@ -200,8 +200,9 @@ move.set("NewLocation", pos).set("NewRotation", FRotator{0, yaw, 0})
     .setBool("bSweep", false).setBool("bTeleport", true).invoke();
 ```
 
-Engine functions are called **by name**. Only `ProcessEvent` and
-`GUObjectArray` have hard-coded addresses.
+Most engine functions are called **by name** through reflection.
+`ProcessEvent` and `GUObjectArray` have fixed addresses; optional streaming
+and research hooks also use build-specific RVAs.
 
 ## 4. Networking
 
@@ -310,8 +311,9 @@ The same socket carries more types, each identified by its own magic:
 | `DMMT` | Companion materials: one mesh's slot material assets and up to two runtime scalar overrides per slot | every 2 s per companion mesh |
 | `DGSV` | Save transfer: request, offer, chunk pull, 1 KB chunk | only while a guest downloads the host's save |
 | `DMST` | Story signature: host's live and last-saved job and mission progress | every 1 s from the host |
-| `DMEH` | Guest hit on a host enemy: entity, damage, shot or melee | per hit, sent twice |
-| `DMPX` | Host enemy strike on the guest: damage | per hit, sent twice |
+| `DMOB` | Completed objective: job, objective and sequence | every 3 s when objective sync is enabled |
+| `DMEH` | Hit on the other player's enemy: entity, damage, shot or melee | per hit, sent twice |
+| `DMPX` | Enemy strike on the other player: damage | per hit, sent twice |
 
 A pose datagram (version 2) carries up to 64 bones, so it never exceeds
 1,132 bytes. Each bone has a 32-bit hash of its name (bones are matched by
@@ -411,7 +413,8 @@ manual exit is checked with ground and capsule traces.
 
 Each game reads its running story mission once a second from
 `BendGameMission.ActiveMissionData` (a `BendMissionData` asset such as
-`OBR-MissionData`) and looks its code up in
+`OBR-MissionData`), requiring a live `ActiveMissionScript` as well, and
+looks its code up in
 [`mission_policy.hpp`](../src/coop/mission_policy.hpp). While the mission
 puts a story character on the passenger seat, or Deacon on theirs, the driver
 stops sending `kAcceptPassengers`, which hides the prompt and ends an active
@@ -492,9 +495,9 @@ None of this writes save data.
 ### 5.8 Host-first save and story
 
 The host's save is authoritative. With `HostSave=1`, the save guard (§6) is
-installed at startup in passthrough mode and switches to a sandbox the moment
-this player joins someone else's session. The joining player downloads the
-host's newest saves (`DGSV`) and loads them, reloading in place with
+installed at startup in passthrough mode and attempts to activate a sandbox
+when this player joins someone else's session. If active, the joining player
+downloads the host's newest saves (`DGSV`) and loads them, reloading in place with
 `BendGameMission.ReloadBecauseOfJobFailure` when already in gameplay.
 
 For story progress, each side hashes `BendJobManager`'s jobs and missions into
@@ -507,14 +510,16 @@ waits: a mission-start save would put its game in a mission state without the
 mission running (a black start fade, failure zones that respawn the player at
 the mission's staging point). It catches up at the host's first save after
 the mission. A guest that joins while the host is already in a mission still
-loads that save; a black start fade there is lifted after 5 s.
+loads that save; the mod attempts to lift a stuck start fade after 5 s. This
+mid-mission join path needs further validation.
 
 ### 5.9 Shared enemies and combat
 
 In standard mode, the host scans the object array in time-sliced batches for
-live, hostile `BendAIPawn`s (freakers, animals, and AI whose controller
-`IsEnemy` with the player) within 80 m of either player, at most 16. It streams
-their skeletons and appearance. The joining player builds a posed,
+hostile `BendAIPawn`s (freakers, animals, and AI whose controller `IsEnemy`
+with the player) and friendly story companions. At most 16 pawns share the
+stream, normally within 80 m of either player; retained fights can extend
+beyond that radius. The joining player builds a posed,
 non-colliding replica for each one. Its alive/health state disables further
 hit requests at zero health; it does not immediately destroy the visual
 corpse. A replica is removed after the host stops sending its pose/appearance
@@ -609,11 +614,11 @@ and the story-divergence test does not establish complete campaign co-op.
   running.
 - Debug tools are off by default, local only, and limited to an allowlist of
   commands (see [DEVELOPMENT.md](DEVELOPMENT.md#debug-tools)).
-- The guest save sandbox (`HostSave=1`) hooks the game's file imports so that,
-  while joined, no write can reach the real `SaveGames` folder. Saves received
-  from the host are checked with SHA-256 and strict file-name rules before the
-  game can see them (see
-  [DEVELOPMENT.md](DEVELOPMENT.md#host-to-guest-save-transfer-hostsave)).
+- The guest save sandbox (`HostSave=1`) redirects supported game-executable
+  file operations when active. Hook or activation failure does not block the
+  session and can leave real saves unprotected. Host saves are checked with
+  SHA-256 and strict file-name rules before adoption; see
+  [DEVELOPMENT.md](DEVELOPMENT.md#guest-save-sandbox-hostsave).
 
 ## 7. Limitations
 

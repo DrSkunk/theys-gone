@@ -5,12 +5,14 @@ welcome.
 
 ## Before you start
 
-- Read [AGENTS.md](AGENTS.md) for the current project state, commands and
-  rules (it applies to humans and AI agents alike), then
+- Read [AGENTS.md](AGENTS.md) for the documentation map, commands and rules
+  (it applies to humans and AI agents alike), then
   [docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md) and
   [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 - Don't commit game files, executables, game assets, saves, logs or
   credentials.
+- Before sharing logs in an issue, redact player names, account IDs, IP
+  addresses and local paths.
 - Only use code you're allowed to share under the MIT license. Don't copy
   code or assets from mods whose terms don't allow it.
 

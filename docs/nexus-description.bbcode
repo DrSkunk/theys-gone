@@ -1,6 +1,8 @@
 [b]Theys Gone[/b] is an experimental two-player co-op mod for [i]Days Gone[/i] on PC. The host's save is the one that counts: the joining player loads it, fights the host's enemies and helps the host progress. Character movement and animation, motorcycles, time and weather are synchronized. Sessions are hosted and joined from a native [b]CO-OP[/b] menu, over Steam or the local network.
 
-This is [b]not full campaign co-op[/b]: each player still runs their own copy of the game. The joining player starts from the host's save and is reloaded onto it when the host saves new story progress, but missions, inventory and loot are not mirrored live. Nothing the joining player does is kept in their own saves.
+This is [b]not full campaign co-op[/b]: each player still runs their own copy of the game. The joining player starts from the host's save and catches up at later host saves; catch-up is deferred while a host story mission runs. Missions, inventory and loot are not mirrored live.
+
+[b]Back up your saves.[/b] With the default HostSave=1, an active guest sandbox redirects save writes to a disposable folder until the guest restarts, including after the host leaves. The guard can fail without blocking the session, leaving real saves unprotected. After joining, check TheysGone.log for [i]save guard: guest save sandbox active until restart[/i]. If it is absent or F8 reports [i]Save sandbox failed; host save disabled[/i], stop playing and restore your backup if needed.
 
 I just made this because I wanted to join my wife's sessions and drive around together.
 
@@ -10,7 +12,7 @@ The mod is unofficial and is not affiliated with or endorsed by Bend Studio, Son
 
 [b]Upgrading from Days Gone Together[/b]
 
-Both players must run the same release. Releases that change the network protocol, such as 0.5.0 (protocol v9), cannot connect to older ones.
+Both players must run the same release. Releases that change the network protocol cannot connect to older ones.
 
 The mod was renamed from Days Gone Together. Delete the old [i]DaysGoneTogether.asi[/i], [i]DaysGoneTogether.ini[/i] and [i]DaysGoneTogether*.log[/i] files before installing. Old and new versions cannot connect to each other.
 
@@ -34,7 +36,7 @@ Install the mod on [b]both PCs[/b]. Both players need the same game build and mo
 
 Open [b]CO-OP[/b] in the title menu or the pause menu.
 [list]
-[*][b]Steam:[/b] host a session as friends-only or public. Your friend picks [b]JOIN A FRIEND[/b] or [b]FIND PUBLIC GAMES[/b], or accepts a Steam invite. Steam names are shown in the lobby and in the session log. Two-account play has been tested between separate machines; Internet/NAT traversal has not been independently verified.
+[*][b]Steam:[/b] host a session as friends-only or public. Your friend picks [b]JOIN A FRIEND[/b] or [b]FIND PUBLIC GAMES[/b], or accepts a Steam invite. Two-account sessions reached gameplay on separate machines, but host-save transfer, invite acceptance, newer gameplay paths and Internet/NAT traversal over Steam remain unverified.
 [*][b]LAN:[/b] choose [b]HOST LAN GAME[/b]; the other PC chooses [b]JOIN LAN GAME[/b] and picks the host. Allow inbound UDP 27777 on the host. Never forward that port to the Internet.
 [*]You can host before loading a save, or open a session while already playing. Use [b]CLOSE SESSION[/b] or [b]LEAVE SESSION[/b] to disconnect without restarting.
 [/list]
@@ -49,11 +51,10 @@ Press [b]F8[/b] (gamepad: View/Back + Y) for the settings overlay with appearanc
 [*]See the partner's held weapon or tool.
 [*]See the partner's motorcycle, including selected parts, steering and suspension.
 [*]Ride as a passenger on your partner's motorcycle: walk up and hold the native [b]Ride with[/b] prompt (experimental).
-[*]Host-first progress: the joining player plays on a copy of the host's save; their own saves are never touched.
+[*]Host-first progress: with the guest sandbox active, the joining player loads a copy of the host's save.
 [*]Story sync: when the host saves new story progress, the joining player is reloaded onto it.
 [*]Objective sync (opt-in, experimental): with [i]MissionObjectiveSync=1[/i] on both PCs, completed mission objectives reach the joining player within seconds instead of at the host's next save.
-[*]Shared enemies: the host's freakers, animals and hostile humans replace the joining player's own.
-[*]Shared combat: the joining player's shots and melee damage the host's enemies, and those enemies attack the joining player.
+[*]Shared enemies and combat: the host's freakers, animals and hostile humans appear for the joining player, and hits are forwarded to their owner. Enemy melee damage is estimated.
 [*]Free roam (opt-in, experimental): with [i]FreeRoam=1[/i] on both PCs, players can split up. Beyond 250 m each game runs the enemies in its own region and shows the other's; hits reach either side's enemies, and a fight in progress stays with its owner when you split or regroup.
 [*]Synchronize time of day and weather from host to joining player.
 [*]Choose from seven appearance color presets and hide the cap.
@@ -61,7 +62,9 @@ Press [b]F8[/b] (gamepad: View/Back + Y) for the settings overlay with appearanc
 [*]Use the in-game settings menu, including with keyboard, mouse or gamepad.
 [/list]
 
-[b]Not synchronized:[/b] live mission state (apart from opt-in completed objectives), inventory, loot, doors, camp NPCs, ranged enemy attacks on the joining player, projectiles and hit effects, or motorcycle physics, fuel, damage and upgrades. Your partner's outfit model uses your own Deacon outfit, with their selected colors applied.
+One-PC paired tests showed Boozer and his bike as display replicas, mission weather and the shared pause menu. Other companions and missions need more testing. A host fast-travel test left the guest behind; use teleport to regroup. Guest-owned enemies attacking the host after regrouping are not yet proven. A cached snapshot may lag a recent host save, so check progress after transfer.
+
+[b]Limits:[/b] live mission state (apart from opt-in completed objectives), inventory, loot, doors, camp NPCs, projectiles and hit effects, and motorcycle physics, fuel, damage and upgrades are not synchronized. At most 16 nearby hostile and friendly companion pawns share the stream limit, so hordes are incomplete. Real aimed combat and ranged enemy damage need further testing. Your partner's outfit model uses your own Deacon outfit, with their selected colors applied.
 
 [b]Requirements[/b]
 
