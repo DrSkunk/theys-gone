@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.1](https://github.com/DrSkunk/theys-gone/compare/v0.6.0...v0.6.1) (2026-11-01)
+
+
+### Documentation
+
+* consolidate co-op status and roadmap ([#24](https://github.com/DrSkunk/theys-gone/issues/24)) ([ce3651e](https://github.com/DrSkunk/theys-gone/commit/ce3651e5c98cf6d66ea00bea770a32feeb2c970d))
+
 ## [0.6.0](https://github.com/DrSkunk/theys-gone/compare/v0.5.1...v0.6.0) (2026-10-31)
 
 
