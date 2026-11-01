@@ -1,5 +1,10 @@
 # Built-in Unreal replication: feasibility research
 
+This is the historical evidence log for both production co-op and native
+replication experiments. Entries and their next-step suggestions may be
+superseded by later results; they are not strictly chronological. For current
+status and priorities, see the [co-op roadmap](COOP-ROADMAP.md).
+
 ## Weapon-wheel and pause timing investigation (2026-10-31)
 
 Read-only analysis used the isolated `run1` executable, verified against
@@ -3959,3 +3964,61 @@ bike; the guest spawns the class and interpolates the transform.
 
 Not tested: whether the guest can interact with the replica (ride prompt),
 mission trucks, frame time with several vehicles, two PCs.
+
+## Co-op review scenarios (2026-10-31, paired, one PC)
+
+Two real games on Cachy, disposable `host`/`guest` reflink clones of `run1`
+created by `pair.sh`, loopback UDP, `HostSave=1`, `FreeRoam=1` (base INI).
+Both ran ASI `49b4311d…f9144`, the shared-pause build. Scripts
+`review-run.sh` and `review-run2.sh` are in `~/TheysGone-lab-tools/`;
+logs and screenshots are archived at
+`~/TheysGone-lab/archive/review-20261031-2337/` and
+`review2-20261031-2350/`. This is **not** a separate-PC or Steam test.
+
+| Scenario | Evidence | Result |
+|---|---|---|
+| Host time skip (`time-shift`, sleep analog) | Host `23:40:48.382` time 10.970 → 16.970; guest `23:40:49.000` world sync 10.971 → 16.972 | Pass |
+| 16 debug enemies at the host | Host `23:40:56.967` streaming 16 local AI pawns; guest created 16 replicas; tick peaks 23–30 ms | Pass (debug cap is 16; no horde) |
+| Host checkpoint reload (`reload-save`) | Host `23:42:33.287` `ReloadBecauseOfJobFailure invoked=1 returned=0`; no reload followed on either side | Inconclusive; host reload untested |
+| Guest game killed (SIGKILL) | Host `23:43:55.035` marker hidden, stand-in removed; `sha256sum` of the guest's real `.sav` files identical before, after crash and at the end | Pass |
+| Guest rejoins after the crash | Host `23:45:41.299` peer connected; guest adopted the host save, first load `ced003fb` ≠ `fa97ef49`, one retry, `23:47:06.115` verified `fa97ef49`, `23:47:12.956` moved to the host | Pass, with one reload retry |
+| Host game killed | Guest `23:48:25.387` Host disconnected; local AI resumed (20 spawn areas, 7 crowd generators); own time/weather restored; Escape `23:48:45.370` `paused=1 managed=0` | Pass. The guest's saves stay in the sandbox until restart, with no in-game notice |
+| Passenger | Run 2: `23:54:13.787` boarded on `SOCKET_PassengerSeat`; `23:54:25.244` dismounted, body, movement, collision and saving restored. Run 1's attempt pressed F9 6 s before the host's bike was streamed and was refused | Pass |
+| Host 1.5 km jump (`move-by "1500 0"`) | `23:54:45.382` gave up, no ground at the destination | Not run; earlier 1.2 km free-roam tests remain the evidence |
+| Guest teleport (F7) | `23:55:12.420` teleported; positions within ~1.5 m | Pass |
+
+No `FATAL` lines in any log. The only errors were the `continue-title`
+retries that `lab.sh enter` makes while the splash loads.
+
+Game files: the Cachy install and `run1` share `DaysGone.exe` SHA-256
+`17c2fca0…37730b3`, Steam build 19221447, only depot `1259421` (no DLC)
+installed, one 30.7 GB `BendGame-WindowsNoEditor.pak` plus the branding
+pak. Build 19221447 is Patch 1.13 (21 July 2025,
+[SteamDB](https://steamdb.info/patchnotes/19221447/)), after the April 2025
+*Remastered* update (build 18212596, Patch 1.08,
+[Bend](https://support.bendstudio.com/hc/en-us/articles/40647771372051-Days-Gone-Update-April-24-2025)).
+Steam's `Classic` beta branch is Patch 1.07
+([Bend](https://support.bendstudio.com/hc/en-us/articles/45621253674771-Steam-Beta-Branch-Option)).
+
+## Native host load and fast travel (2026-11-01, paired, one PC)
+
+Two real games on Cachy, disposable `host`/`guest` reflink clones of `run1`,
+loopback UDP, `HostSave=1`, `FreeRoam=1`; both ran ASI
+`49b4311d…f9144`. This was a one-PC lab run, not a separate-PC or Steam test.
+Full logs are archived outside the repository at
+`~/TheysGone-lab/archive/travel-load-20261101/`.
+
+| Scenario | Evidence | Result |
+|---|---|---|
+| Load an older host autosave from the native pause menu | At 09:07 the host loaded the Oct 24 autosave from the Load Game screen. Host world sync resumed at 09:08:02 (`time=10.377`); the guest restored local time `18.930 -> 10.386`. The host's position changed from `(-1445 -236761 440)` to `(-29960 -205984 -9908)`. The partner marker hid at 09:07:57 and returned at 09:08:07; the guest continued reporting the host, with no disconnect | Pass for session continuity, clock sync and marker rebuild; death and changed-story reloads not tested |
+| Host fast travel to O'Leary Mountain Safehouse | At 09:10:58 the host synced at `time=12.356`, rebuilt its avatar, and hid/showed the partner marker (09:10:58–09:11:03). The guest synced `11.550 -> 12.356` at 09:10:58. The host arrived at `(2002 -239652 421)` while the guest remained at `(-30177 -205938 -9854)`, about 466 m horizontally away | Pass for host travel and time sync; guest did not teleport |
+| Safehouse sleep | The host arrived at the camp and was navigated around its structures, but the bedroll interaction was not reached or activated | Not tested |
+| Host death | No death was triggered in this run | Not tested |
+
+After fast travel, the guest continued receiving host positions as the host
+moved around the camp. The travel itself showed normal update timing afterward
+(about 1.1–1.2 ms mean, 22.6–23.2 ms peak in the sampled intervals); this
+does not validate streaming ownership handoff at the resulting separation.
+The host did not carry the guest to the destination, so regrouping remains a
+player-facing gap. The base isolated game executable and `.sav` hashes matched
+before and after the run; both disposable clones were stopped and destroyed.

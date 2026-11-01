@@ -33,8 +33,8 @@ instances at 1280×720 used about 4.6 GB of video memory on an RTX 3070.
 L=tools/lab/lab.sh
 $L steam-login ~/TheysGone-lab/steam-second   # once: sign in to the second account
 for n in host guest; do $L create $n; $L deploy $n package/TheysGone.asi; done
-$L config host PeerHost= Port=27777 PeerPort=27777 Discovery=0 PlayerName=Host
-$L config guest PeerHost=127.0.0.1 Port=27778 PeerPort=27777 Discovery=0 PlayerName=Guest
+$L config host Transport=udp PeerHost= Port=27777 PeerPort=27777 DebugTools=1 Discovery=0 PlayerName=Host
+$L config guest Transport=udp PeerHost=127.0.0.1 Port=27778 PeerPort=27777 DebugTools=1 Discovery=0 PlayerName=Guest
 $L start host
 $L start guest --steam-home ~/TheysGone-lab/steam-second
 $L enter host && $L enter guest         # splash, Continue, wait for gameplay
@@ -45,7 +45,8 @@ $L stop guest; $L stop host; $L destroy guest; $L destroy host
 
 `enter` waits for the world to load, presses Enter until the title menu
 offers Continue, then waits until the player has health. With `HostSave=1`
-the guest then downloads the host's save and reloads into it.
+the guest then downloads the host's save and reloads into it. Both `enter`
+and `debug` require `DebugTools=1` in the disposable instance.
 
 The game polls held keys, so use `hold` for game controls (`$L hold host e`
 mounts the bike, `$L hold guest F9` boards the partner's); `key` taps keys
