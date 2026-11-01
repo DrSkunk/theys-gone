@@ -30,4 +30,5 @@ body:
     id: log
     attributes:
       label: TheysGone.log (both players if possible)
+      description: Redact player names, account IDs, IP addresses and local paths before posting. Never include saves, credentials or tokens.
       render: text

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Same-PC co-op test: points the mod at a simulated partner on this machine and launches Days Gone.
+# Legacy: defaults to the real Steam installation; use the isolated lab instead.
 # Usage: ./start-test.sh [follow|circle|still]   (default: follow)
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"

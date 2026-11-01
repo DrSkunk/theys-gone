@@ -77,19 +77,24 @@ It also reports fresh version-3 host story packets (saved/live signatures,
 save serial and sequence) and fresh completed-objective packets, allowing both
 story protocols to be observed without a second game client.
 
-**On a Linux/Proton machine with systemd:** copy `tools/fake_peer.py` and
-`tools/same-pc/*.sh` into one folder on the gaming PC and run:
+For an isolated Linux/Proton lab instance:
 
 ```sh
-./start-test.sh            # follow (default) | circle | still
-./stop-test.sh             # stop the simulator and restore the INI
+L=tools/lab/lab.sh
+$L create solo
+$L deploy solo package/TheysGone.asi
+$L config solo Transport=udp PeerHost= Port=27777 DebugTools=1
+$L start solo && $L enter solo
+poetry run python tools/fake_peer.py --game 127.0.0.1:27777 \
+  --port 27778 --follow --duration 60
+$L stop solo && $L destroy solo
 ```
 
-`start-test.sh` backs up the INI and points it at `127.0.0.1:27778`. It runs
-the simulator as the `theys-gone-fakepeer` user service and launches the game.
-`DAYS_GONE_DIR` overrides the game folder. Restart the game after stopping.
+The legacy `tools/same-pc` launchers default to the real Steam installation,
+launch the installed game and do not select `Transport=udp`. Do not use them
+for isolated testing.
 
-**By hand,** against a game in host mode:
+To connect to an isolated game on another trusted machine:
 
 ```sh
 poetry run python tools/fake_peer.py --game 192.168.1.50:27777 \
@@ -478,16 +483,21 @@ With `HostSave=1` (the default) the plugin patches the game executable's
 KERNEL32 imports for file creation, deletion, renaming (`MoveFileW` and
 rename-by-handle), attributes and directories (`src/coop/save_guard.cpp`) at
 startup, in **passthrough** mode: nothing is redirected while you play alone or
-host. The moment this player joins someone else's session, the guard switches
-on and redirects every write below a `Saved\...\SaveGames` folder into
-`TheysGone-guest-saves` next to the plugin. That folder is wiped at each
-join.
+host. On joining another session, the guard attempts to activate and redirect
+writes below `Saved\...\SaveGames` into `TheysGone-guest-saves` next to the
+plugin. The sandbox is reset on its first activation in that game run and
+stays active after disconnect until the game restarts.
+
+Hook installation or sandbox activation can fail without blocking the
+session. The F8 menu reports `Save sandbox failed; host save disabled`, and
+the log reports the failure; real saves may still be written. Back up saves
+and check for `save guard: guest save sandbox active until restart`.
 
 - Writes are copy-on-write: modifying an existing save first copies the
   original into the sandbox.
 - Reads prefer the sandbox copy and fall back to the real file.
-- Deletes and moves never touch a real save; deleted names are hidden for the
-  rest of the session.
+- When the guard is active, deletes and moves are redirected; deleted names
+  are hidden for the rest of the session.
 - The path rules are pure functions in `src/coop/save_policy.hpp`, covered by
   `make test`.
 
@@ -502,8 +512,8 @@ Known limits:
 - Until a host save is adopted, wildcard directory listings (the **Load Game**
   list) still show only the real folder.
 - Only the executable's own imports are hooked.
-- While joined, **nothing you do in that session is kept**. Set `HostSave=0`
-  to play your own save instead.
+- While the guard is active, guest progress is disposable, even after
+  disconnect. Set `HostSave=0` to play your own save instead.
 
 Back up `SaveGames` before experimenting anyway.
 
@@ -596,11 +606,13 @@ send only completed (state 2) objectives, so the option stays default-off.
 
 With *Sync host's enemies* on, both PCs set `kSyncEnemies`:
 
-- **Host.** Streams pose and appearance (`DPOS`, `DMEN`) for at most 16 hostile
-  AI pawns within 80 m of either player. Hostile means a freaker or animal
-  controller, or `BendAIController.IsEnemy(player)`; camp NPCs and companions
-  stay local on each PC.
-- **Guest suppression.** A joined guest with `HostSave=1` stops its own AI:
+- **Host.** Streams pose and appearance (`DPOS`, `DMEN`) for at most 16
+  hostile and friendly companion pawns combined, normally within 80 m of
+  either player. Kept enemies can remain beyond that radius. Hostile means a
+  freaker or animal controller, or `BendAIController.IsEnemy(player)`;
+  ordinary camp NPCs stay local. Companions are display-only replicas.
+- **Guest suppression.** In standard mode, a joined guest with `HostSave=1`
+  stops its own AI:
   `BendAmbientGenerator.OverrideGlobalSpawnLimitNEW(0)` and `ForceDespawnAll`,
   `BendAmbientSpawnArea.SetAreaActive(false)`, `BendCrowdGenerator.SetPaused`,
   and every other hostile pawn is returned to its pool with the generator's
@@ -711,7 +723,7 @@ modify base damage: a 25-point debug hit reduced one swarmer by 18.75.
 | Guest damage to host enemies | `hit-enemy` damaged and killed a real host swarmer; this bypasses aim and does not validate real shooting or melee input |
 | Host melee damage to guest | Swarmer pack targeted the stand-in, damaged and killed the guest; guest and stand-in respawned, and a later clean-build strike reduced health from 121.9 to 109.9 |
 | Free roam enemy handoff | Paired `move-by` tests: the guest kept 8 Swarmers across a reunion and the host's hits applied to them; the host kept 6 Swarmers fighting the guest across a split, which kept striking the guest and took guest hits 312 m from the host. Debug-spawned packs only; not yet verified in a natural mission fight |
-| Native bike interaction | Standalone `ride-test` prompt exercised; boarding a real partner's bike through it still needs a player test |
+| Native bike interaction | A two-PC fixture boarded through the native prompt and followed a moving bike briefly; a one-PC paired test also covered boarding and dismount. Long-distance and broader mission coverage remain open |
 | Steam transport | Earlier lobby/transport tests do not validate these new gameplay paths; current gameplay evidence is from UDP LAN |
 
 Complete host-first synchronization is **not finished**. Live mission state,

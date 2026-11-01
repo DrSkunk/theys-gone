@@ -1,8 +1,9 @@
 # Story and companions: co-op design map
 
 Who is with Deacon in each part of the campaign, which segments assume he is
-alone, and what co-op needs there. **This is design research, not co-op
-evidence:** nothing below has been tried in a paired session.
+alone, and what co-op needs there. The catalog is design research, not proof
+that a mission works in co-op. Some policies have one-PC paired evidence;
+see the [current roadmap](COOP-ROADMAP.md) for test scope and next work.
 
 ## Sources
 
@@ -204,77 +205,21 @@ camp rally).
 | `HS_EJ_01` | Bike escort (`BP_BikeEscortJobScriptBase`) |
 | `BZ_*` | Radio towers and bounty zones |
 
-## 4. Co-op problems
+## 4. Co-op policy and open questions
 
-1. **Missions run only on the host.** When the host starts a mission that
-   saves at its start, the guest reloads that save through the story resync,
-   but the mission does not start there: the guest gets `ActiveMissionData`
-   without a mission script, and the mission's start fade stayed black until
-   the mod lifted it (paired `OBR` tests, 2026-10-29). The guest therefore
-   has none of the mission's NPCs, sublevel props, forced weather or
-   objectives. Companions are excluded from enemy streaming, so the guest
-   sees the host riding or walking next to nobody. Fix: stream
-   non-hostile mission actors (companions, their bikes, mission trucks) as
-   display-only, non-colliding replicas, and send mission weather.
-2. **Passenger seat conflicts (P).** Lisa (`LOL2`, `RBC`) and Sarah (`WNG`,
-   `TSR`, `RFS1`/`RFS2`/`RFS4`, `CLO2`) ride on Deacon's bike, and in `OBR`
-   Deacon rides on Boozer's. While a story NPC uses the host's pillion, the
-   guest must not be offered *Ride with*. **Implemented:** a driver whose
-   running mission has the pillion flag stops offering the seat
-   ([`mission_policy.hpp`](../src/coop/mission_policy.hpp)); verified in a
-   paired session: a riding guest was let off when the host started `OBR`. `BIP`, `MBF1`, `CLO5` and `IYK`
-   are flagged from cutscene bikes and the walkthrough, not from objective
-   text. Other ride-alongs use the companion's own bike
-   (`boozerbike`, `rikkibike`, `skizzobike`, `mikebike`, `kouribike` in the
-   cutscenes), so the guest on their own bike fits. Scripted rides such as
-   `TLL1` (`BP_BikeSpeedController`) pace to the host only.
-3. **Forced stealth (S) and the hidden proxy.** Host enemies are made aware
-   of the hidden `SwarmerPawn_C` following the guest
-   (`SetAwarenessOfPawn`). In S missions (`NBE`, `FIN`, `OBF`, `SFN`,
-   `OJ1`–`OJ3`, `NRS1`, `TLL2`, `PBC2`–`PBC4`, `AON1`, `ANM3`, `AHB5`) the
-   guest can get the host detected. **Confirmed and fixed:** in a paired
-   `AON1` test nine of 13 Rippers targeted the stand-in while nobody moved;
-   with the fix, enemies in S missions are told about the stand-in only once
-   they are already fighting, and none targeted it.
-4. **Guard objectives (G).** "Keep Boozer Alive" (`MBF1`), "Protect Rikki"
-   (`LBL1`), "Protect Boozer From Rippers" (`BBD4`), escorting Sarah
-   (`AHB5`). These suit co-op if guest hits apply on the host's enemies,
-   which already works.
-5. **Captures (C).** `CRW` (Boozer), `TLL2` (caught), `PBC4` → `AON1` (Deacon
-   betrayed, gear and cut taken), `AHB5` (hanging). Decided 2026-10-30: no
-   restriction, like most co-op games; both players stay free and the
-   escape is a shared prison break.
-6. **Flashbacks (M).** `WNG`, `HGL`, `TSR`, `IPR`, `AQW` and the memorial
-   stone jobs play in the past or in memory. The partner must not appear.
-   `BendGameMission.OnFlashbackCinematicToggled` may signal the cinematic
-   part; playable sections need the policy table.
-7. **Bike loss (B).** After `OBR` and through `WMB` the host's bike is
-   broken or stolen; passenger riding with the guest driving fits. In
-   `PBC2`–`AON2` the guest should leave their bike too.
-8. **Bosses and set pieces (X).** The Carlos knife duel (`BBD6`) and Skizzo
-   (`AWI2`) are single-fighter scenes; hordes (`FMC1`, `LTB1`, `ICF1`,
-   `WBB1`, `WBB2`) and Ragers suit two, but scripted hordes likely exceed the
-   16-enemy stream cap.
-9. **Region transitions (T).** After `RNA1` (south) and `LRH1` (north) the
-   guest's world changes only at the next host save. Candidate policy: when
-   the host's act changes, move the guest to the host after the reload.
-10. **Cutscenes (K).** The partner avatar is not hidden during cinematics.
-    The host's view of a paired `OBR` intro showed no second Deacon; the
-    guest's view was not captured (see the research log). If a stray avatar
-    appears, hide it while that game's `GetIsCinematicActive` is true.
+The local mission is considered active only when both `ActiveMissionData`
+and `ActiveMissionScript` are live. The current mission ID is sent to the
+partner; policies are in [`mission_policy.hpp`](../src/coop/mission_policy.hpp).
 
-## 5. Next steps
+| Category | Current behavior and remaining uncertainty |
+|---|---|
+| Mission state and companions | Host story missions do not run fully on the guest. Catch-up is deferred while the host mission runs; joining mid-mission is a separate, unproven case. Host mission weather and display-only companion/vehicle replicas are implemented; Boozer and his bike were shown in one paired lab, not every mission actor. |
+| Passenger seat (P) | A driver in a flagged mission reserves the seat for the story. `OBR` was paired-tested; `RBC` and other ride-alongs remain open. `BIP`, `MBF1`, `CLO5` and `IYK` were flagged from cutscenes or walkthroughs rather than objective text. Scripted rides such as `TLL1` pace to the host only. |
+| Stealth (S) | Enemies are told about the guest's hidden stand-in only once they are already fighting. The `AON1` A/B test stopped idle enemies from targeting it; targeting during an actual fight still needs a test. |
+| Guard and capture (G/C) | Guest damage reaches host-owned enemies in tested debug scenarios. Capture missions deliberately impose no extra restriction on either player; full mission outcomes remain unverified. |
+| Flashbacks and cutscenes (M/K) | The partner is hidden during flagged flashbacks; `WNG` was tested. Ordinary cinematics are not generally hidden. The host's `OBR` intro showed no stray partner, but the guest's view and other scenes remain open. |
+| Bike loss and bosses (B/X) | Some scenes assume only Deacon or his bike participates. The Carlos and Skizzo fights are single-fighter set pieces; scripted hordes can exceed the 16-pawn stream cap. |
+| Region transitions (T) | `RNA1` and `LRH1` have not been tested with legitimately reached saves. Verify the guest's region and position after host save/resync rather than assuming a transition succeeded. |
 
-Done: `BendGameMission.ActiveMissionData` names the running mission (checked
-by starting `OBR`); the per-mission table is
-[`mission_policy.hpp`](../src/coop/mission_policy.hpp), covered by
-`tools/test_protocol.cpp`; the passenger-seat rule (§4.2) uses it.
-
-1. Show the host's mission to the guest (§4.1): stream companions and
-   mission vehicles as display-only replicas, and send the mission weather.
-   Tracked in [COOP-ROADMAP.md](COOP-ROADMAP.md).
-2. Check whether enemies that are already fighting still switch to the
-   partner in stealth missions (§4.3).
-3. Send the host's active mission code to the guest (a protocol change), so
-   the guest can apply the flashback, capture and cutscene policies.
-4. Stream companions and mission vehicles as display-only replicas (§4.1).
+Priorities and acceptance tests are in the [co-op roadmap](COOP-ROADMAP.md);
+individual paired observations are in the [research log](REPLICATION-RESEARCH.md).
