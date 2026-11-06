@@ -497,7 +497,11 @@ void MainRender(const session::View& view, const std::vector<std::string>& log) 
         g_main.renderedFirst = reinterpret_cast<FText24*>(names->data)->Data();
         int cursor = MainCursor();
         MainRefresh();
-        MainSetCursor(pageChanged || cursor < 0 || cursor >= names->num ? 0 : cursor);
+        int target = pageChanged || cursor < 0 || cursor >= names->num ? 0 : cursor;
+        // SetCursorPosition ignores its current position, and the refresh above redrew the highlight on
+        // row 0, so step off the row first to redraw the highlight where the cursor is.
+        if (target == MainCursor() && names->num > 1) MainSetCursor(target == 0 ? 1 : 0);
+        MainSetCursor(target);
         Log("native ui: CO-OP page %s", RowsText(g_main.rows).c_str());
     }
     std::string status = std::string(session::PageTitle(g_main.page, view)) + "\n" + session::StatusText(g_main.page, view, log);

@@ -5510,7 +5510,8 @@ void UpdateGuestSaveProtection() {
     }
     if (wasGuest && !guest && SaveGuardActive()) {
         Log("save guard: left the session; the sandbox stays active until restart");
-        ui::Notify("Theys Gone", "Session ended. Your saves stay in the co-op sandbox until you restart the game.");
+        // An event, not a direct notification: leaving from the pause menu would hide it until it expired.
+        g_events.Add("Saves stay in the co-op sandbox until you restart");
     }
     wasGuest = guest;
 }
