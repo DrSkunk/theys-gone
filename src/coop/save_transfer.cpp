@@ -246,7 +246,7 @@ void Adopt() {
     }
     g_guest.state = GuestState::adopted;
     g_guest.receiver.Reset();
-    Log("save transfer: host save installed; Continue from the main menu to load it");
+    Log("save transfer: host save installed; START GAME or Continue loads it");
 }
 
 } // namespace
@@ -356,7 +356,7 @@ std::string SaveTransferStatus(const SaveTransferContext& context) {
         return buffer;
     case GuestState::adopted:
         if (!SaveGuardPinned()) return "Playing on the host's save";
-        return context.inGameplay ? "Loading the host save..." : "Host save ready: press Continue";
+        return context.inGameplay ? "Loading the host save..." : "Host save ready: choose START GAME";
     case GuestState::failed:
         return g_guest.error;
     }
