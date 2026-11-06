@@ -11,7 +11,7 @@ struct MenuSettings {
     int trousers = 0;
     int capColor = 0;
     bool cap = true;
-    bool motorcycles = true;
+    bool motorcycles = true; // always on; kept so a future escape hatch has one place to change
     bool passengers = true;
     bool friendlyFire = false;
     bool enemies = true;

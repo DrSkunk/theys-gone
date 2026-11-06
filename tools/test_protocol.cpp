@@ -1463,8 +1463,18 @@ int main() {
     assert(coop::DecodeState(data, sizeof packet, decoded) && (decoded.flags & coop::kSeparated));
     packet.flags |= coop::kMenuPause;
     assert(coop::DecodeState(data, sizeof packet, decoded) && (decoded.flags & coop::kMenuPause));
-    packet.flags = static_cast<uint16_t>(packet.flags | (1u << 12));
+    packet.flags |= coop::kHostSave | coop::kObjectiveSync | coop::kFreeRoam;
+    assert(coop::DecodeState(data, sizeof packet, decoded) && (decoded.flags & coop::kHostSave));
+    packet.flags = static_cast<uint16_t>(packet.flags | (1u << 15));
     assert(!coop::DecodeState(data, sizeof packet, decoded));
+    // The guest follows the host's session options; objective sync only rides on a shared host save.
+    using coop::HostOptionFlags, coop::HostOptions;
+    assert(HostOptionFlags({true, true, false}) == (coop::kHostSave | coop::kObjectiveSync));
+    assert(HostOptionFlags({false, true, true}) == coop::kFreeRoam);
+    auto options = HostOptions(coop::kHostSave | coop::kObjectiveSync | coop::kHasPawn);
+    assert(options.hostSave && options.objectiveSync && !options.freeRoam);
+    options = HostOptions(coop::kObjectiveSync);
+    assert(!options.hostSave && !options.objectiveSync);
     packet.flags = coop::kPassenger | coop::kHasPawn | coop::kInVehicle;
     packet.attackKind = 2;
     assert(!coop::DecodeState(data, sizeof packet, decoded));

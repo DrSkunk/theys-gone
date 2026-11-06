@@ -15,7 +15,7 @@ using namespace ue;
 
 namespace coop {
 namespace {
-constexpr int kBaseRows = 10; // settings and actions before the optional Steam rows and "Close"
+constexpr int kBaseRows = 8; // settings and actions before the optional Steam rows and "Close"
 constexpr int kOnlineRows = 3;
 using Color = OverlayColor;
 OverlayFrame pendingFrame;
@@ -187,12 +187,9 @@ MenuActions SettingsMenu::Update(UObject* controller, bool focused, MenuSettings
         settings.cap = !settings.cap;
         result.changed = true;
     } else if (selected_ == 4) {
-        settings.motorcycles = !settings.motorcycles;
-        result.changed = true;
-    } else if (selected_ == 5) {
         settings.passengers = !settings.passengers;
         result.changed = true;
-    } else if (selected_ == 6) {
+    } else if (selected_ == 5) {
         if (settings.friendlyFire || confirmDamage_) {
             settings.friendlyFire = !settings.friendlyFire;
             confirmDamage_ = false;
@@ -200,11 +197,8 @@ MenuActions SettingsMenu::Update(UObject* controller, bool focused, MenuSettings
         } else {
             confirmDamage_ = true;
         }
-    } else if (selected_ == 7) {
-        settings.enemies = !settings.enemies;
-        result.changed = true;
-    } else if (selected_ == 8 && accept) result.passenger = true;
-    else if (selected_ == 9 && accept) result.teleport = true;
+    } else if (selected_ == 6 && accept) result.passenger = true;
+    else if (selected_ == 7 && accept) result.teleport = true;
     else if (online.enabled && selected_ == kBaseRows && accept) result.lobby = true;
     else if (online.enabled && selected_ == kBaseRows + 1 && accept) result.invite = true;
     else if (online.enabled && selected_ == kBaseRows + 2) {
@@ -221,10 +215,10 @@ void SettingsMenu::Draw(int width, int height, const MenuSettings& settings,
     renderWidth_ = width;
     renderHeight_ = height;
     std::vector<std::string> labels = {"Jacket color", "Trousers color", "Cap color", "Cap",
-        "Sync motorcycles", "Allow a passenger", "Friendly fire", "Sync host's enemies", "Join / leave partner's bike", "Teleport to partner"};
+        "Allow a passenger", "Friendly fire", "Join / leave partner's bike", "Teleport to partner"};
     std::vector<std::string> values = {PaletteName(settings.jacket), PaletteName(settings.trousers),
-        PaletteName(settings.capColor), settings.cap ? "On" : "Off", settings.motorcycles ? "On" : "Off",
-        settings.passengers ? "On" : "Off", settings.friendlyFire ? "ON - LETHAL" : "Off", settings.enemies ? "On" : "Off", "", ""};
+        PaletteName(settings.capColor), settings.cap ? "On" : "Off",
+        settings.passengers ? "On" : "Off", settings.friendlyFire ? "ON - LETHAL" : "Off", "", ""};
     if (online.enabled) {
         labels.insert(labels.end(), {"Steam lobby", "Invite a Steam friend", "Join a Steam friend"});
         values.insert(values.end(), {online.lobby, online.invite, online.join});
@@ -247,7 +241,7 @@ void SettingsMenu::Draw(int width, int height, const MenuSettings& settings,
     for (int i = 0; i < rows; ++i) {
         if (i == selected_) Rect({0.06f, 0.22f, 0.26f, 1.f}, x + 12 * scale, rowY + i * rowH, w - 24 * scale, rowH);
         Text(labels[i], white, x + 28 * scale, rowY + (i * 40 + 10) * scale, scale);
-        Text(values[i], i == 6 && settings.friendlyFire ? Color{1.f, 0.35f, 0.25f, 1.f} : muted,
+        Text(values[i], i == 5 && settings.friendlyFire ? Color{1.f, 0.35f, 0.25f, 1.f} : muted,
              x + 470 * scale, rowY + (i * 40 + 10) * scale, scale);
     }
     Text(confirmDamage_ ? "Enable real damage and death? Press A / Enter again to confirm." :

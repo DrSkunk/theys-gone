@@ -24,7 +24,6 @@ fi
   "$source"/imgui.cpp "$source"/imgui_draw.cpp "$source"/imgui_tables.cpp "$source"/imgui_widgets.cpp \
   "$source"/backends/imgui_impl_dx11.cpp \
   -lws2_32 -lbcrypt -ld3d11 -ld3dcompiler -ldxgi -Wl,--subsystem,windows -Wl,--no-insert-timestamp
-cp config/TheysGone.ini package/TheysGone.ini
 cp "$source/LICENSE.txt" package/LICENSE-Dear-ImGui.txt
 mkdir -p package/BendGame/Content/Paks
 cp assets/branding/pakchunk99-TheysGone_Brand_P.pak package/BendGame/Content/Paks/

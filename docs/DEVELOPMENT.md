@@ -14,7 +14,7 @@
 ```sh
 poetry install
 make test     # C++ protocol/motion/combat tests + Python unit tests
-make build    # package/TheysGone.asi + TheysGone.ini + branding pak
+make build    # package/TheysGone.asi + branding pak
 make dist     # dist/TheysGone-<version>.zip + .sha256
 ```
 
@@ -190,6 +190,39 @@ textures, but the game keeps drawing the original small texture. The plugin
 therefore points `LogoSmall` at `Logo`'s texture at its own brush size, logged
 as `native ui: title menu logo uses the branded title texture`. Without the pak
 both textures are the original Days Gone logo, so the swap changes nothing.
+
+## Advanced settings
+
+No INI is shipped: every setting has a built-in default, and players change
+their preferences in the F8 overlay, which writes them to `TheysGone.ini` next
+to the plugin. To override anything else, create that file with a `[Coop]`
+section. It is read once at startup; restart after editing. Friendly fire is
+never read from disk.
+
+| Key | Default | Notes |
+|---|---|---|
+| `JacketColor`, `TrousersColor`, `CapColor` | `0` | 0 Original, 1 Crimson, 2 Ocean, 3 Forest, 4 Sand, 5 Charcoal, 6 Violet; written by F8 |
+| `ShowCap`, `AllowPassenger` | `1` | Written by F8 |
+| `HostSave` | `1` | **Host decides.** 1: the guest plays the host's save in a sandbox. 0: separate saves |
+| `MissionObjectiveSync` | `1` | **Host decides.** Share completed objectives live (experimental); needs `HostSave=1` |
+| `FreeRoam` | `0` | **Host decides.** Experimental: distant players run the enemies around them; on the host it also keeps the world streamed around a distant guest |
+| `PartnerMarker` | `1` | Show the partner on the minimap and world map |
+| `TeleportKey` | `118` | Windows virtual-key code; 118 is F7 |
+| `PlayerName` | empty | Empty uses the Steam persona name, or Deacon without Steam; up to 15 UTF-8 bytes |
+| `Transport` | `menu` | `udp` hosts or joins LAN automatically at startup using `PeerHost`/`PeerPort` |
+| `Port`, `PeerHost`, `PeerPort` | `27777`, empty, `27777` | LAN only. Never expose the port to the Internet |
+| `Visibility` | `friends` | `private`, `friends` or `public`; saved when changed in CO-OP |
+| `SteamApp` | `daysgone` | `spacewar` runs lobbies under app 480; both players must match |
+| `SteamPumpCallbacks` | `0` | Try `1` only if overlay invites never arrive |
+| `AnimIdle`, `AnimWalk`, `AnimRun`, `AnimSprint` | built in | Partner avatar animations by speed |
+| `PoseRate`, `PoseFace` | `20`, `0` | Pose updates per second (10–30); `PoseFace=1` also streams the face rig |
+| `DebugTools`, `DebugFailSaveGuard` | `0` | See [debug tools](#debug-tools) |
+| `Discovery`, `MissionDiscovery`, `MenuDiscovery` | `0` | Read-only reverse-engineering logs |
+
+"Host decides" options travel in the host's state packets (protocol v12
+flags `kHostSave`, `kObjectiveSync`, `kFreeRoam`); a guest ignores its own
+values for them. `[Research]` keys are listed under the native-replication
+experiments below.
 
 ## Debug tools
 
@@ -650,7 +683,7 @@ completion; see the [research log](REPLICATION-RESEARCH.md) and the
 
 ## Shared enemies
 
-With *Sync host's enemies* on, both PCs set `kSyncEnemies`:
+Enemy sync is always on, so both PCs set `kSyncEnemies`:
 
 - **Host.** Streams pose and appearance (`DPOS`, `DMEN`) for at most 16
   hostile and friendly companion pawns combined, normally within 80 m of

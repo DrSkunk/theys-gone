@@ -18,7 +18,7 @@ struct Config {
     std::string playerName;        // empty: the Steam persona name (or "Deacon" without Steam)
     bool discovery = false;
     bool missionDiscovery = false; // log runtime mission/save UFunction signatures; read-only
-    bool missionObjectiveSync = false; // opt-in replication of completed objectives; save sync remains fallback
+    bool missionObjectiveSync = true; // host: share completed objectives live (experimental); save sync remains fallback
     bool menuDiscovery = false;    // F6 dumps native menu classes and live widget references
     bool hostSave = true; // host shares its save; a guest plays it in a sandbox so its own saves stay untouched
     bool debugTools = false;

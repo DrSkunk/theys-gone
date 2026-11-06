@@ -30,7 +30,7 @@ they are not normal play.
 ```sh
 poetry install   # Python tooling; never create your own venv
 make test        # C++ protocol/motion/combat and Python unit tests
-make build       # package/TheysGone.asi, INI and branding pak
+make build       # package/TheysGone.asi and branding pak
 make dist        # versioned zip and SHA-256
 git diff --check
 ```

@@ -33,8 +33,11 @@ body:
   - type: input
     id: settings
     attributes:
-      label: Relevant TheysGone.ini values
-      description: HostSave, FreeRoam and MissionObjectiveSync on both PCs, e.g. "host HostSave=1 FreeRoam=0 MissionObjectiveSync=0; guest the same"
+      label: Changed settings
+      description: >-
+        The host's HostSave, FreeRoam and MissionObjectiveSync if changed from the defaults
+        (the guest follows the host), plus any custom TheysGone.ini keys on either PC,
+        e.g. "host HostSave=0; guest PartnerMarker=0"
   - type: dropdown
     id: save-guard
     attributes:

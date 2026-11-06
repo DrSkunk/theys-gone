@@ -7,7 +7,7 @@
 namespace coop {
 
 constexpr uint32_t kMagic = 0x4F434744; // "DGCO"
-constexpr uint16_t kProtocolVersion = 11;
+constexpr uint16_t kProtocolVersion = 12;
 
 enum StateFlags : uint16_t {
     kHasPawn = 1 << 0,
@@ -22,7 +22,27 @@ enum StateFlags : uint16_t {
     kSyncEnemies = 1 << 9, // guest: wants the host's enemies; host: streams them
     kSeparated = 1 << 10,  // host: free roam put the players in separate regions; each world owns its own enemies
     kMenuPause = 1 << 11,  // sender has a pause/map/inventory menu open; both players must request a pause
+    // Session options, set only by the host; the guest follows them instead of its own INI.
+    kHostSave = 1 << 12,      // the guest plays the host's save in a sandbox
+    kObjectiveSync = 1 << 13, // completed objectives are shared live
+    kFreeRoam = 1 << 14,      // distant players simulate the enemies around them
 };
+
+struct SessionOptions {
+    bool hostSave = false;
+    bool objectiveSync = false;
+    bool freeRoam = false;
+};
+
+inline uint16_t HostOptionFlags(const SessionOptions& options) {
+    return static_cast<uint16_t>((options.hostSave ? kHostSave : 0) |
+                                 (options.hostSave && options.objectiveSync ? kObjectiveSync : 0) |
+                                 (options.freeRoam ? kFreeRoam : 0));
+}
+
+inline SessionOptions HostOptions(uint16_t flags) {
+    return {(flags & kHostSave) != 0, (flags & kHostSave) && (flags & kObjectiveSync), (flags & kFreeRoam) != 0};
+}
 
 enum ActionFlags : uint8_t {
     kAiming = 1 << 0,
@@ -79,7 +99,8 @@ inline bool DecodeState(const char* data, int len, StatePacket& out) {
     std::memcpy(&out, data, sizeof out);
     if (out.magic != kMagic || out.version != kProtocolVersion ||
         (out.flags & ~(kHasPawn | kInVehicle | kHasBike | kPassenger | kFriendlyFire |
-                       kAcceptPassengers | kAlive | kSyncBikes | kWorldState | kSyncEnemies | kSeparated | kMenuPause))) return false;
+                       kAcceptPassengers | kAlive | kSyncBikes | kWorldState | kSyncEnemies | kSeparated | kMenuPause |
+                       kHostSave | kObjectiveSync | kFreeRoam))) return false;
     const float values[] = {out.pos[0], out.pos[1], out.pos[2], out.yaw, out.pitch,
                             out.vel[0], out.vel[1], out.vel[2], out.bikePos[0], out.bikePos[1], out.bikePos[2],
                             out.bikeRotation[0], out.bikeRotation[1], out.bikeRotation[2], out.damage, out.health,

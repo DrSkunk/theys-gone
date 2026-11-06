@@ -57,9 +57,11 @@ class ProtocolTest(unittest.TestCase):
         data = fake_peer.encode(1, 0, (0, 0, 0), 0, 0, (0, 0, 0), 'x',
                                 flags=fake_peer.HAS_PAWN | fake_peer.MENU_PAUSE)
         self.assertTrue(fake_peer.decode(data)['flags'] & fake_peer.MENU_PAUSE)
-        old = data[:4] + struct.pack('<H', 10) + data[6:]
+        old = data[:4] + struct.pack('<H', 11) + data[6:]
         self.assertIsNone(fake_peer.decode(old))
-        unknown = data[:6] + struct.pack('<H', 1 << 12) + data[8:]
+        host = data[:6] + struct.pack('<H', fake_peer.HOST_SAVE | fake_peer.OBJECTIVE_SYNC) + data[8:]
+        self.assertTrue(fake_peer.decode(host)['flags'] & fake_peer.HOST_SAVE)
+        unknown = data[:6] + struct.pack('<H', 1 << 15) + data[8:]
         self.assertIsNone(fake_peer.decode(unknown))
 
     def test_round_trip(self):

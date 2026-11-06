@@ -24,12 +24,14 @@ the host progress. Host and join sessions through Steam or your local network.
   their passenger, find them on the map or teleport nearby.
 - Play on the host's save, fight host-owned enemies and follow the host's time
   and weather. Friendly fire requires both players to opt in each session.
-- Experimental, outside the main use case: `FreeRoam=1` on both PCs lets
-  distant players simulate enemies in their own regions. A fight in progress
+- Experimental, outside the main use case: free roam (`FreeRoam=1`, chosen by
+  the host) lets distant players simulate enemies in their own regions. A fight in progress
   can remain with its owner when players split or regroup. Guest-owned enemies
   attacking the host after regrouping are still unverified.
-- `MissionObjectiveSync=1` on both PCs optionally shares completed objectives;
-  starting and completing jobs still requires host-save catch-up.
+- Objective sync shares completed objectives live. It is on by default but
+  experimental (tested on one job); the host can turn it off with
+  `MissionObjectiveSync=0`. Starting and completing jobs still requires
+  host-save catch-up.
 - One-PC paired tests have shown Boozer and his bike as display replicas,
   story passenger-seat and stealth policies, mission weather, flashback
   hiding, and shared menu pause. These do not establish coverage for all
@@ -72,8 +74,8 @@ is the current status, test scope and priorities.
 3. Install Ultimate ASI Loader x64 as `version.dll` in the game's
    `BendGame/Binaries/Win64/` folder, next to `DaysGone.exe`. Skip this step if
    you already have an ASI loader there, and don't overwrite other mods.
-4. Copy `TheysGone.asi` and `TheysGone.ini` from the zip into that same
-   folder. Both files must stay side by side.
+4. Copy `TheysGone.asi` from the zip into that same folder. No configuration
+   file is needed; all settings have built-in defaults.
 5. **Optional:** copy the zip's `BendGame/Content/Paks/pakchunk99-TheysGone_Brand_P.pak`
    into the matching folder under your game installation. This replaces the
    title and main-menu logos with Theys Gone branding; the mod works without it.
@@ -106,8 +108,9 @@ Choose **HOST LAN GAME**. On the other PC choose **JOIN LAN GAME**, then select
 the host from the local-network list. Use **CLOSE SESSION** / **LEAVE SESSION**
 to disconnect without restarting the game.
 
-For automatic LAN hosting/joining instead of choosing in the menu, set
-`Transport=udp` and configure:
+For automatic LAN hosting/joining instead of choosing in the menu, create a
+text file named `TheysGone.ini` next to `TheysGone.asi` (or edit it if the F8
+overlay already created one), set `Transport=udp` and configure:
 
 **Host:** leave `PeerHost` empty.
 
@@ -135,14 +138,16 @@ PlayerName=Partner
   `sudo ufw allow from 192.168.1.0/24 to any port 27777 proto udp`.
   **Never** forward this port to the Internet: the protocol has no encryption
   or authentication.
-- With `HostSave=1` and an active guest sandbox, the host's save transfers
-  automatically; see below.
-- Settings are read when the game starts. Restart after editing the INI;
+- With the host's `HostSave=1` and an active guest sandbox, the host's save
+  transfers automatically; see below.
+- Settings are read when the game starts. Restart after editing
+  `TheysGone.ini`;
   switching sessions from CO-OP does not require a restart.
 
 #### Playing on the host's save
 
-With `HostSave=1` (the default), the host's save is the one that counts:
+With `HostSave=1` (the default), the host's save is the one that counts.
+This is the host's choice; the joining player follows it automatically:
 
 1. The host loads their game. A snapshot of their saves is sent to the guest.
 2. The joining player connects from the title or pause menu. If the save
@@ -164,10 +169,11 @@ With `HostSave=1` (the default), the host's save is the one that counts:
 > `save guard: guest save sandbox active until restart` after joining.
 
 With the sandbox active, guest progress is disposable, including after the
-host leaves, until the guest restarts the game. Set `HostSave=0` on both PCs
-to play on separate saves instead. A cached snapshot can lag a recent host
-save, so check progress after a transfer. When a session ends, the game
-reminds the guest that the sandbox stays active until restart.
+host leaves, until the guest restarts the game. To play on separate saves
+instead, the host sets `HostSave=0` in its `TheysGone.ini`. A cached snapshot
+can lag a recent host save, so check progress after a transfer. When a
+session ends, the game reminds the guest that the sandbox stays active until
+restart.
 
 In one-PC tests, fast travel left the guest behind. Teleport can help regroup,
 but once placed a guest in a ceiling; have the partner stand on open ground
@@ -213,7 +219,8 @@ for a copy of the game that runs without its own Steam connection, for
 example one started outside Steam. Spacewar lobbies are separate from Days
 Gone lobbies. The executable must still be the supported build.
 
-1. Set `SteamApp=spacewar` in `TheysGone.ini`, and keep the Steam client running.
+1. Add `SteamApp=spacewar` under `[Coop]` in `TheysGone.ini` next to the .asi
+   (create the file if it does not exist), and keep the Steam client running.
 2. On first use the mod copies the game's `steam_api64.dll` next to the game
    executable as `steam_spacewar.dll`. If the game has no `steam_api64.dll`, or
    the folder is not writable, place a copy of one (from any Steamworks game)
@@ -264,14 +271,15 @@ template under *Controller Settings → Current Layout → Templates*.
 
 ### Gameplay settings (F8)
 
-The overlay controls appearance, motorcycle and enemy sync, passenger riding,
-teleport and Steam lobby actions. Changes are saved to the INI immediately,
-except friendly fire: both players must enable and confirm it each session.
+The overlay controls appearance, passenger riding, teleport and Steam lobby
+actions. Motorcycles and the host's enemies are always synced. Changes are
+saved immediately to `TheysGone.ini` next to the .asi, which the overlay
+creates if needed, except friendly fire: both players must enable and confirm
+it each session.
 
 ### Passenger riding
 
-Both players need *Sync motorcycles* on, and the driver needs *Allow a
-passenger*. The driver gets on their bike and stops. The passenger walks up
+The driver needs *Allow a passenger* on. The driver gets on their bike and stops. The passenger walks up
 to it and holds the game's own interact button on the **Ride with
 &lt;partner&gt;** prompt (F9 also works). The passenger is attached to the bike
 as a visual rider, and it isn't the game's own two-seat vehicle code. The
@@ -286,11 +294,18 @@ missions do this comes from the mission catalog; only `OBR` has been tested.
 
 ## Configuration reference
 
-`TheysGone.ini` documents its `[Coop]` settings and defaults. `HostSave=1`
-is on by default; `FreeRoam=1` and `MissionObjectiveSync=1` are experimental,
-off by default and must be enabled on both PCs. The latter also requires
-`HostSave=1`. Set `PartnerMarker=0` under `[Coop]` to hide the partner's
-minimap and world-map marker; it defaults to `1`.
+No configuration is needed. The F8 overlay saves your preferences to
+`TheysGone.ini` next to the .asi; the file is optional, and INIs from older
+versions still work.
+
+The host decides the session options and the joining player follows them
+automatically: `HostSave` (the host's shared save, default `1`; `0` for
+separate saves), `MissionObjectiveSync` (default `1`, experimental, requires
+`HostSave=1`) and `FreeRoam` (default `0`, experimental). Other keys, such as
+`PartnerMarker=0` to hide the partner's minimap and world-map marker, are
+per-player. Both players need the same mod release and, if changed, the same
+`SteamApp`. See [advanced settings](docs/DEVELOPMENT.md#advanced-settings)
+for every key.
 
 ## Troubleshooting
 
@@ -299,7 +314,7 @@ names, account IDs, IP addresses and local paths before sharing it. A healthy
 start looks like this:
 
 ```text
-Theys Gone … starting (protocol v11)
+Theys Gone … starting (protocol v12)
 ProcessEvent hook installed
 GNames via pointer at rva 0x…, … names
 network: UDP port 27777 open
@@ -311,7 +326,7 @@ avatar: spawned …
 |---|---|
 | No log file | The ASI loader isn't loading. Check `version.dll` and, on Proton, the `WINEDLLOVERRIDES` launch option |
 | `FATAL: unsupported DaysGone.exe` | Wrong game version. The mod disables itself; wait for an updated release |
-| `Join blocked: the save sandbox failed` | The guest left the session to protect its saves. Check the `save guard:` lines in the log, or set `HostSave=0` on both PCs |
+| `Join blocked: the save sandbox failed` | The guest left the session to protect its saves. Check the `save guard:` lines in the log, or ask the host to set `HostSave=0` for separate saves |
 | Never connects | Wrong `PeerHost`/port, firewall, a mod version mismatch, or a player hasn't loaded a save |
 | Connected but no partner visible | You are far apart (try F7), or the partner just loaded and the avatar is being rebuilt (wait about 5 seconds) |
 
@@ -320,7 +335,7 @@ normally.
 
 ## Uninstall
 
-Close the game and delete `TheysGone.asi`, `TheysGone.ini` and the
+Close the game and delete `TheysGone.asi`, `TheysGone.ini` (if present) and the
 `TheysGone*.log`/`.txt` files. Remove `version.dll`, and the launch option,
 only if no other mod uses the ASI loader.
 Delete `BendGame/Content/Paks/pakchunk99-TheysGone_Brand_P.pak` to restore

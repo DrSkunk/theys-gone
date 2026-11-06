@@ -126,6 +126,15 @@ uint32_t g_seq = 0;
 uint32_t g_localShotSequence = 0;
 uint32_t g_session = 0, g_consent = 1;
 StatePacket g_peer{};
+
+// The host's game decides the session options. A guest learns them from the host's first state packet
+// and ignores its own HostSave, MissionObjectiveSync and FreeRoam settings.
+SessionOptions LocalOptions() { return {g_cfg.hostSave, g_cfg.missionObjectiveSync, g_cfg.freeRoam}; }
+bool HostOptionsKnown() { return IsGuest() && g_peer.session != 0; }
+SessionOptions Options() {
+    if (!IsGuest()) return HostOptions(HostOptionFlags(LocalOptions()));
+    return HostOptionsKnown() ? HostOptions(g_peer.flags) : SessionOptions{};
+}
 DamageChannel g_damage;
 Appearance g_localAppearance, g_remoteAppearance;
 UObject* g_localBike = nullptr;
@@ -319,7 +328,7 @@ std::string Narrow(const std::wstring& w);
 void SaveSettings() {
     std::wstring ini = g_basePath + L".ini";
     const std::pair<const wchar_t*, int> values[] = {{L"JacketColor", g_settings.jacket}, {L"TrousersColor", g_settings.trousers},
-        {L"CapColor", g_settings.capColor}, {L"ShowCap", g_settings.cap}, {L"SyncMotorcycles", g_settings.motorcycles}, {L"SyncEnemies", g_settings.enemies},
+        {L"CapColor", g_settings.capColor}, {L"ShowCap", g_settings.cap},
         {L"AllowPassenger", g_settings.passengers}};
     for (auto [key, value] : values) {
         auto text = std::to_wstring(value);
@@ -1277,6 +1286,7 @@ void SendLocalState(UObject* pawn, double now) {
     if (g_settings.motorcycles) p.flags |= kSyncBikes;
     if (g_settings.enemies) p.flags |= kSyncEnemies;
     if (IsHost() && g_separated) p.flags |= kSeparated;
+    if (IsHost()) p.flags |= HostOptionFlags(LocalOptions());
     if (g_menuPause.localMenu) p.flags |= kMenuPause;
     if (PassengerSeatOffered(g_settings.passengers, g_mission.flags)) p.flags |= kAcceptPassengers;
     std::snprintf(p.name, sizeof p.name, "%s", session::TruncateUtf8(LocalName(), sizeof p.name - 1).c_str());
@@ -4667,7 +4677,7 @@ void UpdatePartnerMarker(double now) {
 bool ProxyWanted(double now) {
     bool peerReady = g_pawn && EnemyReplicationActive(now) && (g_peer.flags & kSyncEnemies) &&
         (g_peer.flags & kHasPawn) && (g_peer.flags & kAlive) && IsLive(g_avatar.actor) && !g_avatar.hidden;
-    return PartnerProxyWanted(IsHost(), peerReady, g_cfg.freeRoam, PlayersSeparated(), !g_kept.empty());
+    return PartnerProxyWanted(IsHost(), peerReady, Options().freeRoam, PlayersSeparated(), !g_kept.empty());
 }
 
 void DestroyProxy(const char* why) {
@@ -4955,7 +4965,7 @@ struct LocalAISuppression {
 } g_suppress;
 
 bool SuppressionWanted(double now) {
-    return g_cfg.hostSave && !IsHost() && g_pawn && AcceptEnemies(now) && (g_peer.flags & kSyncEnemies) &&
+    return Options().hostSave && !IsHost() && g_pawn && AcceptEnemies(now) && (g_peer.flags & kSyncEnemies) &&
         !(g_peer.flags & kSeparated);
 }
 
@@ -5447,13 +5457,15 @@ uint64_t g_logged = 0;
 void UpdateGuestSaveProtection() {
     static bool wasGuest = false;
     bool guest = IsGuest();
-    if (g_cfg.hostSave && guest && !SaveGuardActive() && !g_cfg.debugFailSaveGuard) SaveGuardEnable();
-    if (savepolicy::GuestMustLeaveUnprotected(g_cfg.hostSave, guest, SaveGuardActive())) {
+    // Until the host's first packet arrives nothing is shared yet, so the decision waits for its options.
+    bool hostSave = HostOptionsKnown() && Options().hostSave;
+    if (hostSave && !SaveGuardActive() && !g_cfg.debugFailSaveGuard) SaveGuardEnable();
+    if (savepolicy::GuestMustLeaveUnprotected(hostSave, guest, SaveGuardActive())) {
         Log("save guard: sandbox unavailable; leaving the session so your real saves are not written");
         LeaveSession(false);
         g_events.Add("Join blocked: save sandbox failed");
         ui::Notify("Theys Gone", "Join blocked: the save sandbox failed, so your saves would not be protected. "
-                                 "See TheysGone.log, or set HostSave=0 on both PCs to play on separate saves.");
+                                 "See TheysGone.log, or ask the host to set HostSave=0 for separate saves.");
         wasGuest = false;
         return;
     }
@@ -5773,7 +5785,7 @@ void ReceiveStory(const char* data, int len) {
 
 void ReceiveObjectiveProgress(const char* data, int len) {
     ObjectiveProgressPacket packet;
-    if (!g_cfg.missionObjectiveSync || !g_cfg.hostSave || !IsGuest() ||
+    if (!IsGuest() || !Options().objectiveSync ||
         !DecodeObjectiveProgress(data, len, packet) || packet.session != g_peer.session || !g_peer.session) return;
     if (packet.session != g_objectiveProgress.session) {
         g_objectiveProgress = {};
@@ -5962,7 +5974,7 @@ void UpdateStory(double now) {
     }
     if (!SaveGuardAdopted() || SaveGuardPinned() || g_saveLoading || g_loadVerificationPending) return;
     SampleStory(now);
-    if (g_cfg.missionObjectiveSync) {
+    if (Options().objectiveSync) {
         size_t applied = 0;
         while (!g_objectiveProgress.pending.empty() && applied < kObjectiveProgressApplyPerTick) {
             auto packet = g_objectiveProgress.pending.front();
@@ -6193,6 +6205,7 @@ void Tick(bool hudFrame) {
         if (adoptedLoad)
             ui::Notify("Theys Gone", "Host save load timed out; return to the main menu and Continue");
     }
+    SaveTransferConfigure(g_cfg.hostSave, HostOptionsKnown() && Options().hostSave);
     SaveTransferTick(TransferContext(now));
     static bool adopted = false;
     if (bool nowAdopted = SaveGuardAdopted(); nowAdopted != adopted) {
@@ -6415,7 +6428,7 @@ void HookedProcessEvent(UObject* obj, UObject* fn, void* parms) {
             Log("menu discovery: %s cursor=%d page=%d position=%d", name.c_str(), cursor, page, position);
         }
     }
-    if (g_ready && g_cfg.hostSave && GetCurrentThreadId() == g_gameThread)
+    if (g_ready && GetCurrentThreadId() == g_gameThread)
         ObserveSaveEvent(obj, fn, parms);
     g.processEvent(obj, fn, parms);
     if (ownUi && obj == g_controller) {
@@ -6473,7 +6486,7 @@ Config LoadConfig(const std::wstring& ini) {
     c.playerName = IniString(ini, L"PlayerName", c.playerName.c_str());
     c.discovery = GetPrivateProfileIntW(L"Coop", L"Discovery", 0, ini.c_str()) != 0;
     c.missionDiscovery = GetPrivateProfileIntW(L"Coop", L"MissionDiscovery", 0, ini.c_str()) != 0;
-    c.missionObjectiveSync = GetPrivateProfileIntW(L"Coop", L"MissionObjectiveSync", 0, ini.c_str()) != 0;
+    c.missionObjectiveSync = GetPrivateProfileIntW(L"Coop", L"MissionObjectiveSync", 1, ini.c_str()) != 0;
     c.menuDiscovery = GetPrivateProfileIntW(L"Coop", L"MenuDiscovery", 0, ini.c_str()) != 0;
     c.hostSave = GetPrivateProfileIntW(L"Coop", L"HostSave", 1, ini.c_str()) != 0;
     c.debugTools = GetPrivateProfileIntW(L"Coop", L"DebugTools", 0, ini.c_str()) != 0;
@@ -6508,7 +6521,7 @@ bool Install(const std::wstring& basePath) {
         Log("config: MissionObjectiveSync requires HostSave=1; objective sync disabled");
         g_cfg.missionObjectiveSync = false;
     } else if (g_cfg.missionObjectiveSync) {
-        Log("objective sync: enabled; both peers must opt in, save resync remains the fallback");
+        Log("objective sync: enabled when hosting; save resync remains the fallback");
     }
     if (g_cfg.debugFailSaveGuard)
         Log("save guard: DebugFailSaveGuard=1; the guest sandbox will refuse to start (test only)");
@@ -6532,8 +6545,6 @@ bool Install(const std::wstring& basePath) {
     g_settings.trousers = palette(L"TrousersColor");
     g_settings.capColor = palette(L"CapColor");
     g_settings.cap = GetPrivateProfileIntW(L"Coop", L"ShowCap", 1, ini.c_str()) != 0;
-    g_settings.motorcycles = GetPrivateProfileIntW(L"Coop", L"SyncMotorcycles", 1, ini.c_str()) != 0;
-    g_settings.enemies = GetPrivateProfileIntW(L"Coop", L"SyncEnemies", 1, ini.c_str()) != 0;
     g_settings.passengers = GetPrivateProfileIntW(L"Coop", L"AllowPassenger", 1, ini.c_str()) != 0;
     if (g_cfg.port == 0 || g_cfg.port > 65535 || g_cfg.peerPort == 0 || g_cfg.peerPort > 65535) {
         Log("FATAL: Port and PeerPort must be between 1 and 65535");
@@ -6561,8 +6572,8 @@ bool Install(const std::wstring& basePath) {
             nt->FileHeader.TimeDateStamp, nt->OptionalHeader.SizeOfImage);
         return false;
     }
-    if (g_cfg.hostSave) InstallSaveGuard(g_basePath + L"-guest-saves");
-    SaveTransferConfigure(g_cfg.hostSave, g_cfg.hostSave);
+    // Passthrough until this player joins a host that shares its save.
+    InstallSaveGuard(g_basePath + L"-guest-saves");
     g.objectArray = reinterpret_cast<uint8_t*>(g.imageBase + kObjectArrayRva);
     if (!InstallHook(reinterpret_cast<uint8_t*>(g.imageBase + kProcessEventRva))) return false;
     Log("ProcessEvent hook installed");

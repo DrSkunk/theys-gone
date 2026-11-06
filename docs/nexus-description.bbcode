@@ -16,13 +16,13 @@ The mod is unofficial and is not affiliated with or endorsed by Bend Studio, Son
 [*]Appearance colors, opt-in friendly fire and teleport to partner in the F8 menu.
 [/list]
 
-[b]Experimental:[/b] free roam ([i]FreeRoam=1[/i] on both PCs) lets players split up and simulate enemies in their own regions. It is outside the main use case, and guest-owned enemies attacking the host after regrouping are unproven.
+[b]Experimental:[/b] free roam ([i]FreeRoam=1[/i], chosen by the host) lets players split up and simulate enemies in their own regions. It is outside the main use case, and guest-owned enemies attacking the host after regrouping are unproven.
 
 [b]Key limitations[/b]
 
 [list]
 [*][b]Back up your saves.[/b] If the guest's save sandbox cannot start, the guest leaves the session ([i]Join blocked[/i]). This check is new; after joining, confirm TheysGone.log shows [i]save guard: guest save sandbox active until restart[/i].
-[*]Missions, inventory, loot, doors and camp NPCs are not shared live. Optional objective sync ([i]MissionObjectiveSync=1[/i]) only shares completed objectives; starting and completing jobs still waits for the host's next save.
+[*]Missions, inventory, loot, doors and camp NPCs are not shared live. Objective sync is on by default but experimental (tested on one job); it only shares completed objectives, and starting and completing jobs still waits for the host's next save.
 [*]At most 16 nearby enemy and companion pawns are shared, so hordes are incomplete. Enemy melee damage is estimated; aimed combat and ranged enemies need more testing.
 [*]Motorcycle physics, fuel, damage and upgrades are not shared. Your partner uses your outfit model with their colors.
 [*]LAN play is unauthenticated and unencrypted: use it only on a trusted network and never forward its port. Steam sessions are encrypted by Steam, but host-save transfer, invite acceptance and Internet/NAT traversal over Steam remain unverified.
@@ -44,12 +44,12 @@ Install on [b]both PCs[/b]. Use [b]Manual Download[/b]; Vortex installation is n
 [list]
 [*]Back up your saves.
 [*]Put Ultimate ASI Loader's [i]version.dll[/i] in [i]BendGame/Binaries/Win64[/i], next to [i]DaysGone.exe[/i]. Don't overwrite an existing loader.
-[*]Copy [i]TheysGone.asi[/i] and [i]TheysGone.ini[/i] from the archive into that same folder.
+[*]Copy [i]TheysGone.asi[/i] from the archive into that same folder. No configuration file is needed.
 [*]Optional: copy [i]BendGame/Content/Paks/pakchunk99-TheysGone_Brand_P.pak[/i] into the matching game folder for the Theys Gone logos.
 [*]On Linux or Steam Deck, set the launch options to [code]WINEDLLOVERRIDES="version=n,b" %command%[/code]
 [/list]
 
-Then open [b]CO-OP[/b] in the title or pause menu. On Steam, host as invite-only, friends-only or public; your friend uses [b]JOIN A FRIEND[/b], [b]FIND PUBLIC GAMES[/b] or a Steam invite. On LAN, choose [b]HOST LAN GAME[/b] and [b]JOIN LAN GAME[/b], and allow inbound UDP 27777 on the host. Press [b]F8[/b] (gamepad: View/Back + Y) for gameplay settings. Settings are also in [i]TheysGone.ini[/i], except friendly fire, which both players must enable each session.
+Then open [b]CO-OP[/b] in the title or pause menu. On Steam, host as invite-only, friends-only or public; your friend uses [b]JOIN A FRIEND[/b], [b]FIND PUBLIC GAMES[/b] or a Steam invite. On LAN, choose [b]HOST LAN GAME[/b] and [b]JOIN LAN GAME[/b], and allow inbound UDP 27777 on the host. Press [b]F8[/b] (gamepad: View/Back + Y) for gameplay settings; your choices are saved to [i]TheysGone.ini[/i] next to the mod. The host decides the session options (shared host save, objective sync, free roam) and the guest follows automatically. Friendly fire is never saved: both players must enable it each session.
 
 Upgrading from [i]Days Gone Together[/i]: delete the old [i]DaysGoneTogether.*[/i] files first; old and new versions cannot connect.
 

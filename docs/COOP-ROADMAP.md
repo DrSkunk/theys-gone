@@ -3,7 +3,7 @@
 The goal is for a second player to join the host's save and help with the
 host's missions. Story progress stays on the host's save; this is not a fully
 shared campaign or a thin client. This is the current status for the repository's
-protocol v11 code. The [research log](REPLICATION-RESEARCH.md) contains the
+protocol v12 code. The [research log](REPLICATION-RESEARCH.md) contains the
 evidence; its older plans are not the current roadmap.
 
 **Evidence matters:** two games on one PC are a paired lab test, not a
@@ -20,7 +20,7 @@ QA levels are defined in
 |---|---|---|
 | Sessions and players | two-PC | Two-PC UDP tests covered avatars and animation, held items, motorcycles, passenger riding, appearance, friendly fire, time and weather. Steam reached shared gameplay on two PCs, but host-save transfer and newer gameplay paths over Steam remain unverified. Internet/NAT behavior and native Windows also remain unverified. |
 | Host saves and story | two-PC (save transfer); catch-up setup unknown | Two PCs transferred and loaded a host save with the guest sandbox active. Forced divergence, an objective autosave, and one job's start/completion exercised catch-up. Full campaign progression and joining mid-mission need more testing. A running host story mission defers catch-up until a later host save. |
-| Enemies and free roam | two-PC (debug-spawned) | Two-PC tests covered host-owned enemies, guest damage and split/regroup ownership using debug-spawned enemies. `FreeRoam=1` is opt-in. The v9 guest-side host proxy has **not** been proven to make naturally spawned guest-owned enemies attack and damage the host after regrouping. |
+| Enemies and free roam | two-PC (debug-spawned) | Two-PC tests covered host-owned enemies, guest damage and split/regroup ownership using debug-spawned enemies. `FreeRoam=1` is opt-in and decided by the host. The v9 guest-side host proxy has **not** been proven to make naturally spawned guest-owned enemies attack and damage the host after regrouping. |
 | Mission policy | paired-lab | In a one-PC paired `OBR` test, a riding guest was let off and could not re-board while the story reserved the seat. In `AON1`, 9 of 13 Rippers targeted the stand-in before the stealth rule and 0 after. More missions and natural combat remain open. |
 | Companions and missions | paired-lab | One-PC tests showed Boozer and his bike as display replicas, host mission weather, the partner map marker and partner hiding in the `WNG` flashback. Guest mission-start fade recovery is implemented; other companions, vehicles and cinematics need coverage. |
 | Menu timing | paired-lab | One-PC tests covered weapon-wheel timing and shared menu pause. A combat tutorial paused only the host while the guest kept running. Separate-PC, focus/combat and other scripted pauses remain open. |
@@ -34,8 +34,10 @@ Important limits for players:
   executable's own file calls. Back up saves. After a successful join, the
   sandbox remains active after disconnect until the game restarts. A cached
   transfer snapshot may also lag a recent host save.
-- Missions, inventory, pickups and doors are not shared live. Optional
-  completed-objective sync does not replace host-save catch-up.
+- Missions, inventory, pickups and doors are not shared live.
+  Completed-objective sync is on by default but experimental (tested on one
+  job) and does not replace host-save catch-up. The host decides `HostSave`,
+  `MissionObjectiveSync` and `FreeRoam`; the guest follows automatically.
 - Enemy and companion pawns share a cap of 16 streamed candidates per sender,
   normally within 80 m; a retained fight can extend beyond that radius. Hordes
   cannot be represented completely. Melee damage is estimated and ranged

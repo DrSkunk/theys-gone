@@ -20,7 +20,7 @@ game process.
 DaysGone.exe
   └─ version.dll (Ultimate ASI Loader proxy)
        └─ TheysGone.asi → DllMain / InitializeASI
-            ├─ load TheysGone.ini next to the .asi
+            ├─ load optional TheysGone.ini next to the .asi (built-in defaults otherwise)
             ├─ check the executable (PE timestamp + image size)
             ├─ check the ProcessEvent prologue bytes
             ├─ install an inline hook on UObject::ProcessEvent
@@ -212,8 +212,9 @@ One non-blocking UDP socket ([`net.cpp`](../src/coop/net.cpp)). The native
 CO-OP menu switches between idle, browsing, hosting and joining. In host mode
 the first valid sender becomes the partner; in join mode the plugin sends to
 the selected host. Closing/leaving clears the pinned endpoint; a host drops
-a timed-out partner so another can join. `Transport=udp` optionally starts
-hosting/joining from the INI instead of waiting for a menu choice.
+a timed-out partner so another can join. `Transport=udp` in an optional
+`TheysGone.ini` starts hosting/joining at startup instead of waiting for a
+menu choice.
 `TGGB` broadcast beacons advertise open LAN hosts. A peer silent for 5 s
 counts as disconnected. A new session ID (from `BCryptGenRandom`) counts as a
 reconnect.
@@ -268,20 +269,20 @@ Steamworks SDK code is bundled or linked:
   traffic, and its relays avoid exposing IP addresses or forwarding ports.
 - **Roles.** The lobby owner is the host for the save, story, world time and
   weather. In standard mode, the host also owns enemies. With `FreeRoam=1` on
-  both peers, each game owns the enemies in its own distant region and shows
+  the host (the guest follows the host's choice), each game owns the enemies in its own distant region and shows
   the other's as replicas (section 5).
   If the original owner leaves, the session ends instead of adopting Steam's
   replacement owner. In LAN mode, the player who chose Host is the host.
 
-### 4.2 State packet (protocol v11)
+### 4.2 State packet (protocol v12)
 
 [`protocol.hpp`](../src/coop/protocol.hpp) defines a fixed 145-byte
 little-endian packet, sent at 30 Hz:
 
 | Field | Type | Notes |
 |---|---|---|
-| magic, version | u32, u16 | `"DGCO"`, 11 |
-| flags | u16 | HasPawn, InVehicle, HasBike, Passenger, FriendlyFire, AcceptPassengers, Alive, SyncBikes, WorldState, SyncEnemies, Separated (host only: free roam split enemy ownership by region), MenuPause (sender's native pause/map/inventory menu is open) |
+| magic, version | u32, u16 | `"DGCO"`, 12 |
+| flags | u16 | HasPawn, InVehicle, HasBike, Passenger, FriendlyFire, AcceptPassengers, Alive, SyncBikes, WorldState, SyncEnemies, Separated (host only: free roam split enemy ownership by region), MenuPause (sender's native pause/map/inventory menu is open), HostSave, ObjectiveSync, FreeRoam (host only: the session options; the guest follows them and ignores its own values) |
 | seq, timeMs | u32 each | wrapping sequence; sender's frame clock |
 | pos[3], yaw, pitch, vel[3] | f32 | finite, within ±1e8 |
 | name | char[16] | |
@@ -312,7 +313,7 @@ The same socket carries more types, each identified by its own magic:
 | `DMMT` | Companion materials: one mesh's slot material assets and up to two runtime scalar overrides per slot | every 2 s per companion mesh |
 | `DGSV` | Save transfer: request, offer, chunk pull, 1 KB chunk | only while a guest downloads the host's save |
 | `DMST` | Story signature: host's live and last-saved job and mission progress | every 1 s from the host |
-| `DMOB` | Completed objective: job, objective and sequence | every 3 s when objective sync is enabled |
+| `DMOB` | Completed objective: job, objective and sequence | every 3 s when the host's objective sync is on (default) |
 | `DMEH` | Hit on the other player's enemy: entity, damage, shot or melee | per hit, sent twice |
 | `DMPX` | Enemy strike on the other player: damage | per hit, sent twice |
 
@@ -369,7 +370,7 @@ The partner is a visual stand-in, not a second player pawn:
    writes them into the copy. Every state-machine clip, additive layer and IK
    result therefore appears as the partner sees it.
 3. If no pose arrives for 0.5 s, the avatar falls back to speed-picked clips
-   (idle, walk, run, sprint) from the INI.
+   (idle, walk, run, sprint), configurable with the `Anim*` keys.
 4. The avatar is hidden when the partner times out.
 
 Because it reuses your own meshes, the partner looks like your Deacon, tinted
@@ -496,10 +497,12 @@ None of this writes save data.
 
 ### 5.8 Host-first save and story
 
-The host's save is authoritative. With `HostSave=1`, the save guard (§6) is
-installed at startup in passthrough mode and attempts to activate a sandbox
-when this player joins someone else's session. If it cannot start, the guest
-leaves the session so its real saves are never used for co-op. If active, the joining player
+The host's save is authoritative. The host decides `HostSave` and announces it
+in its state packets (`kHostSave`); a guest's own value is ignored. The save
+guard (§6) is installed at startup in passthrough mode. A guest activates the
+sandbox only once the host's first packet says the host shares its save. If
+it cannot start, the guest leaves the session so its real saves are never used
+for co-op. If active, the joining player
 downloads the host's newest saves (`DGSV`) and loads them, reloading in place with
 `BendGameMission.ReloadBecauseOfJobFailure` when already in gameplay.
 
@@ -554,7 +557,7 @@ ranges and damage estimates are in
 [DEVELOPMENT.md](DEVELOPMENT.md#shared-enemies).
 
 **Free roam (experimental, added in protocol v9).** With `FreeRoam=1` on
-both peers, the host's guarded world-composition hook
+the host, announced to the guest through `kFreeRoam`, the host's guarded world-composition hook
 keeps terrain streamed around a distant guest. Past 250 m, the guest resumes
 its own local AI and sends up to 16 nearby enemy skeletons and appearance
 descriptions to the host, which renders them as poseable replicas. Below
@@ -620,9 +623,10 @@ and the story-divergence test does not establish complete campaign co-op.
   running.
 - Debug tools are off by default, local only, and limited to an allowlist of
   commands (see [DEVELOPMENT.md](DEVELOPMENT.md#debug-tools)).
-- The guest save sandbox (`HostSave=1`) redirects supported game-executable
-  file operations when active. Hook or activation failure does not block the
-  session and can leave real saves unprotected. Host saves are checked with
+- The guest save sandbox (the host's `HostSave=1`) redirects supported
+  game-executable file operations when active. If the hook or activation
+  fails, the guest leaves the session (*Join blocked*); the sandbox covers
+  only the game's own save files. Host saves are checked with
   SHA-256 and strict file-name rules before adoption; see
   [DEVELOPMENT.md](DEVELOPMENT.md#guest-save-sandbox-hostsave).
 

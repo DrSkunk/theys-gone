@@ -105,7 +105,8 @@ cmd_config() {
     local name="${1:?instance name}" ini
     shift
     ini="$(win64 "$name")/TheysGone.ini"
-    [ -f "$ini" ] || die "no TheysGone.ini in $name"
+    [ -d "$(dirname "$ini")" ] || die "no instance $name"
+    [ -f "$ini" ] || printf '[Coop]\n' > "$ini"
     for pair in "$@"; do
         local key="${pair%%=*}" value="${pair#*=}" section=Coop
         [[ "$pair" == *=* ]] || die "expected Key=value, got $pair"
