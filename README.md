@@ -166,9 +166,10 @@ host leaves, until the guest restarts the game. Set `HostSave=0` on both PCs
 to play on separate saves instead. A cached snapshot can lag a recent host
 save, so check progress after a transfer.
 
-In one paired fast-travel test, the guest received the host's new position and
-time but stayed about 466 m behind. Use teleport to regroup if needed.
-Free-roam handoff at that distance and bedroll sleep have not been tested.
+In one-PC tests, fast travel left the guest behind. Teleport can help regroup,
+but once placed a guest in a ceiling; have the partner stand on open ground
+before teleporting. Host sleep advanced the guest's clock, but two guest sleep
+attempts did not complete while connected. Use the host to sleep for now.
 
 ### Steam sessions (experimental)
 
@@ -250,7 +251,9 @@ While connected, opening the native pause menu, map or inventory keeps
 gameplay running unless **both players** have one of these menus open.
 Closing either player's menu resumes gameplay. When the partner disconnects,
 normal single-player pausing returns. The F8 settings overlay and weapon
-wheel do not count as pause requests. Both players need protocol v11.
+wheel do not count as pause requests. Both players need protocol v11. In one
+lab test a tutorial paused only the host; other scripted pauses remain
+unverified.
 
 On a **Steam Deck**, the mod reads XInput, not Steam Input actions. If the
 gamepad shortcuts do nothing, pick the *Gamepad With Joystick Trackpad*

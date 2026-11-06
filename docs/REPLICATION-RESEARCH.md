@@ -4022,3 +4022,31 @@ does not validate streaming ownership handoff at the resulting separation.
 The host did not carry the guest to the destination, so regrouping remains a
 player-facing gap. The base isolated game executable and `.sav` hashes matched
 before and after the run; both disposable clones were stopped and destroyed.
+
+## Death, sleep and travel follow-up (2026-11-01, paired, one PC)
+
+Two real games on Host-PC used disposable clones of `run1`, loopback UDP,
+`HostSave=1`, `FreeRoam=1` and ASI SHA-256
+`49b4311def3b59db7e04ac0d6e869a4695252603b9317248f9989d970b3f9144`.
+Logs, screenshots and setup scripts are archived outside the repository at
+`~/TheysGone-lab/archive/death-sleep-20261101-t1/` and
+`~/TheysGone-lab/archive/death-confirm-20261101/`. These are not two-PC or
+Steam-transport tests.
+
+| Scenario | Evidence | Result |
+|---|---|---|
+| Host death | In the confirmation run, 16 debug-spawned swarmers attacked. Host health was `121.875` at 12:40:19.704 and `0.000` at 12:40:20.220; the debug session automatically cleaned up and restored saving. The host pawn disappeared at 12:40:21.659, a new pawn appeared at 12:40:26.732 and health was `121.875` at 12:40:39.332. On the guest, the marker hid at 12:40:21.688 and returned at 12:40:27.074; later host movement was received | Pass for this debug-enemy death/respawn and session continuity |
+| Death clock | While the host pawn was absent, the guest restored its local time `11.630 -> 10.386` at 12:40:22.005; it recaptured local time/weather as host sync resumed at 12:40:27.073. An earlier low-health reload also briefly restored local time before resync | Visible time discontinuities are possible during host reload |
+| Host and guest fast travel | At 11:41:37 host travel split the players at 446 m; host `stream-probe` reported the guest focus active, and the guest resumed local AI generators. Guest fast travel reunited them at 45 m at 12:16:33; the host focus became inactive. Guest time was corrected `9.228 -> 8.451` to the host at 12:16:32 | Split/merge transitions observed; no guest-owned enemies were retained or fought |
+| Host sleep | The host used the O'Leary bed while the guest remained at its original location. Host time advanced `1.982 -> 7.013` between 12:12:52 and 12:12:56; guest corrections reached `6.496 -> 7.013` at 12:12:57. Both continued reporting the partner afterward | Pass for host sleep and guest clock in this separated run |
+| Guest sleep | Two connected attempts showed the bed prompt and interaction progress, but no sleep animation or time advance. After the host stopped, the same guest used the bed: screenshots show the sleep animation and the map clock changing from 10:30 AM to 6:10 PM | Connected behavior needs investigation; time and exact position differed in the disconnected comparison |
+| Indoor teleport | Guest F7 at 12:17:17, with the host beside the bed, placed the guest among ceiling supports; the host screenshot showed the guest's feet through the ceiling. Moving the host into open floor and retrying F7 recovered the guest | Unsafe placement observed once |
+| Tutorial pause | With the host's native “Fight or Flight” tutorial displayed, `time-probe` at 12:39:18 reported host `paused=1`, `native-menu=0`, `local=0`, `peer=0`, while the guest reported `paused=0`. After dismissing the tutorial, the host reported `paused=0` | A tutorial can pause one side outside the shared-menu vote |
+
+Both guest save guards reported active. In each run, both copies of the 11
+guest real `.sav` files matched the isolated base's originals, including after
+the guest's disconnected sleep. Each run backed up the base ASI, INI and
+`Saved` tree; the executable, ASI, INI and entire `Saved` file manifests matched
+before and after clone destruction. All four disposable clones were stopped
+and destroyed. Guest death, natural guest-owned enemy combat, mission-time
+sleep/death, and separate-PC behavior remain untested.
