@@ -161,11 +161,6 @@ inline bool DecodeObjectiveProgress(const char* data, int len, ObjectiveProgress
            !out.flags && out.session && out.sequence && validField(out.jobName) && validField(out.objectiveId);
 }
 
-inline bool ObjectiveProgressPacketIsNewer(const ObjectiveProgressPacket& candidate,
-                                           const ObjectiveProgressPacket& previous) {
-    return candidate.session != previous.session || StorySequenceIsNewer(candidate.sequence, previous.sequence);
-}
-
 // Guest decision: reload progress that is neither already verified nor being fetched.
 inline bool StoryNeedsResync(const StoryPacket& host, const StorySignature& mine, uint32_t lastResyncedSignature,
                              uint32_t pendingResyncSignature) {

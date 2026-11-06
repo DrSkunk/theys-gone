@@ -849,12 +849,9 @@ void TestObjectiveProgress() {
     auto empty = EncodeObjectiveProgress(77, 8, "", "IND3", 2);
     assert(!DecodeObjectiveProgress(reinterpret_cast<const char*>(&empty), sizeof empty, decoded));
 
-    auto wrapped = EncodeObjectiveProgress(77, 1, "IND-JobData", "IND3", 2);
-    auto previous = EncodeObjectiveProgress(77, UINT32_MAX, "IND-JobData", "IND3", 2);
-    assert(ObjectiveProgressPacketIsNewer(wrapped, previous));
-    assert(!ObjectiveProgressPacketIsNewer(previous, wrapped));
-    auto restarted = EncodeObjectiveProgress(78, 1, "IND-JobData", "IND3", 2);
-    assert(ObjectiveProgressPacketIsNewer(restarted, previous));
+    // The guest's receive path compares objective sequences with wraparound.
+    assert(StorySequenceIsNewer(1, UINT32_MAX));
+    assert(!StorySequenceIsNewer(UINT32_MAX, 1));
 }
 
 void TestSteamAbi() {
