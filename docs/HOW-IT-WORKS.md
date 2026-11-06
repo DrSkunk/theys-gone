@@ -498,7 +498,8 @@ None of this writes save data.
 
 The host's save is authoritative. With `HostSave=1`, the save guard (§6) is
 installed at startup in passthrough mode and attempts to activate a sandbox
-when this player joins someone else's session. If active, the joining player
+when this player joins someone else's session. If it cannot start, the guest
+leaves the session so its real saves are never used for co-op. If active, the joining player
 downloads the host's newest saves (`DGSV`) and loads them, reloading in place with
 `BendGameMission.ReloadBecauseOfJobFailure` when already in gameplay.
 

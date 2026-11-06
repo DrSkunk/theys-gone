@@ -14,8 +14,9 @@ the host progress. Host and join sessions through Steam or your local network.
 > This is **not** full campaign co-op. Each player still runs their own copy of
 > the game. The joining player starts from the host's save and is resynced when
 > the host's story moves on, but missions, inventory and loot are not mirrored
-> live. Back up saves: the guest's save guard can fail. LAN UDP is
-> unauthenticated; use it only on a trusted network.
+> live. Back up saves: the guest's save sandbox protects them, but only covers
+> the game's own save files. LAN UDP is unauthenticated; use it only on a
+> trusted network.
 
 ## Features and limitations
 
@@ -156,16 +157,17 @@ With `HostSave=1` (the default), the host's save is the one that counts:
    story mission and waits for a later host save.
 
 > [!WARNING]
-> The guard can fail without blocking the session, leaving real guest saves
-> unprotected. After joining, check `TheysGone.log` for
-> `save guard: guest save sandbox active until restart`. If it is absent or
-> F8 says `Save sandbox failed; host save disabled`, stop playing and restore
-> your backup if needed.
+> If the sandbox cannot start, the joining player leaves the session at once
+> and sees *Join blocked: the save sandbox failed*; their real saves are not
+> used for co-op. This check is new and has not yet been confirmed in a live
+> run, so keep backing up saves and check `TheysGone.log` for
+> `save guard: guest save sandbox active until restart` after joining.
 
 With the sandbox active, guest progress is disposable, including after the
 host leaves, until the guest restarts the game. Set `HostSave=0` on both PCs
 to play on separate saves instead. A cached snapshot can lag a recent host
-save, so check progress after a transfer.
+save, so check progress after a transfer. When a session ends, the game
+reminds the guest that the sandbox stays active until restart.
 
 In one-PC tests, fast travel left the guest behind. Teleport can help regroup,
 but once placed a guest in a ceiling; have the partner stand on open ground
@@ -309,7 +311,7 @@ avatar: spawned …
 |---|---|
 | No log file | The ASI loader isn't loading. Check `version.dll` and, on Proton, the `WINEDLLOVERRIDES` launch option |
 | `FATAL: unsupported DaysGone.exe` | Wrong game version. The mod disables itself; wait for an updated release |
-| `Save sandbox failed; host save disabled` | Guest saves may be unprotected. Stop playing and check the log and your backup |
+| `Join blocked: the save sandbox failed` | The guest left the session to protect its saves. Check the `save guard:` lines in the log, or set `HostSave=0` on both PCs |
 | Never connects | Wrong `PeerHost`/port, firewall, a mod version mismatch, or a player hasn't loaded a save |
 | Connected but no partner visible | You are far apart (try F7), or the partner just loaded and the avatar is being rebuilt (wait about 5 seconds) |
 

@@ -75,4 +75,10 @@ inline bool NeedsCopyOnWrite(uint32_t disposition) {
     return disposition == kOpenExisting || disposition == kOpenAlways;
 }
 
+// A guest in a session that shares the host's save needs an active sandbox; without one the session's
+// progress would be written into the guest's real saves, so the guest must leave.
+inline bool GuestMustLeaveUnprotected(bool hostSave, bool guest, bool sandboxActive) {
+    return hostSave && guest && !sandboxActive;
+}
+
 } // namespace coop::savepolicy

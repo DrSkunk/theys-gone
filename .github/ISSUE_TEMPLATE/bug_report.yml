@@ -41,7 +41,7 @@ body:
       label: Was the guest's save guard active?
       description: >-
         Yes if the guest's log has "save guard: guest save sandbox active until restart"
-        and its F8 menu did not report "Save sandbox failed; host save disabled".
+        and it did not show "Join blocked: the save sandbox failed".
       options: ["Yes", "No", "Unknown"]
   - type: textarea
     id: what

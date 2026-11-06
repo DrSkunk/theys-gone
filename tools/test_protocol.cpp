@@ -904,6 +904,10 @@ void TestSavePolicy() {
     assert(IsWriteOpen(0x80000000u, kCreateAlways) && IsWriteOpen(0x80000000u, kTruncateExisting));
     assert(NeedsCopyOnWrite(kOpenExisting) && NeedsCopyOnWrite(kOpenAlways));
     assert(!NeedsCopyOnWrite(kCreateAlways) && !NeedsCopyOnWrite(kTruncateExisting) && !NeedsCopyOnWrite(kCreateNew));
+    assert(GuestMustLeaveUnprotected(true, true, false));
+    assert(!GuestMustLeaveUnprotected(true, true, true));
+    assert(!GuestMustLeaveUnprotected(false, true, false));  // HostSave=0: separate saves, no sandbox
+    assert(!GuestMustLeaveUnprotected(true, false, false));  // host or solo
     std::puts("save policy ok");
 }
 

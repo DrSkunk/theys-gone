@@ -342,7 +342,7 @@ std::string SaveTransferStatus(const SaveTransferContext& context) {
         return {};
     }
     if (!g_join) return {};
-    if (!SaveGuardActive()) return "Save sandbox failed; host save disabled";
+    if (!SaveGuardActive()) return "Save sandbox failed; join blocked";
     char buffer[96];
     switch (g_guest.state) {
     case GuestState::idle:

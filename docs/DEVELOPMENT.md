@@ -197,7 +197,9 @@ The plugin includes local test tools for spawning enemies, invulnerability,
 damage probes, and stepping the time and weather. They are meant for checking
 features, **not** as a trainer.
 
-Enable them with `DebugTools=1` in the INI and restart. Then send commands with
+Enable them with `DebugTools=1` in the INI and restart. `DebugFailSaveGuard=1`
+(also under `[Coop]`, honored only with `DebugTools=1`) forces the guest save
+sandbox to fail so the join block can be tested. Then send commands with
 the standard-library helper, which needs local access to the game folder:
 
 ```sh
@@ -544,10 +546,13 @@ writes below `Saved\...\SaveGames` into `TheysGone-guest-saves` next to the
 plugin. The sandbox is reset on its first activation in that game run and
 stays active after disconnect until the game restarts.
 
-Hook installation or sandbox activation can fail without blocking the
-session. The F8 menu reports `Save sandbox failed; host save disabled`, and
-the log reports the failure; real saves may still be written. Back up saves
-and check for `save guard: guest save sandbox active until restart`.
+If hook installation or sandbox activation fails, the guest leaves the session
+immediately (`UpdateGuestSaveProtection` in `coop.cpp`, rule
+`GuestMustLeaveUnprotected` in `save_policy.hpp`), logs `save guard: sandbox
+unavailable; leaving the session`, and shows *Join blocked*. On leaving a
+session with the sandbox active, the guest is told it lasts until restart.
+To test the failure path, set `DebugFailSaveGuard=1` with `DebugTools=1`; the
+sandbox then refuses to start. Not yet confirmed in a live run.
 
 - Writes are copy-on-write: modifying an existing save first copies the
   original into the sandbox.

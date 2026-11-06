@@ -29,11 +29,11 @@ QA levels are defined in
 
 Important limits for players:
 
-- The guest save guard can fail. The F8 menu reports failure, but joining is
-  not blocked and the real saves may then be written. Back up saves and verify
-  the guard activated. After a successful join, the sandbox remains active
-  after disconnect until the game restarts. A cached transfer snapshot may
-  also lag a recent host save.
+- A guest whose save sandbox cannot start now leaves the session, but this is
+  not yet confirmed in a live run and the sandbox only covers the game
+  executable's own file calls. Back up saves. After a successful join, the
+  sandbox remains active after disconnect until the game restarts. A cached
+  transfer snapshot may also lag a recent host save.
 - Missions, inventory, pickups and doors are not shared live. Optional
   completed-objective sync does not replace host-save catch-up.
 - Enemy and companion pawns share a cap of 16 streamed candidates per sender,
@@ -61,6 +61,10 @@ with the host's missions.
    *Done when:* with the guard forced to fail, the guest cannot load the host's
    save or enter shared gameplay and sees a clear warning; the rule has a unit
    test, and a lab run records both the forced-failure and normal paths.
+   *Status:* implemented and unit-tested: the guest leaves the session when the
+   sandbox cannot start (`UpdateGuestSaveProtection`, `GuestMustLeaveUnprotected`),
+   is told the sandbox persists after leaving, and `DebugFailSaveGuard=1` forces
+   the failure. Remaining: the lab run for both paths.
 2. **Score lab runs automatically.** Add a lab scenario runner that drives
    both instances, asserts the mode first (both peers connected, `HostSave`
    sandbox active), checks shared state and prints `RESULT: PASS`, `FAIL` or

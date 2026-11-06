@@ -4,6 +4,7 @@
 #include "net.hpp"
 #include "steam.hpp"
 #include "save_guard.hpp"
+#include "save_policy.hpp"
 #include "save_transfer.hpp"
 #include "story.hpp"
 #include "mission_policy.hpp"
@@ -5441,6 +5442,28 @@ void RunMenuCommand(const ui::Command& command) {
 
 uint64_t g_logged = 0;
 
+// A guest whose save sandbox cannot start leaves the session: staying would write the shared session's
+// progress into its real saves. Once active, the sandbox lasts until restart, so say so on leaving.
+void UpdateGuestSaveProtection() {
+    static bool wasGuest = false;
+    bool guest = IsGuest();
+    if (g_cfg.hostSave && guest && !SaveGuardActive() && !g_cfg.debugFailSaveGuard) SaveGuardEnable();
+    if (savepolicy::GuestMustLeaveUnprotected(g_cfg.hostSave, guest, SaveGuardActive())) {
+        Log("save guard: sandbox unavailable; leaving the session so your real saves are not written");
+        LeaveSession(false);
+        g_events.Add("Join blocked: save sandbox failed");
+        ui::Notify("Theys Gone", "Join blocked: the save sandbox failed, so your saves would not be protected. "
+                                 "See TheysGone.log, or set HostSave=0 on both PCs to play on separate saves.");
+        wasGuest = false;
+        return;
+    }
+    if (wasGuest && !guest && SaveGuardActive()) {
+        Log("save guard: left the session; the sandbox stays active until restart");
+        ui::Notify("Theys Gone", "Session ended. Your saves stay in the co-op sandbox until you restart the game.");
+    }
+    wasGuest = guest;
+}
+
 void UpdateSession(double now) {
     for (auto& text : g_steam.TakeEvents()) g_events.Add(std::move(text));
     SyncSessionKind();
@@ -6162,7 +6185,7 @@ void Tick(bool hudFrame) {
         if (down && !held) DiscoverMenus();
         held = down;
     }
-    if (g_cfg.hostSave && IsGuest() && !SaveGuardActive()) SaveGuardEnable();
+    UpdateGuestSaveProtection();
     if (g_saveLoading && wall - g_loadStartedAt >= 60.0) {
         bool adoptedLoad = g_loadAfterAdopt;
         g_saveLoading = g_loadAfterAdopt = false;
@@ -6454,6 +6477,8 @@ Config LoadConfig(const std::wstring& ini) {
     c.menuDiscovery = GetPrivateProfileIntW(L"Coop", L"MenuDiscovery", 0, ini.c_str()) != 0;
     c.hostSave = GetPrivateProfileIntW(L"Coop", L"HostSave", 1, ini.c_str()) != 0;
     c.debugTools = GetPrivateProfileIntW(L"Coop", L"DebugTools", 0, ini.c_str()) != 0;
+    c.debugFailSaveGuard =
+        c.debugTools && GetPrivateProfileIntW(L"Coop", L"DebugFailSaveGuard", 0, ini.c_str()) != 0;
     c.partnerMarker = GetPrivateProfileIntW(L"Coop", L"PartnerMarker", 1, ini.c_str()) != 0;
     c.animIdle = IniString(ini, L"AnimIdle", c.animIdle.c_str());
     c.animWalk = IniString(ini, L"AnimWalk", c.animWalk.c_str());
@@ -6485,6 +6510,8 @@ bool Install(const std::wstring& basePath) {
     } else if (g_cfg.missionObjectiveSync) {
         Log("objective sync: enabled; both peers must opt in, save resync remains the fallback");
     }
+    if (g_cfg.debugFailSaveGuard)
+        Log("save guard: DebugFailSaveGuard=1; the guest sandbox will refuse to start (test only)");
     g_debugRequests.Initialize(GetPrivateProfileIntW(L"Debug", L"Request", 0, (basePath + L"-debug.ini").c_str()));
     if (BCryptGenRandom(nullptr, reinterpret_cast<PUCHAR>(&g_session), sizeof g_session,
                        BCRYPT_USE_SYSTEM_PREFERRED_RNG) < 0) {
