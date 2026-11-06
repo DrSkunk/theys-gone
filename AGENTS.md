@@ -56,10 +56,14 @@ threads); see [prerequisites](docs/DEVELOPMENT.md#prerequisites). Run
   `kProtocolVersion` in `src/coop/protocol.hpp` (or the datagram's own
   version), updates `tools/test_protocol.cpp` and `VERSION` in
   `tools/fake_peer.py`, and uses a breaking commit (`feat!:`).
-- **Live testing.** Never touch a player's real game install or saves. Use
-  isolated copies, back up ASI, INI and saves, archive logs outside the repo,
-  then restore and verify hashes. Debug commands require `DebugTools=1`; see
-  [debug tools](docs/DEVELOPMENT.md#debug-tools).
+- **Live testing.** Never touch a player's game install or saves. Test in
+  isolated copies (the [lab](tools/lab/README.md)) or on a dedicated test
+  PC's own install, the latter only through
+  [`tools/twopc`](tools/twopc/README.md) `prep` and `restore`: back up ASI,
+  INI and saves first, archive logs outside the repo, then restore and verify
+  hashes. Quit the game through its menu, never by killing it. Keep player,
+  account and host names out of committed docs. Debug commands require
+  `DebugTools=1`; see [debug tools](docs/DEVELOPMENT.md#debug-tools).
 - **Never commit** game files, saves, logs, credentials or local token files
   (`apitoken`, `sshpw`). The only binary asset is the project's own
   `assets/branding/` pak.
