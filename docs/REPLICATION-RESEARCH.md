@@ -3179,3 +3179,54 @@ separate-PC behavior.
 - **Cleanup:** clones destroyed; base saves hashed before and after both runs,
   unchanged. Archives: `<archive>/v12-ui2-20261106T193522/` and
   `<archive>/v12-ui2b-20261106T194744/`.
+
+## Anim mirror: can anim-instance variables replace bone streaming? (2026-11-06, one PC, one game)
+
+- **Question:** Source-style games send animation inputs, not bones. Can a
+  pawnless clone that runs the same AnimBP reproduce a freaker's pose from the
+  source anim instance's reflected variables alone?
+- **Build:** worktree `anim-mirror-probe`, final ASI SHA-256 `10d0d6d3…`,
+  game build 19221447. Commands `anim-mirror-bare`, `anim-mirror-on` and
+  `anim-mirror-off` ([debug tools](DEVELOPMENT.md#debug-tools)).
+- **Setup:** one headless lab clone (`mirror`), `DebugTools=1`, no partner.
+  `begin`, `god-on`, `spawn-single`; then 24 s bare control, `probe-enemy`,
+  off; 24 s copy mode, `probe-enemy`, off; `end`. Four runs; the first three
+  found tooling and probe bugs.
+- **Result:** FAIL for the hypothesis. Copying the variables does not make the
+  clone match: mean bone error median 59.0° (p90 136.9°) with copying against
+  50.9° (p90 66.7°) for the bare control.
+- **Observed:**
+  - The clone `SkeletalMeshActor` got `SwarmerBVim_C` on `swarmer_horde_c`
+    (136 bones) with `BendPawn=null`. Its native anim update did not crash
+    and did not overwrite copied values: the clone's `Speed` equalled the
+    source's on every copy-mode sample (0, 3, 85, 150, 500).
+  - The copyable set (plain values, structs up to 48 bytes and anim-asset
+    references declared from `BendCharacterAnimInstance` down, including the
+    Blueprint class) is 273 fields, **1,267 bytes per frame** before any
+    compression.
+  - Run 2: `GetCurrentStateName(MachineIndex=0)` crashed the game.
+    `MachineIndex` is an anim-node property index, not a state machine
+    number; the probe no longer reads state names.
+  - Run 3: without pinned LOD, both modes alternated between about 15–20° and
+    about 90° mean error (medians 91.5° bare, 87.7° copying). Run 4 forced
+    LOD 0, `MeshComponentUpdateFlag=0` and no update-rate optimization on both
+    meshes; `PredictedLODLevel` then read 0/0 and the bare control was steady
+    at 37–68°.
+  - Run 4 copy mode had stretches of 122–144° mean error while the source
+    stood at `Speed=3`, and 51–73° at `Speed=85`; it never stayed below the
+    bare control.
+- **Derived:** the variables reach the clone, but the pose depends on state
+  they do not carry: which animation each state machine and asset player
+  picked (random-sequence groups included), playback times, montages and
+  probably native reads from the pawn. Copying event flags (attack, grapple,
+  one-shot) without that state appears to drive the clone into wrong poses.
+  The full variable set (1.3 KB) is also close to the streamed bones'
+  ~1.7 KB, so this form saves no bandwidth either.
+- **Unknown:** the error floor of the metric (no identical-pose reference was
+  measured); whether syncing asset-player times, state-machine states or
+  montages on top would close the gap; other enemy types; two-PC behavior.
+- **Cleanup:** lab clone destroyed after each run; the base game copy is never
+  written. `~/TheysGone-lab-tools/debug_control.py` was replaced by the
+  worktree version (backup `debug_control.py.bak-before-anim-mirror`).
+  Archives: `<archive>/anim-mirror-20261106-2112/` through
+  `<archive>/anim-mirror-20261106-2128/`.

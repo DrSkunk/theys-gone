@@ -41,6 +41,9 @@ COMMANDS = (
     "vehicle-probe",
     "spawn-actor",
     "time-probe",
+    "anim-mirror-on",
+    "anim-mirror-bare",
+    "anim-mirror-off",
 )
 ARG_COMMANDS = ("mission-act", "stream-focus", "move-by", "level-probe", "spawn-actor")
 ARG_LIMIT = 240

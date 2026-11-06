@@ -269,6 +269,7 @@ poetry run python tools/debug_control.py --game-dir "/path/to/BendGame/Binaries/
 | `material-probe` | Log the materials of the host's companion meshes and of the guest's companion replicas |
 | `vehicle-probe` | Log every live vehicle: class, distance, driver, and its mesh components with their attachment |
 | `spawn-actor` | Spawn `--arg <class path or name>` 6 m ahead of the player with physics off; loads the class first if needed (repeat the command) |
+| `anim-mirror-on` / `anim-mirror-bare` / `anim-mirror-off` | Research: clone the nearest live AI pawn (within 30 m) as a pawnless mesh 3 m away running the same anim class. `on` copies the source anim instance's own variables into the clone every frame; `bare` copies nothing (control). Twice a second it logs the mean/max component-space bone error and state-machine 0 names; `off` destroys the clone and logs the median/p90 error. It tests whether animation inputs could replace bone streaming |
 | `look-companion` | Move the player 6 m from the nearest story-companion replica, along the camera direction (to check it renders) |
 | `minimap-probe` | Read-only: write every live `MiniMapLocationComponent` (owner, icon texture, location type, display rule, colour, flags, name) and an icon summary to `TheysGone-minimap.txt` |
 | `net-probe` | Write the engine's built-in networking state (net drivers, connections, controllers, roles, replicated actors and properties) to `TheysGone-net.txt` |
@@ -290,9 +291,9 @@ poetry run python tools/debug_control.py --game-dir "/path/to/BendGame/Binaries/
 | `move-by` | Free roam: teleport the local pawn by `--arg "<east m> <north m>"` (each within 20 km) and hold it until a capsule sweep finds ground (30 s limit). Debug only; a large jump can land in unloaded terrain, so move in steps of a few hundred metres |
 
 `hit-enemy`, `story-*`, `reload-save`, `ride-test`, `dump-*`, `net-*`, `trace-*`,
-`stream-*`, `move-by`, `minimap-probe`, `time-probe` and `mission-*` work without `begin`. The research commands only read and log, except
+`stream-*`, `move-by`, `minimap-probe`, `time-probe`, `anim-mirror-*` and `mission-*` work without `begin`. The research commands only read and log, except
 `mission-act` and the experimental `net-*` commands, which drive the engine's own
-networking; see [REPLICATION-RESEARCH.md](REPLICATION-RESEARCH.md).
+networking, and `anim-mirror-on`/`-bare`, which spawn one display-only clone; see [REPLICATION-RESEARCH.md](REPLICATION-RESEARCH.md).
 
 `mission-act` looks the function up on the live `BendJobManager`, then
 `BendGameMission`, unless a class is named (`IND_Jobscript_C.MedBoxObtained`).

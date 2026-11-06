@@ -127,6 +127,16 @@ with the host's missions.
     bandwidth and the selected pawns with both players; the debug spawner stops
     at 16. Choose a representation or ownership policy for
     [hordes of 25–500](https://daysgone.fandom.com/wiki/Hordes).
+    Bone streaming costs about 1.7 KB per enemy per frame at 15 Hz (derived
+    from the 159-bone cap, not measured). Sending animation inputs instead, as
+    Source and native UE4 replication do, could cost far less. The first
+    test failed: a pawnless clone given only the source anim instance's 273
+    reflected variables (1.3 KB per frame) matched the pose worse than a bare
+    control ([research log](REPLICATION-RESEARCH.md#anim-mirror-can-anim-instance-variables-replace-bone-streaming-2026-11-06-one-pc-one-game)).
+    Cheaper options first: per-distance bone LOD and send rates, and
+    index-based bone IDs instead of 4-byte hashes. Revisit animation inputs
+    only with a plan for syncing state-machine states, asset-player times and
+    montages.
 11. **Broaden menu timing QA.** Cover controller/mouse menus over Steam and
     repeat menu timing on separate PCs, including joins/disconnects with a
     wheel open, focus/combat overlap, photo mode and scripted/cinematic pause

@@ -139,5 +139,12 @@ bool ApplyObjectiveProgress(const std::string& jobName, const std::string& ident
 // class): spec = "<Function> [ObjectName|-] [Param=Value ...]". The first object parameter takes ObjectName;
 // Bool/Byte/Int/Float/Object parameters can be named. Logs the return value and the immediate state diff.
 bool MissionAct(const std::string& spec, bool allowed, std::string& summary);
+// Anim mirror lab: clone the nearest live AI pawn's body mesh 3 m away with the same anim class but no pawn,
+// copy the source anim instance's own variables into it every frame (copy=false: never, as a control) and log
+// the component-space bone error twice a second. Answers whether animation inputs can replace bone streaming.
+bool AnimMirrorStart(ue::UObject* localPawn, bool copy, std::string& summary);
+bool AnimMirrorStop(std::string& summary);
+bool AnimMirroring();
+void AnimMirrorTick(); // game thread, every frame
 
 } // namespace coop::research

@@ -1412,6 +1412,9 @@ int main() {
     assert(coop::ParseDebugCommand("vehicle-probe") == DebugCommand::vehicleProbe);
     assert(coop::ParseDebugCommand("spawn-actor") == DebugCommand::spawnActor);
     assert(coop::ParseDebugCommand("time-probe") == DebugCommand::timeProbe);
+    assert(coop::ParseDebugCommand("anim-mirror-on") == DebugCommand::animMirrorOn);
+    assert(coop::ParseDebugCommand("anim-mirror-bare") == DebugCommand::animMirrorBare);
+    assert(coop::ParseDebugCommand("anim-mirror-off") == DebugCommand::animMirrorOff);
     assert(coop::ParseDebugCommand("mission-act") == DebugCommand::missionAct);
     assert(coop::ParseDebugCommand("mission-act x") == DebugCommand::unknown);
     coop::DebugRequestGate gate;

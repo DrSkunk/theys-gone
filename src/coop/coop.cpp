@@ -2437,6 +2437,17 @@ void UpdateDebugTools(double now) {
     }
     else if (command == DebugCommand::streamProbe) success = ProbePartnerStreaming();
     else if (command == DebugCommand::timeProbe) success = ProbeMenuTime();
+    else if (command == DebugCommand::animMirrorOn || command == DebugCommand::animMirrorBare ||
+             command == DebugCommand::animMirrorOff) {
+        std::string summary;
+        if (command == DebugCommand::animMirrorOff) success = research::AnimMirrorStop(summary);
+        else if (!IsLive(g_pawn)) {
+            summary = "anim-mirror needs a gameplay pawn";
+            success = false;
+        } else success = research::AnimMirrorStart(g_pawn, command == DebugCommand::animMirrorOn, summary);
+        Log("research: %s: %s", text.c_str(), summary.c_str());
+        if (!success) DebugError(summary.c_str());
+    }
     else if (command == DebugCommand::moveBy) {
         wchar_t arg[256]{};
         GetPrivateProfileStringW(L"Debug", L"Arg", L"", arg, 256, path.c_str());
@@ -6274,7 +6285,10 @@ void Tick(bool hudFrame) {
     }
     UpdateWorldSync(g_pawn, now);
     UpdateDebugTools(now);
-    if (g_cfg.debugTools) research::MissionWatchTick(now);
+    if (g_cfg.debugTools) {
+        research::MissionWatchTick(now);
+        research::AnimMirrorTick();
+    }
     UpdateDamageScope(now);
     if (g_pawn && now - g_lastScan < kTickInterval && now >= g_localSettledAt) FindLocalBike(g_pawn);
     UpdateBike(g_pawn, now);
