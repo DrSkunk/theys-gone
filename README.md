@@ -300,7 +300,7 @@ start looks like this:
 Theys Gone … starting (protocol v11)
 ProcessEvent hook installed
 GNames via pointer at rva 0x…, … names
-network: listening on UDP 27777, …
+network: UDP port 27777 open
 peer Partner (…) connected
 avatar: spawned …
 ```
