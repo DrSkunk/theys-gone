@@ -3,6 +3,10 @@
 Theys Gone is a two-player co-op ASI plugin for Days Gone PC, Steam build
 19221447 (UE4 BendGame 4.11). Read the relevant guide before changing code.
 
+**Focus:** a guest joins the host's save and helps with the host's missions;
+story progress stays on the host's save. Prioritize save safety, joining and
+mission co-op; separated free-roam play is later work (see the roadmap).
+
 | Need | Start here |
 |---|---|
 | Current status and prioritized next work | [Co-op roadmap](docs/COOP-ROADMAP.md) |
