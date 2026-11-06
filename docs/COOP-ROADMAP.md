@@ -51,14 +51,29 @@ with the host's missions.
    continuing without an active save guard; make failure and recovery
    prominent, and notify guests that the sandbox persists after disconnect.
    The existing F8 status alone does not block unprotected play.
+   *Start:* `src/coop/save_guard.cpp` (`SaveGuardActive`),
+   `src/coop/save_transfer.cpp` (the `Save sandbox failed` status) and the
+   `InstallSaveGuard` call in `coop.cpp` startup.
+   *Done when:* with the guard forced to fail, the guest cannot load the host's
+   save or enter shared gameplay and sees a clear warning; the rule has a unit
+   test, and a lab run records both the forced-failure and normal paths.
 2. **Make joining reliable on both transports.** Verify host-save transfer and
    invite acceptance over Steam. Test joining mid-mission, joining right after
    a host save (the cached snapshot can lag) and rejoining after a disconnect.
+   *Start:* `src/coop/steam.cpp`, `session.hpp`, `save_transfer.cpp` and
+   `savesync.hpp`.
+   *Done when:* each case has a PASS/FAIL entry in the research log, with
+   Steam cases run on two PCs; failures become their own roadmap items.
 3. **Follow the host through the campaign.** Play host story missions with a
    connected guest and confirm catch-up after each host save, including
    mission-start fades, deaths and checkpoint reloads. Use legitimately
    reached `RNA1`/`LRH1` saves to check region changes, guest resync and
    replica rebuilding.
+   *Start:* `src/coop/story.hpp` (`StoryNeedsResync`, `StoryResyncAllowed`),
+   the story resync logic in `coop.cpp` and `save_policy.hpp`.
+   *Done when:* a run of consecutive host story missions with a connected guest
+   is logged, with the guest on the host's progress after each host save,
+   including one region change.
 4. **Broaden mission policy coverage.** Test the `RBC` Lisa seat, an already
    fighting enemy in stealth, additional cutscenes, and the partner's return
    after flashbacks. `OBR`, `AON1` and `WNG` do not cover every mission.

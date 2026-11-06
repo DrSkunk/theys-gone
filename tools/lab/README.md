@@ -23,6 +23,22 @@ touching the desktop or a real install, so paired co-op tests can be scripted.
   Steam client. One Steam account cannot run two copies of the game: the
   second one hangs before Steam registers it.
 
+## Creating the base copy
+
+The base is an isolated copy of the game and its Proton prefix; the lab never
+reads the real install after this step. Put it on the btrfs or XFS volume
+where clones will be made.
+
+1. Close the game. Copy the install folder (for example
+   `steamapps/common/Days Gone`) to `$THEYS_GONE_LAB_BASE/game`.
+2. Copy the prefix `steamapps/compatdata/1259420` to
+   `$THEYS_GONE_LAB_BASE/prefix`, so that `prefix/pfx` exists. This copies the
+   saves too; the real ones are not touched afterwards.
+3. Check the copy is the supported build: the SHA-256 of
+   `game/BendGame/Binaries/Win64/DaysGone.exe` must match
+   [`config/steam-19221447.json`](../../config/steam-19221447.json).
+4. Leave the mod out of the base; `deploy` installs it per clone.
+
 ## Requirements
 
 gamescope 3.16 or newer, `gamescopectl`, `xdotool`, `bwrap`, systemd user

@@ -10,6 +10,7 @@ mission co-op; separated free-roam play is later work (see the roadmap).
 | Need | Start here |
 |---|---|
 | Current status and prioritized next work | [Co-op roadmap](docs/COOP-ROADMAP.md) |
+| How to work on and test a roadmap item | [Working on a roadmap item](docs/DEVELOPMENT.md#working-on-a-roadmap-item) |
 | Player setup and limitations | [README](README.md) |
 | Design, packets and engine behavior | [How it works](docs/HOW-IT-WORKS.md) |
 | Build, debug tools and releases | [Development](docs/DEVELOPMENT.md) |

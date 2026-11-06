@@ -62,6 +62,41 @@ Python simulator and analysis tools. They don't replace testing in the game.
 
 [HOW-IT-WORKS.md](HOW-IT-WORKS.md) explains the design.
 
+## Working on a roadmap item
+
+Pick the highest item in the [roadmap](COOP-ROADMAP.md) that you can test,
+and read its *Start* and *Done when* lines. Then work down this ladder,
+stopping at the cheapest level that proves the change:
+
+| Level | Use for | How |
+|---|---|---|
+| Unit test | Pure rules: packets, policies, ownership, story and save decisions | Put the rule in a header such as `story.hpp` or `save_policy.hpp` and test it in `tools/test_protocol.cpp`; `make test` |
+| Simulated partner | Packet flow and session handling against one real game | [`fake_peer.py`](#simulated-partner) |
+| Paired lab | Gameplay with two real games on one Linux PC (LAN UDP only) | [Headless test lab](#headless-test-lab) |
+| Two PCs | Steam transport, real network timing and anything the roadmap marks as two-PC | Two machines with isolated game copies |
+
+Higher levels are needed when a change touches the engine or the network;
+a passing unit test does not prove gameplay. The lab needs Linux on btrfs or
+XFS, gamescope and a second Steam account. On Windows or macOS the in-game
+options are a single game, `fake_peer.py` or two PCs.
+
+Record every live run in the [research log](REPLICATION-RESEARCH.md), newest
+at the end, in this shape:
+
+```markdown
+## <What was tested> (<YYYY-MM-DD>, <one PC paired | two PCs>, <UDP | Steam>)
+
+- **Build:** mod commit `<sha>`, game build 19221447.
+- **Setup:** saves, INI differences, debug commands used.
+- **Steps:** what each player did.
+- **Result:** PASS, FAIL or INCONCLUSIVE, with key log lines.
+- **Not covered:** what this run does not prove.
+- **Cleanup:** installs, ASI, INI and saves restored; hashes verified.
+```
+
+Then update the roadmap's status table and priorities if the result changes
+them.
+
 ## Protocol changes
 
 Both players must run the same protocol version. Any change to a packet layout
