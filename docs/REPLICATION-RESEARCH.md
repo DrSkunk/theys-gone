@@ -3195,7 +3195,7 @@ separate-PC behavior.
   riding PASS; enemies and tutorial pause FAIL; riding has defects.
 - **Observed:**
   - Host CO-OP → HOST ONLINE GAME opened a FRIENDS ONLY lobby; the Deck's JOIN
-    A FRIEND listed the host and joined it (`Joined geenidee's lobby`).
+    A FRIEND listed the host and joined it (`Joined <host>'s lobby`).
   - The guest enabled its sandbox and received snapshot `10a18929` (10 files,
     7,547,924 bytes) in 36 s. The host logged 1,313 `steam: send failed
     (result 25)` lines; the guest pulls 24 × 1 KB chunks per tick, more than
@@ -3210,7 +3210,7 @@ separate-PC behavior.
   - With the gamepad: PLAYER SETTINGS cycled JACKET to FOREST and SAND. TELEPORT
     TO PARTNER closed only the CO-OP page; the teleport ran when the user
     then closed the pause menu.
-  - Riding: the native prompt read **Ride with geenidee** with descenders cut
+  - Riding: the native prompt read **Ride with <host>** with descenders cut
     off; boarding logged `boarded using socket SOCKET_PassengerSeat`. While
     seated the passenger could still attack, the held weapon looked
     misplaced, the logged **Get off** label never showed, and there was no
@@ -3223,7 +3223,7 @@ separate-PC behavior.
     enemy hit you for 40.0`.
   - Run 2: `save transfer: host save installed; START GAME or Continue loads
     it`; TELEPORT TO PARTNER logged `pause CO-OP closed` and `teleported to
-    partner geenidee` 19 ms apart, and the Deck screenshot showed gameplay
+    partner <host>` 19 ms apart, and the Deck screenshot showed gameplay
     with no menu open.
 - **Derived:** the no-INI Steam path from the native menus works on two PCs.
   Enemy sync is broken for natural enemies, which makes fights unplayable for

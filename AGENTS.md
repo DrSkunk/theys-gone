@@ -16,6 +16,7 @@ mission co-op; separated free-roam play is later work (see the roadmap).
 | Build, debug tools and releases | [Development](docs/DEVELOPMENT.md) |
 | Live-test evidence | [Research log](docs/REPLICATION-RESEARCH.md) |
 | Isolated two-game lab | [Lab guide](tools/lab/README.md) |
+| Two-PC test sessions | [Two-PC tooling](tools/twopc/README.md) |
 | Mission catalog and policies | [Story co-op](docs/STORY-COOP.md) |
 | Native-replication research | [Research handoff](docs/REPLICATION-HANDOFF.md) |
 
