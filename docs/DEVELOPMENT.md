@@ -514,7 +514,7 @@ enables on the second (`ON - LETHAL`) and disables on one press; any other
 action disarms it. `View::notice` appends friendly-fire state, save-transfer
 status and settings errors to the status text; new errors are also sent as a
 HUD notice. The rows and labels (`BuildRows`, `PageTitle`) are covered by
-`make test`; a one-PC lab run covered the pause-menu page, not the title menu.
+`make test`; one-PC lab runs covered the page in both menus.
 
 The event log records hosting, connecting, connected and disconnected/left
 events. Lobby pages show recent events. The title log and transient gameplay

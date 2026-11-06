@@ -66,8 +66,9 @@ with the host's missions.
    *Done when:* with the guard forced to fail, the guest cannot load the host's
    save or enter shared gameplay and sees a clear warning; the rule has a unit
    test, and a lab run records both the forced-failure and normal paths.
-   *Status:* both paths passed a one-PC lab run on 2026-11-06 (research log).
-   Remaining: at the title screen the block shows only in the CO-OP lobby log
+   *Status:* both paths passed a one-PC lab run on 2026-11-06, and the
+   "sandbox stays until restart" notice on leaving passed a second run that
+   day (research log). Remaining: at the title screen the block shows only in the CO-OP lobby log
    and status, because the HUD notice is unavailable there; show it in the
    title menu itself.
 2. **Score lab runs automatically.** Add a lab scenario runner that drives

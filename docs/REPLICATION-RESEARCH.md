@@ -25,7 +25,7 @@ Sections are not in chronological order. Index by date:
 | 2026-10-30 | Protocol-v9 proxy second attempt; Host mission on the guest; Host mission weather; Region transition; Companion materials; Companion vehicles |
 | 2026-10-31 | Weapon-wheel and pause timing; Shared menu pause; Co-op review scenarios |
 | 2026-11-01 | Native host load and fast travel; Death, sleep and travel follow-up |
-| 2026-11-06 | Join block, no-INI v12 join and native PLAYER SETTINGS |
+| 2026-11-06 | Join block, no-INI v12 join and native PLAYER SETTINGS; Title-menu settings, F9 boarding and the leave notice |
 
 ## Weapon-wheel and pause timing investigation (2026-10-31)
 
@@ -3135,3 +3135,47 @@ separate-PC behavior.
 - **Cleanup:** both clones destroyed; base saves hashed before, after and at
   the end, unchanged. Logs and screenshots archived outside the repo
   (`<archive>/v12-native-20261106T180216/`).
+
+## Title-menu settings, F9 boarding and the leave notice (2026-11-06, one PC paired, UDP)
+
+- **Build:** run 1 used the ASI from the previous entry (`970f85d7…`); run 2
+  used the fixes below (ASI SHA-256 `2b99580e…`), game build 19221447.
+- **Setup:** as in the previous entry: fresh reflink clones, no INI beyond the
+  LAN pairing keys and `DebugTools=1`, guest under the sandbox Steam account.
+- **Steps:** host at the title screen: CO-OP → PLAYER SETTINGS, select
+  TROUSERS twice. Both into gameplay; host holds E to mount the bike, guest
+  holds F9. Guest: pause → CO-OP, open PLAYER SETTINGS, BACK, then LEAVE
+  SESSION. Run 2 repeated the title-menu and leave steps.
+- **Result:** run 1 PASS for the title page, F9 and the guest page; two bugs
+  found. Run 2 PASS for both fixes.
+- **Observed:**
+  - The title CO-OP lobby page listed START GAME | CLOSE SESSION | PLAYER
+    SETTINGS | BACK. PLAYER SETTINGS had no FRIENDLY FIRE row outside
+    gameplay. TROUSERS went ORIGINAL → CRIMSON → OCEAN and the INI gained
+    `TrousersColor=1`, then `2`; the guest logged
+    `deacon_lo_standard_jeans palette=Ocean` for the partner on joining.
+  - Bug 1 (run 1): after each change the title highlight was drawn on JACKET
+    while the cursor stayed on TROUSERS (the next press changed TROUSERS
+    again). The reflection dump shows the title widget's
+    `SetCursorPosition(Position, CallFunc_NotEqual_IntInt_ReturnValue)`, so
+    restoring the same position after the label refresh does not redraw. The
+    pause menu was not affected. Fix: step the cursor off the row and back.
+    Run 2: the highlight stayed on `TROUSERS: CRIMSON`.
+  - F9: `passenger: boarded using socket SOCKET_PassengerSeat`; the guest
+    screenshot shows it seated behind the host.
+  - The guest's pause CO-OP page listed LEAVE SESSION | TELEPORT TO PARTNER |
+    PLAYER SETTINGS | BACK; its PLAYER SETTINGS page had `FRIENDLY FIRE: OFF`.
+  - Bug 2 (run 1): LEAVE SESSION logged `save guard: left the session; the
+    sandbox stays active until restart`, but the HUD notice was raised while
+    the pause menu was open and had expired when it closed; nothing was
+    visible. Fix: send it as a session event. Run 2: `session event: Saves stay
+    in the co-op sandbox until you restart` appeared in the CO-OP status log
+    right after leaving.
+- **Derived:** the native settings page works in both menus. Session events
+  raised while a menu is open are shown only in that menu's log, not later on
+  the HUD.
+- **Unknown:** gamepad navigation (the lab sends keyboard input only), the
+  Steam transport and two-PC behavior.
+- **Cleanup:** clones destroyed; base saves hashed before and after both runs,
+  unchanged. Archives: `<archive>/v12-ui2-20261106T193522/` and
+  `<archive>/v12-ui2b-20261106T194744/`.
