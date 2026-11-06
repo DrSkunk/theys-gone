@@ -13,7 +13,7 @@ The mod is unofficial and is not affiliated with or endorsed by Bend Studio, Son
 [*]Play on the host's save: the guest loads a copy of it and is reloaded onto the host's later story saves.
 [*]Shared enemies: the host's enemies appear for the guest, and the guest's hits count.
 [*]Time of day and weather follow the host.
-[*]Appearance colors, opt-in friendly fire and teleport to partner in the F8 menu.
+[*]Appearance colors, passenger permission and opt-in friendly fire under CO-OP > PLAYER SETTINGS; F7 teleports you to your partner.
 [/list]
 
 [b]Experimental:[/b] free roam ([i]FreeRoam=1[/i], chosen by the host) lets players split up and simulate enemies in their own regions. It is outside the main use case, and guest-owned enemies attacking the host after regrouping are unproven.
@@ -49,7 +49,7 @@ Install on [b]both PCs[/b]. Use [b]Manual Download[/b]; Vortex installation is n
 [*]On Linux or Steam Deck, set the launch options to [code]WINEDLLOVERRIDES="version=n,b" %command%[/code]
 [/list]
 
-Then open [b]CO-OP[/b] in the title or pause menu. On Steam, host as invite-only, friends-only or public; your friend uses [b]JOIN A FRIEND[/b], [b]FIND PUBLIC GAMES[/b] or a Steam invite. On LAN, choose [b]HOST LAN GAME[/b] and [b]JOIN LAN GAME[/b], and allow inbound UDP 27777 on the host. Press [b]F8[/b] (gamepad: View/Back + Y) for gameplay settings; your choices are saved to [i]TheysGone.ini[/i] next to the mod. The host decides the session options (shared host save, objective sync, free roam) and the guest follows automatically. Friendly fire is never saved: both players must enable it each session.
+Then open [b]CO-OP[/b] in the title or pause menu. On Steam, host as invite-only, friends-only or public; your friend uses [b]JOIN A FRIEND[/b], [b]FIND PUBLIC GAMES[/b] or a Steam invite. On LAN, choose [b]HOST LAN GAME[/b] and [b]JOIN LAN GAME[/b], and allow inbound UDP 27777 on the host. Open [b]CO-OP > PLAYER SETTINGS[/b] for your colors, cap and passenger permission; your choices are saved to [i]TheysGone.ini[/i] next to the mod. The host decides the session options (shared host save, objective sync, free roam) and the guest follows automatically. Friendly fire is in the same page from the pause menu during a session; it is never saved, and both players must enable it each session. [b]F9[/b] (gamepad: View/Back + X) joins or leaves your partner's bike.
 
 Upgrading from [i]Days Gone Together[/i]: delete the old [i]DaysGoneTogether.*[/i] files first; old and new versions cannot connect.
 
@@ -62,6 +62,6 @@ Upgrading from [i]Days Gone Together[/i]: delete the old [i]DaysGoneTogether.*[/
 
 [b]Shout outs[/b]
 
-Thanks to the [b]Ultimate ASI Loader[/b] and [b]Dear ImGui[/b] projects, and to the Days Gone modding community.
+Thanks to the [b]Ultimate ASI Loader[/b] project, and to the Days Gone modding community.
 
 AI coding assistants were used in development, including for code, reverse-engineering analysis and documentation. The project was directed by a human and tested in the game on real hardware.

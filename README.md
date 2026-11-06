@@ -99,7 +99,7 @@ The release also includes a `.sha256` checksum file.
 ## Set up a session
 
 Open **CO-OP** in the game's title menu or pause menu. These are native game
-widgets, not the F8 settings overlay. You can host before loading a save or
+widgets. You can host before loading a save or
 open a session while already playing. Sessions currently hold **two players**.
 
 ### LAN
@@ -109,8 +109,8 @@ the host from the local-network list. Use **CLOSE SESSION** / **LEAVE SESSION**
 to disconnect without restarting the game.
 
 For automatic LAN hosting/joining instead of choosing in the menu, create a
-text file named `TheysGone.ini` next to `TheysGone.asi` (or edit it if the F8
-overlay already created one), set `Transport=udp` and configure:
+text file named `TheysGone.ini` next to `TheysGone.asi` (or edit it if
+**PLAYER SETTINGS** already created one), set `Transport=udp` and configure:
 
 **Host:** leave `PeerHost` empty.
 
@@ -239,15 +239,12 @@ are authoritative.
 
 | Action | Keyboard / mouse | Gamepad (XInput) |
 |---|---|---|
-| Open or close gameplay settings | F8 | View/Back + Y |
-| Select a row | Up/Down or click | D-pad Up/Down |
-| Change or activate | Left/Right, Enter or click | D-pad Left/Right or A |
-| Close | Esc | B |
+| Player settings | CO-OP → **PLAYER SETTINGS** in the title or pause menu | Same |
 | Join or leave the partner's bike | F9 | View/Back + X |
-| Teleport next to the partner | F7 (`TeleportKey`) | F8 menu → Teleport to partner |
+| Teleport next to the partner | F7 (`TeleportKey`), or pause menu → CO-OP → TELEPORT TO PARTNER | Pause menu → CO-OP → TELEPORT TO PARTNER |
 
-The game window must be focused. The F8 settings overlay does not pause the
-game. Session hosting/joining is in the native title/pause **CO-OP** menu.
+The game window must be focused for the shortcuts. Session hosting/joining
+and player settings are in the native title/pause **CO-OP** menu.
 
 While a partner is connected, the weapon/crafting wheel stays usable but its
 slow-motion request is removed without intentionally changing focus or combat
@@ -260,26 +257,41 @@ are still untested.
 While connected, opening the native pause menu, map or inventory keeps
 gameplay running unless **both players** have one of these menus open.
 Closing either player's menu resumes gameplay. When the partner disconnects,
-normal single-player pausing returns. The F8 settings overlay and weapon
-wheel do not count as pause requests. Both players need the same mod
+normal single-player pausing returns. The weapon wheel does not count as a
+pause request. Both players need the same mod
 version. In one lab test a tutorial paused only the host; other scripted
 pauses remain unverified.
 
 On a **Steam Deck**, the mod reads XInput, not Steam Input actions. If the
-gamepad shortcuts do nothing, pick the *Gamepad With Joystick Trackpad*
+View/Back + X shortcut does nothing, pick the *Gamepad With Joystick Trackpad*
 template under *Controller Settings → Current Layout → Templates*.
 
-### Gameplay settings (F8)
+### Player settings
 
-The overlay controls appearance, passenger riding, teleport and Steam lobby
-actions. Motorcycles and the host's enemies are always synced. Changes are
-saved immediately to `TheysGone.ini` next to the .asi, which the overlay
-creates if needed, except friendly fire: both players must enable and confirm
-it each session.
+Open **CO-OP → PLAYER SETTINGS** in the title or pause menu (the row is on the
+CO-OP page and in the lobby, above **BACK**). Each row shows its current value;
+select it (Enter, A or click) to cycle to the next one:
+
+- **JACKET**, **TROUSERS**, **CAP COLOR**: Original, Crimson, Ocean, Forest,
+  Sand, Charcoal or Violet. Your partner sees your colors.
+- **CAP**: ON/OFF.
+- **ALLOW A PASSENGER**: ON/OFF, whether your partner may ride on your bike.
+- **FRIENDLY FIRE** (pause menu, only during a session): select once to see
+  *PRESS AGAIN TO ENABLE*, again for *ON - LETHAL*; one press turns it off.
+
+Changes are saved automatically to `TheysGone.ini` next to the .asi, which is
+created if needed, except friendly fire: it is never saved, and both players
+must enable it each session. The CO-OP status text shows the friendly-fire
+state, save-transfer status and errors. Motorcycles and the host's enemies are
+always synced.
+
+This page replaced the former F8 overlay and has not been tested in the game
+yet.
 
 ### Passenger riding
 
-The driver needs *Allow a passenger* on. The driver gets on their bike and stops. The passenger walks up
+The driver needs **ALLOW A PASSENGER: ON** in **PLAYER SETTINGS**. The driver
+gets on their bike and stops. The passenger walks up
 to it and holds the game's own interact button on the **Ride with
 &lt;partner&gt;** prompt (F9 also works). The passenger is attached to the bike
 as a visual rider, and it isn't the game's own two-seat vehicle code. The
@@ -294,7 +306,7 @@ missions do this comes from the mission catalog; only `OBR` has been tested.
 
 ## Configuration reference
 
-No configuration is needed. The F8 overlay saves your preferences to
+No configuration is needed. **PLAYER SETTINGS** saves your preferences to
 `TheysGone.ini` next to the .asi; the file is optional, and INIs from older
 versions still work.
 
@@ -383,6 +395,4 @@ Studio. You need your own copy of the game. The branding pak contains modified
 logo textures; underlying game artwork remains the property of its owners.
 
 The mod's code is licensed under the [MIT License](LICENSE); that license does
-not grant rights to underlying game artwork. Release builds bundle
-[Dear ImGui](https://github.com/ocornut/imgui) (MIT); its license is included
-in the release archive.
+not grant rights to underlying game artwork.

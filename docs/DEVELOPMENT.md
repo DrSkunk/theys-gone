@@ -7,7 +7,7 @@
 | MinGW-w64 (`x86_64-w64-mingw32-g++`, GCC 13 or newer, posix threads) | Plugin build | macOS: `brew install mingw-w64`. Debian/Ubuntu: `apt install g++-mingw-w64-x86-64-posix` and set `CXX=x86_64-w64-mingw32-g++-posix` |
 | A native C++20 compiler | Protocol tests | Xcode command-line tools, `g++` or `clang++` |
 | Python 3.11+ and [Poetry](https://python-poetry.org/) | Tool tests and analysis | `pipx install poetry` |
-| `curl`, `shasum`, `zip` | Fetching Dear ImGui, packaging | usually preinstalled |
+| `shasum`, `zip` | Packaging | usually preinstalled |
 
 ## Build and test
 
@@ -18,9 +18,8 @@ make build    # package/TheysGone.asi + branding pak
 make dist     # dist/TheysGone-<version>.zip + .sha256
 ```
 
-The build downloads the pinned Dear ImGui release into `.deps/` and checks its
-SHA-256 against [`dependencies/imgui.sha256`](../dependencies/imgui.sha256).
-It never touches a game installation.
+The build has no third-party source dependencies to download and never
+touches a game installation.
 
 Local builds report `<version.txt>-dev` in the log. Release builds set
 `COOP_VERSION` to the release version. Linking uses `--no-insert-timestamp`,
@@ -44,7 +43,7 @@ Python simulator and analysis tools. They don't replace testing in the game.
 | [`src/coop/motion.hpp`](../src/coop/motion.hpp), [`frameclock.hpp`](../src/coop/frameclock.hpp) | Interpolation and frame clock |
 | [`src/coop/combat.hpp`](../src/coop/combat.hpp) | Friendly-fire delivery queue |
 | [`src/coop/appearance.cpp`](../src/coop/appearance.cpp) | Garment tinting |
-| [`src/coop/menu.cpp`](../src/coop/menu.cpp), [`overlay.cpp`](../src/coop/overlay.cpp) | Menu input and DX11 overlay |
+| [`src/coop/menu.cpp`](../src/coop/menu.cpp), [`menu.hpp`](../src/coop/menu.hpp) | `PartnerShortcuts` (F9 / View+X passenger toggle, XInput) and `MenuSettings` player preferences |
 | [`src/coop/native_ui.cpp`](../src/coop/native_ui.cpp), [`session.hpp`](../src/coop/session.hpp) | Native title/pause CO-OP pages, event log and pure session/LAN discovery model |
 | [`src/coop/net.cpp`](../src/coop/net.cpp), [`log.cpp`](../src/coop/log.cpp) | Transport interface, UDP socket and log |
 | [`src/coop/steam.cpp`](../src/coop/steam.cpp), [`steam_abi.hpp`](../src/coop/steam_abi.hpp) | Experimental Steam lobby and networking transport (runtime-resolved, no SDK) |
@@ -194,15 +193,15 @@ both textures are the original Days Gone logo, so the swap changes nothing.
 ## Advanced settings
 
 No INI is shipped: every setting has a built-in default, and players change
-their preferences in the F8 overlay, which writes them to `TheysGone.ini` next
+their preferences in CO-OP → **PLAYER SETTINGS**, which writes them to `TheysGone.ini` next
 to the plugin. To override anything else, create that file with a `[Coop]`
 section. It is read once at startup; restart after editing. Friendly fire is
 never read from disk.
 
 | Key | Default | Notes |
 |---|---|---|
-| `JacketColor`, `TrousersColor`, `CapColor` | `0` | 0 Original, 1 Crimson, 2 Ocean, 3 Forest, 4 Sand, 5 Charcoal, 6 Violet; written by F8 |
-| `ShowCap`, `AllowPassenger` | `1` | Written by F8 |
+| `JacketColor`, `TrousersColor`, `CapColor` | `0` | 0 Original, 1 Crimson, 2 Ocean, 3 Forest, 4 Sand, 5 Charcoal, 6 Violet; written by PLAYER SETTINGS |
+| `ShowCap`, `AllowPassenger` | `1` | Written by PLAYER SETTINGS |
 | `HostSave` | `1` | **Host decides.** 1: the guest plays the host's save in a sandbox. 0: separate saves |
 | `MissionObjectiveSync` | `1` | **Host decides.** Share completed objectives live (experimental); needs `HostSave=1` |
 | `FreeRoam` | `0` | **Host decides.** Experimental: distant players run the enemies around them; on the host it also keeps the world streamed around a distant guest |
@@ -502,8 +501,20 @@ automatic LAN startup from `PeerHost`. LAN hosts broadcast their name, port,
 session and open/full state once per second; stale entries expire after 4 s.
 Steam supports invite-only/friends/public visibility, friend listings and
 filtered public search, with a two-member limit. Steam joining uses the
-Steam API, not an IP-address connection. F8 remains the separate gameplay
-settings/debug overlay.
+Steam API, not an IP-address connection.
+
+**PLAYER SETTINGS** (`Page::Settings`) is reached from the CO-OP root page and
+the lobby page, above BACK. Native rows are plain labels, so each row carries
+its value in the label (`JACKET: OCEAN`, `CAP: ON`, `ALLOW A PASSENGER: OFF`)
+and activating it cycles the value (`CycleJacket`, `CycleTrousers`,
+`CycleCapColor`, `ToggleCap`, `TogglePassengers`), saves `TheysGone.ini` and
+rebuilds the rows. `FRIENDLY FIRE` is added only while in a session in the pause
+menu; `ToggleFriendlyFire` arms on the first press (`PRESS AGAIN TO ENABLE`),
+enables on the second (`ON - LETHAL`) and disables on one press; any other
+action disarms it. `View::notice` appends friendly-fire state, save-transfer
+status and settings errors to the status text; new errors are also sent as a
+HUD notice. The rows and labels (`BuildRows`, `PageTitle`) are covered by
+`make test`; the page has not been tested in the game yet.
 
 The event log records hosting, connecting, connected and disconnected/left
 events. Lobby pages show recent events. The title log and transient gameplay

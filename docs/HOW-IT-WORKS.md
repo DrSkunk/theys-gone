@@ -23,8 +23,7 @@ DaysGone.exe
             ├─ load optional TheysGone.ini next to the .asi (built-in defaults otherwise)
             ├─ check the executable (PE timestamp + image size)
             ├─ check the ProcessEvent prologue bytes
-            ├─ install an inline hook on UObject::ProcessEvent
-            └─ start the Direct3D 11 overlay setup thread
+            └─ install an inline hook on UObject::ProcessEvent
 
 every ProcessEvent call on the game thread
   └─ HookedProcessEvent
@@ -435,15 +434,28 @@ materials are kept alive through the object array's RootSet flag while the
 plugin needs them, because a raw C++ pointer doesn't stop Unreal's garbage
 collector.
 
-### 5.5 Settings overlay
+### 5.5 Player settings, shortcuts and menu time
 
-The F8 settings overlay, separate from the native title/pause CO-OP menus,
-uses [Dear ImGui](https://github.com/ocornut/imgui) with its DX11
-backend. A setup thread creates a dummy D3D11 swap chain to find the shared
-`Present` and `ResizeBuffers` vtable slots and replaces them. The game thread
-publishes an immutable frame under a mutex; `Present` draws it and restores
-D3D state. Input comes from the keyboard, the mouse and XInput (`xinput1_3`,
-`xinput1_4`, `xinput9_1_0`). Gameplay input is blocked while the menu is open.
+Player settings are a **PLAYER SETTINGS** page of the native title/pause CO-OP
+menu (see [native CO-OP menus](DEVELOPMENT.md#native-co-op-menus-and-discovery)),
+reached from the CO-OP root page or the lobby page. There is no separate
+overlay and no Direct3D hook: the engine draws the rows with its own widgets.
+Each row carries its value in the label (`JACKET: OCEAN`, `CAP: ON`, …) and
+cycles to the next value when activated. Every change is written to
+`TheysGone.ini` and bumps the consent counter sent to the partner. The
+**FRIENDLY FIRE** row appears only in the pause menu during a session: the
+first press arms it (*PRESS AGAIN TO ENABLE*), the second enables it, and one
+press turns it off. Its state is never saved. The page status line shows the
+friendly-fire state, save-transfer status and errors; gameplay messages such
+as passenger or teleport refusals are also shown as a HUD notice.
+
+Two shortcuts work without a menu: F9 or View/Back + X (XInput, through
+`xinput1_3`, `xinput1_4` or `xinput9_1_0`) joins or leaves the partner's bike,
+and `TeleportKey` (F7) teleports next to the partner. In a session the pause
+menu's CO-OP page also offers TELEPORT TO PARTNER; it closes the menu and runs
+once gameplay resumes.
+
+This page has not yet been tested in the game.
 
 The native weapon/crafting wheel keeps its selection UI, but only its
 `WeaponWheel_DID` slowdown request is removed while a partner is connected.
@@ -455,8 +467,7 @@ packet. While connected, a menu pauses its world only when the partner also
 has such a menu open. Closing either player's menu resumes both worlds after
 the next state update. Transport polling and state packets continue during a
 shared pause. Disconnecting restores native single-player pause behavior.
-Only these menu pauses are controlled; the F8 overlay does not vote for a
-pause, and unrelated scripted/cinematic pauses are not blanket-reset.
+Only these menu pauses are controlled; unrelated scripted/cinematic pauses are not blanket-reset.
 
 ### 5.6 Friendly fire
 

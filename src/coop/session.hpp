@@ -86,7 +86,14 @@ inline bool ParseVisibility(std::string value, Visibility& out) {
 
 enum class Kind : uint8_t { None, Steam, LanHost, LanJoin };
 
-enum class Page : uint8_t { Root, Friends, Public, Lan };
+enum class Page : uint8_t { Root, Friends, Public, Lan, Settings };
+
+constexpr int kPaletteCount = 7;
+
+inline const char* PaletteName(int index) {
+    static constexpr const char* names[] = {"Original", "Crimson", "Ocean", "Forest", "Sand", "Charcoal", "Violet"};
+    return index >= 0 && index < kPaletteCount ? names[index] : "Invalid";
+}
 
 enum class Action : uint8_t {
     HostSteam,
@@ -103,6 +110,25 @@ enum class Action : uint8_t {
     Leave,
     Refresh,
     Back,
+    OpenSettings,
+    Teleport, // pause menu: teleport next to the partner once the menu closes
+    CycleJacket,
+    CycleTrousers,
+    CycleCapColor,
+    ToggleCap,
+    TogglePassengers,
+    ToggleFriendlyFire, // first press arms, second press enables; turning it off is immediate
+};
+
+// Values shown on the PLAYER SETTINGS page; each row cycles its value on activation.
+struct PlayerSettings {
+    int jacket = 0;
+    int trousers = 0;
+    int capColor = 0;
+    bool cap = true;
+    bool passengers = true;
+    bool friendlyFire = false;
+    bool friendlyFireArmed = false;
 };
 
 struct Row {
@@ -123,6 +149,8 @@ struct View {
     std::vector<std::string> friends; // friends hosting a Theys Gone lobby
     std::vector<std::string> publicLobbies;
     std::vector<std::string> lanHosts;
+    PlayerSettings settings;
+    std::string notice; // save transfer, friendly fire or error status, shown under the page status
 };
 
 // Main menu rows 0-8 have native mouse targets; the pause list has ten entries.
@@ -145,6 +173,23 @@ inline std::string Upper(std::string text) {
 
 inline std::vector<Row> BuildRows(Page page, const View& v) {
     std::vector<Row> rows;
+    if (page == Page::Settings) {
+        const auto& s = v.settings;
+        auto onOff = [](bool on) { return on ? std::string("ON") : std::string("OFF"); };
+        rows.push_back({"JACKET: " + Upper(PaletteName(s.jacket)), Action::CycleJacket});
+        rows.push_back({"TROUSERS: " + Upper(PaletteName(s.trousers)), Action::CycleTrousers});
+        rows.push_back({"CAP COLOR: " + Upper(PaletteName(s.capColor)), Action::CycleCapColor});
+        rows.push_back({"CAP: " + onOff(s.cap), Action::ToggleCap});
+        rows.push_back({"ALLOW A PASSENGER: " + onOff(s.passengers), Action::TogglePassengers});
+        // Friendly fire is per session and needs both players, so it is offered only while playing together.
+        if (v.inGame && v.kind != Kind::None)
+            rows.push_back({s.friendlyFire        ? "FRIENDLY FIRE: ON - LETHAL" :
+                            s.friendlyFireArmed   ? "FRIENDLY FIRE: PRESS AGAIN TO ENABLE" :
+                                                    "FRIENDLY FIRE: OFF",
+                            Action::ToggleFriendlyFire});
+        rows.push_back({"BACK", Action::Back});
+        return rows;
+    }
     if (v.kind != Kind::None) {
         if (!v.inGame) rows.push_back({v.host ? "START GAME" : "START GAME (JOIN HOST)", Action::Start});
         if (v.kind == Kind::Steam && !v.busy) {
@@ -153,6 +198,8 @@ inline std::vector<Row> BuildRows(Page page, const View& v) {
                 rows.push_back({std::string("VISIBILITY: ") + VisibilityName(v.visibility), Action::CycleVisibility});
         }
         rows.push_back({v.host ? "CLOSE SESSION" : "LEAVE SESSION", Action::Leave});
+        if (v.inGame && v.connected) rows.push_back({"TELEPORT TO PARTNER", Action::Teleport});
+        rows.push_back({"PLAYER SETTINGS", Action::OpenSettings});
         rows.push_back({"BACK", Action::Back});
         return rows;
     }
@@ -173,6 +220,7 @@ inline std::vector<Row> BuildRows(Page page, const View& v) {
         }
         rows.push_back({"HOST LAN GAME", Action::HostLan});
         rows.push_back({"JOIN LAN GAME", Action::BrowseLan});
+        rows.push_back({"PLAYER SETTINGS", Action::OpenSettings});
         rows.push_back({"BACK", Action::Back});
         break;
     }
@@ -180,6 +228,7 @@ inline std::vector<Row> BuildRows(Page page, const View& v) {
 }
 
 inline const char* PageTitle(Page page, const View& v) {
+    if (page == Page::Settings) return "PLAYER SETTINGS";
     if (v.kind == Kind::Steam) return "CO-OP LOBBY";
     if (v.kind != Kind::None) return "LAN LOBBY";
     switch (page) {
@@ -193,6 +242,12 @@ inline const char* PageTitle(Page page, const View& v) {
 // One status line followed by the newest log entries, for the menu status text.
 inline std::string StatusText(Page page, const View& v, const std::vector<std::string>& log) {
     std::string status;
+    if (page == Page::Settings) {
+        status = "Saved automatically. Your partner sees your colors.";
+        if (!v.notice.empty()) status += "\n" + v.notice;
+        for (const auto& line : log) status += "\n" + line;
+        return status;
+    }
     switch (v.kind) {
     case Kind::Steam:
         status = v.busy ? "Steam lobby: working..." :
@@ -212,6 +267,7 @@ inline std::string StatusText(Page page, const View& v, const std::vector<std::s
         else status = v.steamAvailable ? "Play together over Steam or the local network" : "Steam unavailable - LAN only";
         break;
     }
+    if (!v.notice.empty()) status += "\n" + v.notice;
     for (const auto& line : log) status += "\n" + line;
     return status;
 }

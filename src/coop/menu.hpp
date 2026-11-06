@@ -1,65 +1,34 @@
 #pragma once
 
+#include "session.hpp"
 #include "ue.hpp"
-
-#include <string>
 
 namespace coop {
 
+// Player preferences, changed in the native CO-OP > PLAYER SETTINGS page.
 struct MenuSettings {
     int jacket = 0;
     int trousers = 0;
     int capColor = 0;
     bool cap = true;
-    bool motorcycles = true; // always on; kept so a future escape hatch has one place to change
+    bool motorcycles = true; // always on
     bool passengers = true;
     bool friendlyFire = false;
-    bool enemies = true;
+    bool enemies = true;     // always on
 };
 
-struct MenuActions {
-    bool changed = false;
-    bool passenger = false;
-    bool teleport = false;
-    bool lobby = false;  // host, or leave the current lobby
-    bool invite = false;
-    bool join = false;
-    int joinStep = 0;    // -1 / +1 cycles the friend shown on the join row
-};
+using session::kPaletteCount;
+using session::PaletteName;
 
-// Extra rows shown when the experimental Steam transport is active.
-struct MenuOnline {
-    bool enabled = false;
-    std::string lobby;  // value on the lobby row, e.g. "Host" or "Leave"
-    std::string invite; // value on the invite row
-    std::string join;   // value on the join row, e.g. "< Alice >"
-};
-
-class SettingsMenu {
+// Gameplay shortcuts that work without opening a menu: F9 or View/Back + X joins or leaves the
+// partner's bike. Teleport (TeleportKey, F7 by default) is handled in coop.cpp.
+class PartnerShortcuts {
 public:
-    MenuActions Update(ue::UObject* controller, bool focused, MenuSettings& settings, const MenuOnline& online = {});
-    void Draw(int width, int height, const MenuSettings& settings,
-              const std::string& status, const MenuOnline& online = {});
-    bool IsOpen() const { return open_; }
-    void Close(ue::UObject* controller) { SetOpen(false, controller); }
+    bool PassengerPressed(bool focused);
 
 private:
-    bool open_ = false;
-    bool confirmDamage_ = false;
-    bool keys_[256]{};
-    uint16_t buttons_ = 0;
-    int selected_ = 0;
-    int rows_ = 11;
-    float panelX_ = 0, panelY_ = 0, panelWidth_ = 0, rowHeight_ = 0;
-    int renderWidth_ = 0, renderHeight_ = 0;
-    ue::UObject* blockedController_ = nullptr;
-    bool Pressed(int key);
-    bool InputHeld() const;
-    void RestoreInput();
-    void SetOpen(bool open, ue::UObject* controller);
+    bool f9_ = false;
+    bool chord_ = false;
 };
-
-const char* PaletteName(int index);
-constexpr int kPaletteCount = 7;
 
 } // namespace coop

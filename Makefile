@@ -21,7 +21,7 @@ build:
 dist: build
 	rm -rf "$(DIST)" "$(DIST).zip"
 	mkdir -p "$(DIST)"
-	cp package/TheysGone.asi package/LICENSE-Dear-ImGui.txt LICENSE README.md "$(DIST)/"
+	cp package/TheysGone.asi LICENSE README.md "$(DIST)/"
 	mkdir -p "$(DIST)/BendGame/Content/Paks"
 	cp package/BendGame/Content/Paks/pakchunk99-TheysGone_Brand_P.pak "$(DIST)/BendGame/Content/Paks/"
 	cd dist && zip -qr -X "TheysGone-$(VERSION).zip" "TheysGone-$(VERSION)"

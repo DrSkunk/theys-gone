@@ -18,7 +18,6 @@
 #include "motion.hpp"
 #include "frameclock.hpp"
 #include "appearance.hpp"
-#include "overlay.hpp"
 #include "combat.hpp"
 #include "debug_commands.hpp"
 #include "research.hpp"
@@ -77,7 +76,9 @@ struct ActiveMission {
 } g_mission, g_peerMission; // the partner's, resolved from its state packets
 uint8_t g_peerMissionSky = 0xff; // TempDefaultWeather of the partner's mission while its weather level is streamed
 constexpr double kMissionSampleInterval = 1.0;
-SettingsMenu g_menu;
+PartnerShortcuts g_shortcuts;
+bool g_friendlyFireArmed = false; // PLAYER SETTINGS: the next friendly-fire press enables it
+bool g_teleportRequested = false; // CO-OP > TELEPORT TO PARTNER, run after the pause menu closes
 std::atomic<DWORD> g_gameThread{0};
 bool g_inTick = false;
 bool g_failed = false;
@@ -86,7 +87,6 @@ double g_lastTick = 0, g_nextSend = 0, g_lastScan = -10;
 UdpPeer g_udp;
 SteamPeer g_steam;
 Transport* g_net = &g_udp;
-size_t g_joinChoice = 0;
 bool g_udpOpen = false;
 session::Kind g_kind = session::Kind::None;
 session::EventLog g_events;
@@ -2819,7 +2819,7 @@ bool WeaponDamage(bool melee, UObject* weapon, float& amount) {
 }
 
 void QueueAttack(bool melee, UObject* weapon) {
-    if (!g_pawn || g_passenger.pawn || !g_settings.friendlyFire || g_menu.IsOpen() ||
+    if (!g_pawn || g_passenger.pawn || !g_settings.friendlyFire ||
         Now() < g_localSettledAt || Now() - g_lastRecv >= kPeerTimeout ||
         !(g_peer.flags & kFriendlyFire) || !(g_peer.flags & kAlive) || !Alive(g_pawn)) return;
     if (!IsLive(weapon)) return;
@@ -4421,7 +4421,7 @@ bool HasEnemyReplicas() { return !g_enemyReplicas.empty(); }
 
 void QueueEnemyHit(bool melee, UObject* weapon) {
     double now = Now();
-    if (!g_pawn || g_passenger.pawn || g_menu.IsOpen() || g_enemyReplicas.empty() ||
+    if (!g_pawn || g_passenger.pawn || g_enemyReplicas.empty() ||
         !IsLive(weapon) || !AcceptEnemies(now) || !Alive(g_pawn)) return;
     uint32_t best = 0;
     float bestDistance = 1e30f;
@@ -5408,12 +5408,51 @@ session::View SessionView(double now) {
     for (const auto& lobby : g_steam.Friends()) view.friends.push_back(lobby.name);
     for (const auto& lobby : g_steam.PublicLobbies()) view.publicLobbies.push_back(lobby.name);
     for (const auto& host : g_lan.Hosts()) view.lanHosts.push_back(LanHostLabel(host));
+    view.settings = {g_settings.jacket, g_settings.trousers, g_settings.capColor, g_settings.cap,
+                     g_settings.passengers, g_settings.friendlyFire, g_friendlyFireArmed};
+    std::vector<std::string> notes;
+    if (g_settings.friendlyFire)
+        notes.push_back(g_peer.flags & kFriendlyFire ? "Friendly fire ACTIVE" : "Partner has not enabled friendly fire");
+    if (auto transfer = SaveTransferStatus(TransferContext(now)); !transfer.empty()) notes.push_back(transfer);
+    if (!g_settingsError.empty()) notes.push_back(g_settingsError);
+    for (const auto& note : notes) view.notice += (view.notice.empty() ? "" : " / ") + note;
     return view;
+}
+
+void ChangeSettings() {
+    if (!++g_consent) ++g_consent;
+    SaveSettings();
 }
 
 void RunMenuCommand(const ui::Command& command) {
     using session::Action;
+    if (command.action != Action::ToggleFriendlyFire) g_friendlyFireArmed = false;
+    auto cycle = [](int& palette) {
+        palette = (palette + 1) % kPaletteCount;
+        ChangeSettings();
+    };
     switch (command.action) {
+    case Action::Teleport: g_teleportRequested = true; break;
+    case Action::CycleJacket: cycle(g_settings.jacket); break;
+    case Action::CycleTrousers: cycle(g_settings.trousers); break;
+    case Action::CycleCapColor: cycle(g_settings.capColor); break;
+    case Action::ToggleCap:
+        g_settings.cap = !g_settings.cap;
+        ChangeSettings();
+        break;
+    case Action::TogglePassengers:
+        g_settings.passengers = !g_settings.passengers;
+        ChangeSettings();
+        break;
+    case Action::ToggleFriendlyFire:
+        if (!g_settings.friendlyFire && !g_friendlyFireArmed) {
+            g_friendlyFireArmed = true;
+            break;
+        }
+        g_settings.friendlyFire = !g_settings.friendlyFire;
+        g_friendlyFireArmed = false;
+        ChangeSettings();
+        break;
     case Action::HostSteam: HostSteamSession(); break;
     case Action::HostLan: HostLanSession(); break;
     case Action::BrowseFriends: break;
@@ -6256,52 +6295,13 @@ void Tick(bool hudFrame) {
     UpdatePartnerProxy(now);
     UpdatePartnerStreaming(now);
     StepMoveBy(now);
-    MenuOnline online;
-    if (g_steam.Available()) {
-        online.enabled = true;
-        if (g_menu.IsOpen()) g_steam.RefreshFriends(now);
-        const auto& friends = g_steam.Friends();
-        if (g_joinChoice >= friends.size()) g_joinChoice = 0;
-        online.lobby = g_steam.Busy() ? "Working..." : g_steam.InLobby() ? "Leave" : "Host";
-        online.invite = g_steam.InLobby() ? "Open Steam overlay" : "Host first";
-        online.join = friends.empty() ? "No friends in a lobby" :
-                      friends.size() == 1 ? friends[0].name : "< " + friends[g_joinChoice].name + " >";
-    }
-    auto actions = g_menu.Update(g_controller, OwnWindowFocused(), g_settings, online);
-    if (online.enabled) {
-        const auto& friends = g_steam.Friends();
-        if (actions.joinStep && !friends.empty())
-            g_joinChoice = (g_joinChoice + friends.size() + actions.joinStep) % friends.size();
-        if (actions.lobby) {
-            if (g_steam.InLobby()) LeaveSession(true);
-            else HostSteamSession();
-        }
-        if (actions.invite) g_steam.Invite();
-        if (actions.join && g_joinChoice < friends.size()) JoinSteamSession(friends[g_joinChoice].lobby);
-    }
-    if (actions.passenger || actions.teleport || actions.invite) g_menu.Close(g_controller);
-    if (actions.passenger) TogglePassenger(now);
-    if (actions.teleport) TeleportToPartner(g_pawn, now);
+    if (g_shortcuts.PassengerPressed(OwnWindowFocused())) TogglePassenger(now);
     UpdateRidePrompt(now);
-    if (g_menu.IsOpen()) {
-        Call viewport(g_controller, "GetViewportSize");
-        if (viewport.invoke()) {
-            std::string status = now - g_lastRecv < kPeerTimeout ? "Connected: " + PartnerName() :
-                                 g_kind == session::Kind::Steam ? g_steam.Status() :
-                                 g_kind == session::Kind::LanHost ? "Hosting a LAN game; waiting for a partner" :
-                                 g_kind == session::Kind::LanJoin ? "Connecting to the LAN host..." :
-                                 "Not in a session: open CO-OP in the title or pause menu";
-            if (g_settings.friendlyFire)
-                status += g_peer.flags & kFriendlyFire ? " / friendly fire ACTIVE" : " / partner has not enabled friendly fire";
-            if (auto transfer = SaveTransferStatus(TransferContext(now)); !transfer.empty()) status += " / " + transfer;
-            if (!g_settingsError.empty()) status = g_settingsError;
-            g_menu.Draw(viewport.get<int>("SizeX"), viewport.get<int>("SizeY"), g_settings, status, online);
-        }
-    }
-    if (actions.changed) {
-        ++g_consent;
-        if (!g_consent) ++g_consent;
-        SaveSettings();
+    // Show each new gameplay message (passenger, teleport, friendly fire) on the HUD.
+    static std::string shownError;
+    if (g_settingsError != shownError) {
+        shownError = g_settingsError;
+        if (!shownError.empty()) ui::Notify("Theys Gone", shownError);
     }
     static double lastLocalAppearance = -10;
     if (g_pawn && !g_passenger.pawn && now >= g_localSettledAt && now - lastLocalAppearance >= 0.25) {
@@ -6316,7 +6316,11 @@ void Tick(bool hudFrame) {
         if (down && !held && g_pawn) Discover(g_pawn);
         held = down;
     }
-    if (!g_menu.IsOpen()) HandleTeleport(g_pawn, now);
+    HandleTeleport(g_pawn, now);
+    if (g_teleportRequested && !g_menuPause.localMenu) {
+        g_teleportRequested = false;
+        TeleportToPartner(g_pawn, now);
+    }
     static double profileStart = now, total = 0, peak = 0;
     static uint64_t frames = 0, previousReceived = 0, previousSent = 0;
     double elapsed = (Now() - wall) * 1000;
@@ -6578,7 +6582,6 @@ bool Install(const std::wstring& basePath) {
     if (!InstallHook(reinterpret_cast<uint8_t*>(g.imageBase + kProcessEventRva))) return false;
     Log("ProcessEvent hook installed");
     if (g_cfg.freeRoam) streaming::Install(g.imageBase);
-    StartOverlay();
     return true;
 }
 

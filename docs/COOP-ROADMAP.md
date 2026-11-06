@@ -42,6 +42,9 @@ Important limits for players:
   normally within 80 m; a retained fight can extend beyond that radius. Hordes
   cannot be represented completely. Melee damage is estimated and ranged
   attacks on the guest are unverified.
+- Player settings moved from the removed F8 overlay to the native CO-OP →
+  **PLAYER SETTINGS** page. The page, its HUD notices and its friendly-fire
+  toggle have unit tests only and have not been tested in the game yet.
 - Teleporting beside a partner near furniture can place a player inside
   geometry. Guest sleep and tutorial pauses can also behave differently from
   their host-side equivalents.
@@ -56,7 +59,7 @@ with the host's missions.
 1. **Make joining the host's save safe.** Prevent guest play from silently
    continuing without an active save guard; make failure and recovery
    prominent, and notify guests that the sandbox persists after disconnect.
-   The existing F8 status alone does not block unprotected play.
+   The CO-OP status text alone does not block unprotected play.
    *Start:* `src/coop/save_guard.cpp` (`SaveGuardActive`),
    `src/coop/save_transfer.cpp` (the `Save sandbox failed` status) and the
    `InstallSaveGuard` call in `coop.cpp` startup.

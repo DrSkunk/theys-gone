@@ -178,6 +178,11 @@ bool Navigate(Page& page, const session::Row& row) {
     case Action::BrowseFriends: page = Page::Friends; break;
     case Action::BrowsePublic: page = Page::Public; break;
     case Action::BrowseLan: page = Page::Lan; break;
+    case Action::OpenSettings: page = Page::Settings; break;
+    case Action::Teleport:
+        page = Page::Root;
+        g_commands.push_back({row.action, row.index});
+        return true; // close the menu; the teleport runs once gameplay resumes
     case Action::HostSteam:
     case Action::HostLan:
     case Action::JoinFriend:

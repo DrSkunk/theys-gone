@@ -1038,10 +1038,11 @@ void TestSession() {
 
     View view;
     auto root = BuildRows(Page::Root, view);
-    assert(root.size() == 3 && root[0].action == Action::HostLan && root[2].action == Action::Back);
+    assert(root.size() == 4 && root[0].action == Action::HostLan && root[2].action == Action::OpenSettings &&
+           root[3].action == Action::Back);
     view.steamAvailable = true;
     root = BuildRows(Page::Root, view);
-    assert(root.size() == 6 && root[0].action == Action::HostSteam && root[1].action == Action::BrowseFriends &&
+    assert(root.size() == 7 && root[0].action == Action::HostSteam && root[1].action == Action::BrowseFriends &&
            root[2].action == Action::BrowsePublic);
     for (int i = 0; i < 12; ++i) view.friends.push_back("friend" + std::to_string(i));
     auto friends = BuildRows(Page::Friends, view);
@@ -1055,21 +1056,44 @@ void TestSession() {
     view.host = true;
     view.visibility = Visibility::Public;
     auto lobby = BuildRows(Page::Root, view);
-    assert(lobby.size() == 5 && lobby[0].action == Action::Start && lobby[1].action == Action::Invite);
+    assert(lobby.size() == 6 && lobby[0].action == Action::Start && lobby[1].action == Action::Invite);
+    assert(lobby[4].action == Action::OpenSettings);
     assert(lobby[2].label == "VISIBILITY: PUBLIC" && lobby[3].label == "CLOSE SESSION");
     view.inGame = true;
-    assert(BuildRows(Page::Root, view).size() == 4);
+    assert(BuildRows(Page::Root, view).size() == 5);
+    view.connected = true;
+    auto playing = BuildRows(Page::Root, view);
+    assert(playing.size() == 6 && playing[3].action == Action::Teleport && playing[4].action == Action::OpenSettings);
+    view.connected = false;
     view.host = false;
     auto guest = BuildRows(Page::Root, view);
-    assert(guest.size() == 3 && guest[0].action == Action::Invite && guest[1].label == "LEAVE SESSION");
+    assert(guest.size() == 4 && guest[0].action == Action::Invite && guest[1].label == "LEAVE SESSION");
     view.busy = true;
-    assert(BuildRows(Page::Root, view).size() == 2);
+    assert(BuildRows(Page::Root, view).size() == 3);
     view = {};
     view.kind = Kind::LanJoin;
     view.host = false;
     auto lan = BuildRows(Page::Root, view);
-    assert(lan.size() == 3 && lan[0].label == "START GAME (JOIN HOST)" && lan[1].action == Action::Leave);
-    for (const auto& page : {Page::Root, Page::Friends, Page::Public, Page::Lan}) {
+    assert(lan.size() == 4 && lan[0].label == "START GAME (JOIN HOST)" && lan[1].action == Action::Leave);
+
+    // PLAYER SETTINGS: values live in the labels; friendly fire only while playing together.
+    View player;
+    player.settings.jacket = 1;
+    player.settings.cap = false;
+    auto settings = BuildRows(Page::Settings, player);
+    assert(settings.size() == 6 && settings[0].label == "JACKET: CRIMSON" && settings[0].action == Action::CycleJacket);
+    assert(settings[3].label == "CAP: OFF" && settings[4].label == "ALLOW A PASSENGER: ON");
+    assert(settings[5].action == Action::Back);
+    assert(std::string(PageTitle(Page::Settings, player)) == "PLAYER SETTINGS");
+    player.inGame = true;
+    player.kind = Kind::LanHost;
+    player.settings.friendlyFireArmed = true;
+    settings = BuildRows(Page::Settings, player);
+    assert(settings.size() == 7 && settings[5].label == "FRIENDLY FIRE: PRESS AGAIN TO ENABLE");
+    player.settings.friendlyFire = true;
+    assert(BuildRows(Page::Settings, player)[5].label == "FRIENDLY FIRE: ON - LETHAL");
+    assert(std::string(PaletteName(6)) == "Violet" && std::string(PaletteName(7)) == "Invalid");
+    for (const auto& page : {Page::Root, Page::Friends, Page::Public, Page::Lan, Page::Settings}) {
         View full;
         full.steamAvailable = true;
         for (int i = 0; i < 30; ++i) {
