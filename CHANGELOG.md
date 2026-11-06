@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.6.1](https://github.com/DrSkunk/theys-gone/compare/v0.6.0...v0.6.1) (2026-11-06)
+
+
+### Documentation
+
+* consolidate co-op status and roadmap ([#24](https://github.com/DrSkunk/theys-gone/issues/24)) ([ce3651e](https://github.com/DrSkunk/theys-gone/commit/ce3651e5c98cf6d66ea00bea770a32feeb2c970d))
+* focus on joining the host's save and remove stale content ([3e28c52](https://github.com/DrSkunk/theys-gone/commit/3e28c52f682fc21440e2f34c4abc5aa7da81fdbd))
+* record sleep, teleport and tutorial-pause lab findings ([6bb7ad5](https://github.com/DrSkunk/theys-gone/commit/6bb7ad5758e9360181c95c903d9870cf5efaa5f0))
+
 ## [0.6.0](https://github.com/DrSkunk/theys-gone/compare/v0.5.1...v0.6.0) (2026-10-31)
 
 
