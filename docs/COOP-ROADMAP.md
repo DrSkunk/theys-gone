@@ -136,11 +136,14 @@ with the host's missions.
     and rotation, about 60 bytes before quantization), walked, turned and
     stopped with no anim-instance variables copied (one-PC lab,
     [research log](REPLICATION-RESEARCH.md#pawn-mirror-native-style-enemy-animation-from-movement-and-state-2026-11-06-one-pc-one-game)).
-    Attacks and grapples are not reproduced yet. *Start:* find the event
-    data that starts a swarmer attack and grapple (the AI attack manager and
-    `AttackData`), then hit reactions and death. *Done when:* a lab run shows
-    the pawn clone in the source's action (idle, move, attack, grapple, hit)
-    for most samples, before any wire format is designed.
+    Attacks and grapples play when each new animation is replayed on the
+    clone as a `FullBody` slot montage (51 of 60 one-shot samples matched;
+    [research log](REPLICATION-RESEARCH.md#pawn-mirror-attacks-and-grapples-as-replayed-slot-montages-2026-11-06-one-pc-one-game)).
+    *Start:* measure whether the stand-in deals damage with god mode off;
+    then looping one-shots, hit reactions and death. *Done when:* a lab run
+    shows the pawn clone in the source's action (idle, move, attack, grapple,
+    hit, death) for most samples and the stand-in never damages the player,
+    before any wire format is designed.
 11. **Broaden menu timing QA.** Cover controller/mouse menus over Steam and
     repeat menu timing on separate PCs, including joins/disconnects with a
     wheel open, focus/combat overlap, photo mode and scripted/cinematic pause

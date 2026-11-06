@@ -3319,3 +3319,62 @@ separate-PC behavior.
 - **Cleanup:** lab clone destroyed after each run; base game copy never
   written. Archives: `<archive>/anim-mirror-20261106-2147/` through
   `<archive>/anim-mirror-20261106-2226/`.
+
+## Pawn mirror: attacks and grapples as replayed slot montages (2026-11-06, one PC, one game)
+
+- **Question:** the pawn clone walks natively but never attacks or grapples.
+  What one-off event makes a pawn without AI play them?
+- **Build:** worktree `anim-mirror-probe`, game build 19221447. New
+  `anim-mirror-pawn` options `attack-data`, `start-attack` and
+  `play-oneshot`; the clone's weapons get collision turned off.
+- **Setup:** as before, plus a stand-still scenario for attacks: per mode, a
+  fresh `spawn-single`, a `probe-enemy` hit to provoke it, 40 s with the
+  player standing still. God mode stayed on throughout.
+- **Result:** PASS in the lab for attacks and grapples as replayed
+  montages; damage from the clone not yet measured.
+- **Observed:**
+  - A ProcessEvent trace of a fight showed no `StartMeleeAttack`,
+    `AttemptDirectGrapple` or `ForceDirectGrapple` calls: the AI calls them
+    natively. Visible were `AnimState_AIMeleeAttack_C.OnEnterState` per attack
+    and anim notifies naming the attack assets.
+  - `attack-data`: copying the source anim's `BendAttackData` (`AttackAnim`
+    and the rest, minus its TArray) before forwarding MeleeAttack was
+    accepted but the clone's graph played no attack. In one run the clone was
+    locked after a forwarded `PerformAction` (4): every later request was
+    refused. PerformAction is no longer forwarded.
+  - `start-attack`: `StartMeleeAttack(target, name, IgnoreDistance)` on the
+    clone returned no attack for every one of the ~25 `BendBTTask_Attack`
+    names in loaded behavior trees (`Unarmed`, `Pursuit`, `Leap`, `Swipe`,
+    `RunAttack` and others).
+  - The graph has slots `UpperBody`, `FullBody` and `face`.
+    `play-oneshot`: while the source is in MeleeAttack or Grapple, each new
+    body `AnimSequence` it plays is played on the clone with
+    `PlaySlotAnimationAsDynamicMontage(asset, FullBody)`. Every call returned
+    a montage. The action match now counts the montage's asset while
+    `Montage_IsPlaying`.
+  - Final run, two modes of 41 s: **23 of 26** and **51 of 60** one-shot
+    samples matched; overall action match 28 of 81 and 57 of 82.
+  - Bone error confirms it independently: during matched grapple montages it
+    fell to **3.2–20.3°** (`swm_b_grapple_01_loop_105frames_swm` 3.2–8.6°,
+    `killdcn` 7.2–20.3°), against 30–70° medians elsewhere.
+  - The looping `grapple_01_loop_105frames` montage was played once; when it
+    ended the clone fell back to idle (59–73°) while the source kept looping.
+  - Matched attacks such as `swm_atk_low_run_5M` kept a high bone error
+    (59–84°).
+  - The clone's weapons (3 per swarmer) had their collision turned off at
+    spawn.
+- **Derived:** native-style sync for a swarmer is movement plus the AI's
+  movement request every update, and a one-off event per attack or grapple
+  phase (the animation asset, played as a slot montage). That matches how
+  native Unreal replicates one-off animations. Bone error is a usable check
+  only when both sides play the same animation; its floor is about 3–20°.
+  The high error on matched attacks is probably root motion or anchoring to
+  the target, which the clone lacks.
+- **Unknown:** whether the stand-in's attacks or claws damage the player
+  (god mode was on); looping one-shots; hit reactions and death; anchoring
+  and root motion of attacks; other enemy types; two-PC timing; the wire
+  format.
+- **Cleanup:** lab clone destroyed after each run; base game copy never
+  written. Archives: `<archive>/attack-trace-20261106-*/` and
+  `<archive>/anim-mirror-20261106-2244/` through
+  `<archive>/anim-mirror-20261106-2316/`.

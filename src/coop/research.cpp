@@ -3350,6 +3350,21 @@ struct AnimMirror {
     // Pawn mode with state: Bend's gameplay anim-state machines (BendPawn.AnimStateMachine) of both pawns; the
     // source's state is forwarded to the clone with RequestStateChange when it changes.
     bool forwardState = false;
+    bool attackData = false; // with state: also send the attack/grapple animation data when those states start
+    // With start-attack: the clone starts its own attack (BendPawn.StartMeleeAttack) with an attack name from
+    // the source AI's behavior tree, as a replicated attack event would.
+    bool startAttack = false;
+    std::vector<FName> attackNames; // distinct BendBTTask_Attack names, tried in order
+    // With play-oneshot: attacks and grapples are replayed on the clone as slot animations (dynamic montages),
+    // the way native Unreal replicates one-off animations.
+    bool playOneShot = false;
+    std::vector<FName> slots; // SlotName of every AnimNode_Slot in the graph
+    FName slot{};             // the slot played into
+    UObject* lastOneShot = nullptr;
+    UObject* lastMontage = nullptr; // the clone's dynamic montage for lastOneShot
+    int oneShots = 0, oneShotsPlayed = 0;
+    int oneShotSamples = 0, oneShotMatches = 0; // samples with the source in a replayed one-shot
+    int clawsDisabled = -1;         // clone weapons with collision turned off; -1 until looked up
     bool keepAi = false; // pawn mode with ai: the clone keeps its AI and is not fed (control)
     // Pawn mode with move-request (implied by intent): copy the movement component's AI move request.
     bool moveRequest = false;
@@ -3429,6 +3444,7 @@ void CollectNodeFields(AnimMirror& m) {
     auto scriptStruct = FindClass("ScriptStruct");
     auto machine = FindObject("AnimNode_StateMachine", scriptStruct);
     auto player = FindObject("AnimNode_AssetPlayerBase", scriptStruct);
+    auto slotNode = FindObject("AnimNode_Slot", scriptStruct);
     auto stop = FindClass("BendAnimInstance");
     if (!machine || !player) return;
     for (auto c = m.source->cls; IsLive(c) && c != stop; c = Super(c)) {
@@ -3438,7 +3454,15 @@ void CollectNodeFields(AnimMirror& m) {
             auto structure = PropertySubclassObject(field, "ScriptStruct");
             int base = PropertyOffset(field);
             if (!structure || base < 0) continue;
-            if (StructDerives(structure, machine)) {
+            if (slotNode && StructDerives(structure, slotNode)) {
+                if (auto name = FindChild(structure, "SlotName")) {
+                    FName value{};
+                    std::memcpy(&value, reinterpret_cast<const uint8_t*>(m.source) + base + PropertyOffset(name), sizeof value);
+                    bool known = false;
+                    for (auto s : m.slots) known |= s.index == value.index && s.number == value.number;
+                    if (value.index && !known) m.slots.push_back(value);
+                }
+            } else if (StructDerives(structure, machine)) {
                 AddNodeField(m.nodes, m.nodeBytes, structure, base, "CurrentState", false);
                 AddNodeField(m.nodes, m.nodeBytes, structure, base, "ElapsedTime", false);
                 ++m.machines;
@@ -3583,18 +3607,124 @@ int32_t CurrentStateEnum(UObject* machine) {
     return -1;
 }
 
+// The animation data an attack or grapple state plays, sent once when the state starts (an event, like an RPC).
+// The AI starts attacks natively (BendPawn.StartMeleeAttack is not seen in ProcessEvent), so the data is read
+// from the source's anim instance. BendAttackData's TArray at +24 (16 bytes) is skipped: copying an array
+// header would share the source's allocation.
+void SendAttackData(int32_t state) {
+    constexpr int32_t kMeleeAttack = 5, kGrapple = 6;
+    auto from = reinterpret_cast<const uint8_t*>(g_mirror.source);
+    auto to = reinterpret_cast<uint8_t*>(g_mirror.clone);
+    std::string what;
+    if (state == kMeleeAttack) {
+        auto p = FindChild(g_mirror.source->cls, "AttackData");
+        if (!p || ElementSize(p) != 96) return;
+        int base = PropertyOffset(p);
+        std::memcpy(to + base, from + base, 24);
+        std::memcpy(to + base + 40, from + base + 40, 56);
+        UObject* anim = nullptr;
+        std::memcpy(&anim, from + base, sizeof anim);
+        what = "attack " + (IsLive(anim) ? Name(anim) : std::string("-"));
+        CopyProp(g_mirror.source, g_mirror.clone, "MeleeAnimLength");
+    } else if (state == kGrapple) {
+        for (auto name : {"GrappleAnimSeq", "GrappleEnterAnimSeq", "GrappleBreakingOutAnimSeq", "GrappleBlendspace"})
+            CopyProp(g_mirror.source, g_mirror.clone, name);
+        UObject* anim = nullptr;
+        GetProp(g_mirror.source, "GrappleAnimSeq", anim);
+        what = "grapple " + (IsLive(anim) ? Name(anim) : std::string("-"));
+    } else {
+        return;
+    }
+    Log("anim mirror event: %s", what.c_str());
+}
+
 // Pawn mode with state: forwards the source's gameplay anim state to the clone, as a replicated state event.
 void ForwardState() {
     int32_t state = CurrentStateEnum(g_mirror.sourceStates);
     if (state < 0 || state == g_mirror.lastState) return;
     g_mirror.lastState = state;
     ++g_mirror.stateChanges;
+    // PerformAction (4) plays an AI action that the clone lacks; entered without it, the clone stays locked in
+    // that state and refuses every later request (lab, 2026-11-06). Not forwarded until its payload is known.
+    constexpr int32_t kPerformAction = 4;
+    if (state == kPerformAction) {
+        Log("anim mirror state: source PerformAction (4) not forwarded");
+        return;
+    }
+    if (g_mirror.attackData) SendAttackData(state);
+    constexpr int32_t kMeleeAttack = 5;
+    if (g_mirror.startAttack && state == kMeleeAttack) {
+        uint64_t weakTarget = 0;
+        GetProp(g_mirror.source, "LastValidAttackTarget", weakTarget);
+        auto target = ResolveWeak(weakTarget);
+        auto attack = FindChild(g_mirror.source->cls, "AttackData");
+        UObject* sourceAnim = nullptr;
+        if (attack) std::memcpy(&sourceAnim, reinterpret_cast<const uint8_t*>(g_mirror.source) + PropertyOffset(attack), 8);
+        std::string tried;
+        UObject* anim = nullptr;
+        for (auto name : g_mirror.attackNames) {
+            Call start(g_mirror.actor, "StartMeleeAttack");
+            start.set("AttackTarget", target).set("AttackName", name).setBool("IgnoreDistance", true);
+            anim = start.invoke() ? start.get<UObject*>("ReturnValue") : nullptr; // BendAttackData.AttackAnim at +0
+            tried += (tried.empty() ? "" : ",") + NameString(name.index);
+            if (IsLive(anim)) break;
+        }
+        Log("anim mirror event: source %s; clone StartMeleeAttack(%s) tried %s -> %s",
+            IsLive(sourceAnim) ? Name(sourceAnim).c_str() : "-", target ? Name(target).c_str() : "none",
+            tried.c_str(), IsLive(anim) ? Name(anim).c_str() : "no attack");
+    }
     Call request(g_mirror.cloneStates, "RequestStateChange");
     bool ok = request.set("State", static_cast<uint8_t>(state)).setBool("ForceReenter", false).invoke() &&
               request.get<bool>("ReturnValue");
     if (ok) ++g_mirror.stateRequestsOk;
     Log("anim mirror state: source %s (%d) -> clone request %s, clone now %s", CurrentStateName(g_mirror.sourceStates).c_str(),
         state, ok ? "accepted" : "refused", CurrentStateName(g_mirror.cloneStates).c_str());
+}
+
+// A pawn clone's weapons (such as the swarmer's claw, a separate actor whose overlap deals melee damage) keep
+// their collision when the pawn's is turned off; this turns it off on every weapon the clone owns.
+int DisableCloneWeapons(UObject* clone) {
+    static UObject* weaponClass = FindClass("BendWeapon");
+    int disabled = 0;
+    for (int32_t i = 0; weaponClass && i < ObjectCount(); ++i) {
+        auto weapon = ObjectAt(i);
+        if (!IsLive(weapon) || !IsA(weapon, weaponClass) || IsDefaultOrArchetype(weapon)) continue;
+        UObject* owner = nullptr;
+        UObject* instigator = nullptr;
+        GetProp(weapon, "Owner", owner);
+        GetProp(weapon, "Instigator", instigator);
+        if (owner != clone && instigator != clone) continue;
+        Call(weapon, "SetActorEnableCollision").setBool("bNewActorEnableCollision", false).invoke();
+        ++disabled;
+    }
+    return disabled;
+}
+
+// Pawn mode with play-oneshot: while the source is attacking or grappling, each new body animation it plays is
+// played on the clone through a graph slot, as a replicated montage would be (an asset plus a start).
+void FollowOneShots() {
+    constexpr int32_t kMeleeAttack = 5, kGrapple = 6;
+    int32_t state = g_mirror.forwardState ? g_mirror.lastState : CurrentStateEnum(g_mirror.sourceStates);
+    if (state != kMeleeAttack && state != kGrapple) {
+        g_mirror.lastOneShot = nullptr;
+        return;
+    }
+    auto asset = DominantAsset(g_mirror.source);
+    if (!asset || asset == g_mirror.lastOneShot || !g_mirror.slot.index) return;
+    g_mirror.lastOneShot = asset;
+    ++g_mirror.oneShots;
+    // Blend spaces cannot play in a slot; only sequences are replayed.
+    if (Name(asset->cls) != "AnimSequence") {
+        Log("anim mirror one-shot: %s is a %s, not replayed", Name(asset).c_str(), Name(asset->cls).c_str());
+        return;
+    }
+    Call play(g_mirror.clone, "PlaySlotAnimationAsDynamicMontage");
+    play.set("Asset", asset).set("SlotNodeName", g_mirror.slot).set("BlendInTime", 0.1f).set("BlendOutTime", 0.2f)
+        .set("InPlayRate", 1.f).set("LoopCount", 1).set("BlendOutTriggerTime", -1.f);
+    UObject* montage = play.invoke() ? play.get<UObject*>("ReturnValue") : nullptr;
+    if (IsLive(montage)) ++g_mirror.oneShotsPlayed;
+    g_mirror.lastMontage = montage;
+    Log("anim mirror one-shot: %s in state %d -> %s", Name(asset).c_str(), state, IsLive(montage) ? "playing" : "failed");
 }
 
 // Pawn mode: the clone follows the source 3 m to the side with the source's velocity and movement mode, and its
@@ -3704,6 +3834,27 @@ bool AnimMirrorStart(UObject* localPawn, AnimMirrorMode mode, const std::string&
             GetProp(m.pawn, "AnimStateMachine", m.sourceStates);
             GetProp(m.actor, "AnimStateMachine", m.cloneStates);
             m.forwardState = IsLive(m.sourceStates) && IsLive(m.cloneStates);
+            m.attackData = HasOption(options, "attack-data");
+            m.startAttack = HasOption(options, "start-attack");
+            m.playOneShot = HasOption(options, "play-oneshot");
+            if (m.startAttack) {
+                // The attack names the source AI's behavior tree uses (BendBTTask_Attack nodes under its controller).
+                UObject* controller = nullptr;
+                GetProp(m.pawn, "Controller", controller);
+                auto taskClass = FindClass("BendBTTask_Attack");
+                std::string names;
+                for (int32_t i = 0; taskClass && IsLive(controller) && i < ObjectCount(); ++i) {
+                    auto task = ObjectAt(i);
+                    if (!IsLive(task) || !IsA(task, taskClass) || IsDefaultOrArchetype(task)) continue;
+                    FName name{};
+                    if (!GetProp(task, "AttackName", name) || !name.index) continue;
+                    bool known = false;
+                    for (auto n : m.attackNames) known |= n.index == name.index && n.number == name.number;
+                    if (!known) m.attackNames.push_back(name);
+                    names += (names.empty() ? "" : ", ") + NameString(name.index) + " (" + Name(task->outer) + ")";
+                }
+                Log("anim mirror: attack task names: %s", names.empty() ? "none" : names.c_str());
+            }
             Log("anim mirror: state machines source %s (%s), clone %s (%s)",
                 IsLive(m.sourceStates) ? Name(m.sourceStates).c_str() : "none", CurrentStateName(m.sourceStates).c_str(),
                 IsLive(m.cloneStates) ? Name(m.cloneStates).c_str() : "none", CurrentStateName(m.cloneStates).c_str());
@@ -3740,6 +3891,19 @@ bool AnimMirrorStart(UObject* localPawn, AnimMirrorMode mode, const std::string&
     PinFullPose(m.component, 1, 0, false);
     CollectMirrorFields(m.source->cls, m.fields, m.bytes);
     CollectNodeFields(m);
+    if (m.playOneShot) {
+        std::string names;
+        for (auto s : m.slots) {
+            auto text = NameString(s.index);
+            names += (names.empty() ? "" : ", ") + text;
+            bool full = text.find("Full") != std::string::npos || text.find("full") != std::string::npos;
+            if (!m.slot.index || full || (text == "DefaultSlot" && !m.slot.index)) {
+                if (full || !m.slot.index) m.slot = s;
+            }
+        }
+        Log("anim mirror: graph slots: %s; playing one-shots into %s", names.empty() ? "none" : names.c_str(),
+            m.slot.index ? NameString(m.slot.index).c_str() : "none");
+    }
     if (HasOption(options, "intent")) {
         // The locomotion intent a pawn without AI cannot derive from its velocity (lab, 2026-11-06): the
         // requested speed tier, desired direction and turn, and the idle/move transition requests.
@@ -3799,6 +3963,9 @@ bool AnimMirrorStop(std::string& summary) {
     if (g_mirror.forwardState)
         Log("anim mirror: %d source state changes, %d clone requests accepted", g_mirror.stateChanges,
             g_mirror.stateRequestsOk);
+    if (g_mirror.playOneShot)
+        Log("anim mirror: %d one-shots seen, %d played on the clone; %d of %d one-shot samples matched",
+            g_mirror.oneShots, g_mirror.oneShotsPlayed, g_mirror.oneShotMatches, g_mirror.oneShotSamples);
     if (!g_mirror.divergent.empty()) {
         std::vector<std::pair<int, std::string>> ranked;
         for (const auto& [name, count] : g_mirror.divergent) ranked.push_back({count, name});
@@ -3828,10 +3995,16 @@ void AnimMirrorTick() {
     if (g_mirror.mode == AnimMirrorMode::pawn && g_mirror.keepAi) {
         ++g_mirror.copies;
     } else if (g_mirror.mode == AnimMirrorMode::pawn) {
+        if (g_mirror.clawsDisabled <= 0 && Seconds() - g_mirror.started < 1.0) {
+            int disabled = DisableCloneWeapons(g_mirror.actor);
+            if (disabled != g_mirror.clawsDisabled) Log("anim mirror: clone weapons with collision off: %d", disabled);
+            g_mirror.clawsDisabled = disabled;
+        }
         FeedPawnClone();
         if (g_mirror.copyVars) CopyFields(g_mirror.fields);
         if (!g_mirror.intent.empty()) CopyFields(g_mirror.intent);
         if (g_mirror.forwardState && IsLive(g_mirror.sourceStates) && IsLive(g_mirror.cloneStates)) ForwardState();
+        if (g_mirror.playOneShot) FollowOneShots();
         ++g_mirror.copies;
     } else {
         PlaceMirror();
@@ -3871,10 +4044,23 @@ void AnimMirrorTick() {
     int active = ActivePlayers();
     g_mirror.activePlayers.push_back(active);
     auto sourceAction = DominantAsset(g_mirror.source), cloneAction = DominantAsset(g_mirror.clone);
+    // A one-shot replayed as a montage plays through a slot, not an asset player, so DominantAsset cannot see it:
+    // the clone's action is the montage's asset while that montage plays.
+    bool montage = false;
+    if (g_mirror.playOneShot && IsLive(g_mirror.lastMontage)) {
+        Call playing(g_mirror.clone, "Montage_IsPlaying");
+        montage = playing.set("Montage", g_mirror.lastMontage).invoke() && playing.get<bool>("ReturnValue");
+        if (montage) cloneAction = g_mirror.lastOneShot;
+    }
+    if (g_mirror.playOneShot && sourceAction && sourceAction == g_mirror.lastOneShot) {
+        ++g_mirror.oneShotSamples;
+        if (cloneAction == sourceAction) ++g_mirror.oneShotMatches;
+    }
     ++g_mirror.actionSamples;
     if (sourceAction == cloneAction) ++g_mirror.actionMatches;
-    Log("anim mirror action: %s / %s%s", sourceAction ? Name(sourceAction).c_str() : "-",
-        cloneAction ? Name(cloneAction).c_str() : "-", sourceAction == cloneAction ? " (match)" : "");
+    Log("anim mirror action: %s / %s%s%s; bone error %.1f", sourceAction ? Name(sourceAction).c_str() : "-",
+        cloneAction ? Name(cloneAction).c_str() : "-", montage ? " [montage]" : "",
+        sourceAction == cloneAction ? " (match)" : "", mean);
     if (g_mirror.mode == AnimMirrorMode::pawn && !g_mirror.copyVars && g_mirror.intent.empty()) {
         // Variables the clone's own anim update does not reproduce from position, velocity and movement mode:
         // what a native-style replicator would still have to send. Floats within 5% count as equal.
