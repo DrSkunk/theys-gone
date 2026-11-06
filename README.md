@@ -38,6 +38,11 @@ the host progress. Host and join sessions through Steam or your local network.
   missions or separate PCs.
 
 Live mission state, inventory, pickups, doors and camp NPCs are not shared.
+> [!WARNING]
+> In the latest two-PC test, natural enemies such as a swarm did not appear
+> for the joining player at all, while their attacks still hurt them. Until
+> this is fixed, expect invisible enemies in fights.
+
 Up to 16 nearby hostile and friendly companion pawns share the stream limit,
 so hordes are incomplete. Enemy melee damage is estimated; real aimed attacks
 and ranged enemy damage need further testing. Projectiles and hit effects,
@@ -294,9 +299,10 @@ The driver needs **ALLOW A PASSENGER: ON** in **PLAYER SETTINGS**. The driver
 gets on their bike and stops. The passenger walks up
 to it and holds the game's own interact button on the **Ride with
 &lt;partner&gt;** prompt (F9 also works). The passenger is attached to the bike
-as a visual rider, and it isn't the game's own two-seat vehicle code. The
-passenger can't attack, and saving is blocked while riding. Hold **Get off**
-(or press F9) to dismount. An exit is refused when there is no safe ground to
+as a visual rider, and it isn't the game's own two-seat vehicle code, so there
+is no mount animation. Saving is blocked while riding. In the latest two-PC
+test the passenger could still attack, the held weapon looked misplaced, and
+the **Get off** prompt did not show; press F9 or View + X to dismount. An exit is refused when there is no safe ground to
 stand on.
 
 During story missions where a character rides on the driver's bike (Lisa,
