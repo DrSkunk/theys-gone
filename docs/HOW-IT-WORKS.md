@@ -11,10 +11,10 @@ and play, see the [README](../README.md). To build and test, see
 
 ## Overview
 
-Days Gone runs on Bend Studio's Unreal Engine 4 fork. A Run H crash dump
-reports `4.11.1-0+UE4`; earlier project notes said 4.10.1 based on source
-pattern comparisons. The mod is a Windows DLL (`TheysGone.asi`) that runs
-inside the game process.
+Days Gone runs on Bend Studio's fork of Unreal Engine 4.11; a crash dump
+reports `4.11.1-0+UE4`. Public UE 4.10 source served only as a layout
+reference. The mod is a Windows DLL (`TheysGone.asi`) that runs inside the
+game process.
 
 ```text
 DaysGone.exe
@@ -87,10 +87,10 @@ used.
 
 | Item | Location | Identification |
 |---|---|---|
-| `UObject::ProcessEvent` | RVA `0x1AC2A20` | Matches UE 4.10 `ProcessEvent`: tests `FunctionFlags` (+0x88) for `FUNC_Native` (0x400), reads the script size (+0x50), virtual calls at vtable +0x1E8/+0x1F0. Its 19-byte prologue is position-independent |
+| `UObject::ProcessEvent` | RVA `0x1AC2A20` | Matches stock UE4 `ProcessEvent` (4.10 source as reference): tests `FunctionFlags` (+0x88) for `FUNC_Native` (0x400), reads the script size (+0x50), virtual calls at vtable +0x1E8/+0x1F0. Its 19-byte prologue is position-independent |
 | `GUObjectArray` | RVA `0x4C12290` | `Objects*` +0x10, `Max` +0x18, `Num` +0x1C; 16-byte items with flags at +8 and serial at +0xC |
 | `GNames` | found at runtime (§3.2) | |
-| `FNameEntry` string | +0x12 | Stock UE 4.10 uses +0x10; Bend added a 16-bit field |
+| `FNameEntry` string | +0x12 | Stock UE4 (4.10 source) uses +0x10; Bend added a 16-bit field |
 | `UProperty::Offset_Internal` | detected at runtime, +0x50 (§3.3) | |
 
 Structure offsets used by the reflection layer ([`ue.hpp`](../src/coop/ue.hpp)):
@@ -114,8 +114,8 @@ spawning. F6 dumps the current pawn again. The separate `MissionDiscovery=1`
 option logs unique mission/save-related `ProcessEvent` signatures and reflected
 parameter layouts without recording parameter values or changing behavior.
 It showed that the main menu runs inside an already-loaded world and that
-Continue loads a save in place; see the save lifecycle in
-[DEVELOPMENT.md](DEVELOPMENT.md).
+Continue loads a save in place; see the
+[save lifecycle](DEVELOPMENT.md#save-and-load-lifecycle-verified-on-build-19221447).
 This revealed, for example:
 
 - the player is `BendDefaultPlayerPawn_C` with `BendDefaultPlayerController_C`;
@@ -222,12 +222,13 @@ Both transports implement the same small `Transport` interface: send a
 datagram, receive the partner's datagrams, and poll. The rest of the plugin
 does not know which one is active.
 
-### 4.1.1 Steam transport (experimental)
+#### 4.1.1 Steam transport (experimental)
 
 Choosing a Steam session in CO-OP activates [`steam.cpp`](../src/coop/steam.cpp)
-instead of the UDP transport. Lobby creation, visibility changes, overlay
-invites, two-account joining and gameplay have been tested in-game on separate
-machines. Internet/NAT traversal has not been independently verified. No
+instead of the UDP transport. Lobby creation, visibility changes,
+invite-overlay activation, two-account joining from the menu and gameplay
+have been tested in-game on separate machines. Accepting an invite, host-save
+transfer over Steam and Internet/NAT traversal have not been verified. No
 Steamworks SDK code is bundled or linked:
 
 - The game already loads `steam_api64.dll` and initializes Steam. The plugin
@@ -337,9 +338,10 @@ still streamed. The partner therefore shows a neutral face. `PoseFace=1`
 streams the full skeleton again.
 
 These measures replace the earlier format, which sent all 529 body bones with
-translations at 30 Hz (about 300 kB/s each way, measured). The new expected
-cost is well under 100 kB/s per direction for body and bike. That estimate
-still has to be confirmed in a live session with the `perf:` log lines.
+translations at 30 Hz (about 300 kB/s each way, measured). The current
+format's cost is unmeasured; it is expected to be well under 100 kB/s per
+direction for body and bike. Measuring it, with hordes, is part of the
+roadmap's [story hordes item](COOP-ROADMAP.md#next-in-priority-order).
 
 ### 4.4 Motion smoothing
 
@@ -546,9 +548,12 @@ bike there. Wheels and suspension do not animate.
 The joining player's own hostile AI is switched off: ambient generators,
 spawn areas and crowd generators are paused, and live hostile pawns are handed
 back to their pools with the generator's own `DespawnUnit`. Destroying pooled
-pawns directly did not work; the pool respawned them.
+pawns directly did not work; the pool respawned them. Build-specific details,
+ranges and damage estimates are in
+[DEVELOPMENT.md](DEVELOPMENT.md#shared-enemies).
 
-With `FreeRoam=1` on both peers, the host's guarded world-composition hook
+**Free roam (experimental, added in protocol v9).** With `FreeRoam=1` on
+both peers, the host's guarded world-composition hook
 keeps terrain streamed around a distant guest. Past 250 m, the guest resumes
 its own local AI and sends up to 16 nearby enemy skeletons and appearance
 descriptions to the host, which renders them as poseable replicas. Below
@@ -583,11 +588,12 @@ Combat crosses over in both directions:
   `MeleeArmed` animation notify: a swing at the stand-in within reach becomes
   a strike (`DMPX`) applied on the joining player's PC. The damage per enemy
   type is an estimate.
-- **Guest-kept enemies to host.** While a guest-owned fight survives a
-  regroup, the guest creates the same kind of hidden proxy at the host's
-  avatar. Nearby guest-owned enemies can target it; their swings and damage
-  are forwarded with `DMPX` and applied to the host. This protocol-v9 path is
-  implemented but still needs paired validation.
+- **Guest-kept enemies to host (free roam, experimental).** While a
+  guest-owned fight survives a regroup, the guest creates the same kind of
+  hidden proxy at the host's avatar. Nearby guest-owned enemies can target
+  it; their swings and damage are forwarded with `DMPX` and applied to the
+  host. This path was added in protocol v9 and has not been proven in paired
+  play.
 
 This is a custom replication layer inside the ASI, not Unreal's built-in
 multiplayer networking. A swing notification plus target/range checks is an
@@ -598,9 +604,8 @@ twice, without acknowledgements, and duplicate sequences are suppressed
 within a 64-entry window.
 
 The [development notes](DEVELOPMENT.md#reverse-engineering-findings-and-failed-approaches)
-record the inspection method, failed approaches, packet checks and a
-[validation matrix](DEVELOPMENT.md#current-validation-and-remaining-work).
-In particular, the debug guest-hit test does not verify real aimed shooting,
+record the inspection method, failed approaches and packet checks; the
+[co-op roadmap](COOP-ROADMAP.md) has the current test status. In particular, the debug guest-hit test does not verify real aimed shooting,
 and the story-divergence test does not establish complete campaign co-op.
 
 ## 6. Safety measures
@@ -626,9 +631,9 @@ and the story-divergence test does not establish complete campaign co-op.
   host's save and is resynced at the host's saves, but live mission state,
   inventory and loot are not mirrored.
 - Enemy melee damage is estimated per type; ranged damage remains
-  unverified. In standard mode enemy AI only runs on the host. Free-roam
-  protocol v9 adds a guest-side proxy so guest-kept enemies can target the
-  host after regrouping; this path still needs paired validation. Enemy
+  unverified. In standard mode enemy AI only runs on the host. Experimental
+  free roam has a guest-side proxy, added in protocol v9, so guest-kept
+  enemies can target the host after regrouping; this path is unproven. Enemy
   identities are not carried over once an enemy is released to the new owner.
 - No projectile or muzzle-flash replication. Friendly-fire damage is an
   approximation.

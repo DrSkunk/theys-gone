@@ -36,7 +36,7 @@ Python simulator and analysis tools. They don't replace testing in the game.
 | Path | Role |
 |---|---|
 | [`src/coop/dllmain.cpp`](../src/coop/dllmain.cpp) | DLL entry, `InitializeASI` |
-| [`src/coop/coop.cpp`](../src/coop/coop.cpp) | Build check, hook, per-frame logic, all features |
+| [`src/coop/coop.cpp`](../src/coop/coop.cpp), [`coop.hpp`](../src/coop/coop.hpp) | Build check, hook, per-frame logic, all features; INI configuration |
 | [`src/coop/ue.hpp`](../src/coop/ue.hpp), [`ue.cpp`](../src/coop/ue.cpp) | Build-specific UE4 Bend reflection layer |
 | [`src/coop/protocol.hpp`](../src/coop/protocol.hpp) | State packet |
 | [`src/coop/pose.hpp`](../src/coop/pose.hpp), [`skeleton.cpp`](../src/coop/skeleton.cpp) | Pose compression, reading and writing skeletons |
@@ -50,6 +50,13 @@ Python simulator and analysis tools. They don't replace testing in the game.
 | [`src/coop/steam.cpp`](../src/coop/steam.cpp), [`steam_abi.hpp`](../src/coop/steam_abi.hpp) | Experimental Steam lobby and networking transport (runtime-resolved, no SDK) |
 | [`src/coop/save_guard.cpp`](../src/coop/save_guard.cpp), [`save_policy.hpp`](../src/coop/save_policy.hpp) | Experimental guest save sandbox (import hooks and pure path rules) |
 | [`src/coop/save_transfer.cpp`](../src/coop/save_transfer.cpp), [`savesync.hpp`](../src/coop/savesync.hpp), [`sha256.hpp`](../src/coop/sha256.hpp) | Experimental host-to-guest save transfer (runtime, pure wire/bundle format, SHA-256) |
+| [`src/coop/story.hpp`](../src/coop/story.hpp) | Story signatures and host-save catch-up rules (`DMST`, `DMOB`) |
+| [`src/coop/mission_policy.hpp`](../src/coop/mission_policy.hpp) | Per-mission policy flags (pillion, stealth, flashback, …) and the rules derived from them |
+| [`src/coop/ride_prompt.cpp`](../src/coop/ride_prompt.cpp), [`ride_prompt.hpp`](../src/coop/ride_prompt.hpp) | Native "hold to interact" **Ride with** prompt on the partner's bike |
+| [`src/coop/menu_time.hpp`](../src/coop/menu_time.hpp) | Shared menu-pause and weapon-wheel slowdown rules |
+| [`src/coop/streaming.hpp`](../src/coop/streaming.hpp), [`streaming_hook.cpp`](../src/coop/streaming_hook.cpp), [`streaming_hook.hpp`](../src/coop/streaming_hook.hpp) | Free roam: world-composition tile merging (pure) and the build-specific second-focus streaming hook |
+| [`src/coop/region_cache.hpp`](../src/coop/region_cache.hpp) | Short-lived cache of readable address ranges, to skip most `VirtualQuery` calls |
+| [`src/coop/research.cpp`](../src/coop/research.cpp), [`research.hpp`](../src/coop/research.hpp) | Reverse-engineering aids and opt-in native-network experiments (`[Research]`, `DebugTools=1`) |
 | [`src/coop/debug_commands.hpp`](../src/coop/debug_commands.hpp) | Debug command allowlist |
 | [`tools/`](../tools) | Tests, simulator, debug helper, offline analysis |
 
@@ -89,10 +96,6 @@ poetry run python tools/fake_peer.py --game 127.0.0.1:27777 \
   --port 27778 --follow --duration 60
 $L stop solo && $L destroy solo
 ```
-
-The legacy `tools/same-pc` launchers default to the real Steam installation,
-launch the installed game and do not select `Transport=udp`. Do not use them
-for isolated testing.
 
 To connect to an isolated game on another trusted machine:
 
@@ -243,9 +246,12 @@ dying animation, or corpse cleanup; see runs N/O in
 
 ## Remote game-session controller
 
-[`tools/game_remote.py`](../tools/game_remote.py) is a small Linux/Windows helper for
-controlling an active game session and retrieving screenshots. It is separate
-from the mod and exposes only health, PNG capture, and a bounded allowlist of
+[`tools/game_remote.py`](../tools/game_remote.py) is a small Linux/Windows
+helper for controlling an active game session and retrieving screenshots. It
+uses only the Python standard library (optional gamepad support adds
+`python-evdev` or `vgamepad`), so on the gaming PC it runs with plain
+`python3`, an exception to the Poetry rule. It is separate from the mod and
+exposes only health, PNG capture, and a bounded allowlist of
 keyboard taps, relative mouse moves, mouse clicks, virtual gamepad taps/stick
 and trigger input, and waits. It has no shell, file, process or
 arbitrary-command endpoint. Each tap releases its input and each analog input
@@ -260,17 +266,15 @@ whether it initialized. Screenshot capture may depend on the compositor
 allowing capture of the game display; verify it in the actual session before
 relying on it.
 
-For KDE Wayland, `--capture spectacle` uses the installed KDE screenshot
-utility without opening its UI. For an X11/XWayland game (including Proton
-under Deck Gaming Mode), `--capture ffmpeg-x11` uses FFmpeg's `x11grab`.
-It requires the game's `DISPLAY` and a readable `XAUTHORITY` from the same
-session. Paths inside a Steam container may not exist in the host namespace.
-XWayland capture sees X11 content, not native Wayland windows or Steam's
-compositor overlays; inspect the returned PNG before relying on it.
-On the tested Deck, it returned a black image even with the game running.
-Use `--capture gamescope` with `WAYLAND_DISPLAY=gamescope-0` for Gaming Mode
-instead: it uses the installed `gamescopectl screenshot` command and waits
-for a complete PNG, capturing the compositor's actual game output.
+Other capture backends: `--capture spectacle` uses KDE's screenshot utility
+without opening its UI. `--capture ffmpeg-x11` uses FFmpeg's `x11grab` for
+an X11/XWayland game; it requires the game's `DISPLAY` and a readable
+`XAUTHORITY` from the same session, and sees X11 content only, not native
+Wayland windows or compositor overlays. `--capture gamescope` (with
+`WAYLAND_DISPLAY` set to the gamescope socket, such as `gamescope-0`) uses
+`gamescopectl screenshot` and captures the compositor's actual game output;
+prefer it in gamescope sessions, where X11 capture can return black images.
+Inspect the returned PNG before relying on any backend.
 
 **Windows:** Python 3.11+ is sufficient for keyboard/mouse input and PNG
 screenshots. The helper automatically selects native `SendInput` (physical
@@ -420,23 +424,12 @@ stock HUD `AddNotification` wrapper did not visibly display these messages,
 so the implementation does not rely on that path. Failed notification
 dispatch is logged and retried rather than silently acknowledged.
 
-Title and pause entry rendering, keyboard navigation, Steam hosting,
-visibility changes and invite-overlay activation have been exercised live on
-build 19221447 under Proton. LAN discovery/join selection, local Continue
-from Start Game, the shifted title Quit to Desktop row, restoring vanilla
-pause labels, both vanilla pause quit confirmations, and visible gameplay connect/disconnect events against the
-simulated peer were also verified. Two Steam accounts on two machines (a Proton desktop and a Steam Deck) were
-used to verify: friends-only hosting from the title and pause menus, JOIN A
-FRIEND from the title and pause menus, public visibility with FIND PUBLIC
-GAMES, START GAME into shared gameplay over SteamNetworkingMessages, guest
-LEAVE SESSION, host CLOSE SESSION, and rejoining mid-game. LAN hosting from
-the pause menu and JOIN LAN GAME were verified between the same machines.
 If the original Steam host leaves, the session ends instead of migrating
-campaign authority. Steam invite acceptance (`GameLobbyJoinRequested` /
-`+connect_lobby`), controller navigation and every mouse target still
-require acceptance testing. There
-is no synchronized ready/start handshake or host-authoritative mission
-replication yet. Save transfer is optional and not required to open a lobby.
+campaign authority. There is no synchronized ready/start handshake or
+host-authoritative mission replication, and save transfer is not required to
+open a lobby. What has been tested live, including the still-unverified Steam
+invite acceptance, is in the [co-op roadmap](COOP-ROADMAP.md) and the
+[research log](REPLICATION-RESEARCH.md).
 
 ## Mission and save discovery
 
@@ -556,19 +549,10 @@ the connected partner. File names are limited to `[A-Za-z0-9_.-]` ending in
 `.sav` (reserved device names such as `nul` or `com1` are refused), at most
 32 files and 64 MB.
 
-Verified live on one PC (build 19221447, Proton) with `fake_peer.py`:
-
-- Guest: 7.3 MB of another account's saves arrived at the title screen in about
-  13 s without retransmits and were adopted. The menu's `profile.sav` write
-  went to the discard folder. Continue loaded the host save (the post-load
-  autosave matched that account's save size, not the local one), the guest
-  teleported to the partner, and all 20 real save files kept their SHA-256.
-- Host: the plugin found the right account folder and served a 7.4 MB bundle
-  in about 10 s. Every fetched file matched the snapshot byte for byte.
-
-Since then verified between two real PCs over the LAN transport (Proton,
-desktop Linux and Steam Deck), including the in-place reload. Not yet tested
-over the Steam transport. The host shares its last save on disk.
+The transfer code treats saves as opaque bytes. The host shares its last
+save on disk. Transfer and in-place reload have been verified between two PCs
+over LAN UDP, but not over Steam; see the [co-op roadmap](COOP-ROADMAP.md)
+for status and the [research log](REPLICATION-RESEARCH.md) for the runs.
 
 ### Story sync (`DMST`)
 
@@ -586,21 +570,15 @@ are version 3; both peers need a build with this version. With
 uniquely identified completed objectives in sequenced `DMOB` packets every 3 s.
 The guest applies those idempotently only after adopting the host save and
 entering gameplay. Job start/completion, ambiguous IDs and failed applications
-still rely on save resync. This opt-in path has a paired LAN validation for one
-completed objective; the isolated host's sends were also observed with
-`fake_peer.py`. The Deck logged `objective sync: applied IND-JobData.IND3 from
-host` and its story signature matched the host. Save-resync fallback was also
-verified with DMOB disabled, including after a host objective autosave. Job
-start and job completion were validated on a paired LAN run: neither travels
-in DMOB, and both reach the guest through save resync at the host's next save.
-Starting a job does not autosave by itself. Completing one autosaves only after
-the host dismisses the MISSION COMPLETE reward screens, which block saving
-(`IsSafeForOWSave` reason 12). The guest then matched within about 33 s.
-A paired DMST v3 run also verified the saved `IND4` state-0-to-1 transition:
-the guest fetched the changed host save, reloaded automatically and matched
-both the objective state and story signature. This covers one non-completed
-objective transition, not broader campaign progression. DMOB continues to
-send only completed (state 2) objectives, so the option stays default-off.
+still rely on save resync. DMOB sends only completed (state 2) objectives, so
+the option stays default-off.
+
+Starting a job does not autosave by itself. Completing one autosaves only
+after the host dismisses the MISSION COMPLETE reward screens, which block
+saving (`IsSafeForOWSave` reason 12). Paired LAN runs covered one completed
+objective over DMOB, save resync with DMOB disabled, and one job's start and
+completion; see the [research log](REPLICATION-RESEARCH.md) and the
+[co-op roadmap](COOP-ROADMAP.md).
 
 ## Shared enemies
 
@@ -637,17 +615,16 @@ With *Sync host's enemies* on, both PCs set `kSyncEnemies`:
   2.6 m sends a strike (swarmer 12, others 15-35, an estimate). Real damage
   the stand-in takes is forwarded too, capped at 400 per change. The guest
   applies strikes with `ApplyDamage`.
-- **Guest-kept enemies to host (protocol v9).** While the guest keeps enemies
-  through a reunion, it creates the same hidden proxy at the host's avatar.
-  Nearby guest-owned enemies can target it; their swings and damage use the
-  same `DMPX` path, now accepted by either player owner. This direction still
-  needs paired validation.
+- **Guest-kept enemies to host (free roam, experimental).** The same `DMPX`
+  path, accepted by either owner; design and status in
+  [HOW-IT-WORKS.md](HOW-IT-WORKS.md#59-shared-enemies-and-combat).
 
-Verified live between two PCs: the guest's own enemies vanished and the host's
-appeared; `hit-enemy` brought a host swarmer from 160 to below 0; a pack split
-its aggro between the host and the stand-in and its swings killed the guest.
-Real aimed shots and melee from the guest, and ranged enemies, are not yet
-verified.
+Engine caveats: swing forwarding has no native contact, obstruction, dodge or
+attack-outcome confirmation, and proxy-health forwarding has no damage source
+attribution. Check for double delivery if an attack both triggers the notify
+and damages the proxy. Disconnect cleanup resumes generators, but does not
+snapshot and restore their individual pre-session pause/active states. Test
+status is in the [co-op roadmap](COOP-ROADMAP.md).
 
 ### Reverse-engineering findings and failed approaches
 
@@ -713,34 +690,6 @@ weapon damage range. The host checks the entity is still alive and in range
 or weapon damage; this remains a trusted-partner protocol. The game can
 modify base damage: a 25-point debug hit reduced one swarmer by 18.75.
 
-### Current validation and remaining work
-
-| Surface | Evidence / status |
-|---|---|
-| Host save and sandbox | LAN transfer and in-place reload verified between two real PCs; real guest save hashes remained unchanged in the sandbox tests |
-| Story catch-up | Forced divergence and a host objective autosave both triggered host-save resync with DMOB disabled; the Deck returned to the host signature. Natural campaign progression remains unverified |
-| Guest AI suppression | Local enemies disappeared and host replicas appeared in the two-PC LAN test |
-| Guest damage to host enemies | `hit-enemy` damaged and killed a real host swarmer; this bypasses aim and does not validate real shooting or melee input |
-| Host melee damage to guest | Swarmer pack targeted the stand-in, damaged and killed the guest; guest and stand-in respawned, and a later clean-build strike reduced health from 121.9 to 109.9 |
-| Free roam enemy handoff | Paired `move-by` tests: the guest kept 8 Swarmers across a reunion and the host's hits applied to them; the host kept 6 Swarmers fighting the guest across a split, which kept striking the guest and took guest hits 312 m from the host. Debug-spawned packs only; not yet verified in a natural mission fight |
-| Native bike interaction | A two-PC fixture boarded through the native prompt and followed a moving bike briefly; a one-PC paired test also covered boarding and dismount. Long-distance and broader mission coverage remain open |
-| Steam transport | Earlier lobby/transport tests do not validate these new gameplay paths; current gameplay evidence is from UDP LAN |
-
-Complete host-first synchronization is **not finished**. Live mission state,
-inventory, loot, ranged enemy damage and shared bike simulation remain outside
-the implemented paths. Swing forwarding has no native contact, obstruction,
-dodge or attack-outcome confirmation; proxy-health forwarding has no damage
-source attribution. Check for double delivery if an attack both triggers the
-notify and damages the proxy. The stand-in's capsule blocking the host and
-host shots accidentally hurting the guest through it remain untested.
-Disconnect cleanup resumes generators, but does not snapshot and restore
-their individual pre-session pause/active states.
-
-During Deck testing, the native CO-OP history displayed disconnect/leave
-messages without corresponding transport log entries while the UDP session
-remained connected. The cause is unresolved; do not treat those menu messages
-alone as proof of a transport disconnect.
-
 ## Offline executable analysis
 
 ```sh
@@ -754,13 +703,6 @@ then validates the PE structure. It reports reflection-string anchors and the
 functions that reference them. The results are leads for analysis, not proven
 engine addresses. The tool never attaches to a process or writes anything
 except its report.
-
-## Save files
-
-The save format research and the save editor (Python codec/CLI and browser
-editor) are maintained in the separate
-[days-gone-save-editor](https://github.com/drskunk/days-gone-save-editor)
-repository. The transfer code in `src/coop/` treats saves as opaque bytes.
 
 ## Releases
 
@@ -799,7 +741,7 @@ files.
 
 ### Nexus publishing setup and recovery
 
-Configure these in the personal repository's **Settings > Secrets and
+Configure these in the repository's **Settings > Secrets and
 variables > Actions**:
 
 - Secret `NEXUSMODS_API_KEY`: a Nexus API key belonging to an account with
@@ -816,7 +758,7 @@ explicitly. Nexus may still scan or moderate the file before it is downloadable.
 For a non-publishing check of an existing release:
 
 ```sh
-gh workflow run nexus.yml -f tag=v0.2.0 -F publish=false
+gh workflow run nexus.yml -f tag=vX.Y.Z -F publish=false
 ```
 
 To upload an existing GitHub release after a failed Nexus job, run **Nexus

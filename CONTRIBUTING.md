@@ -22,9 +22,14 @@ welcome.
 2. Use [Conventional Commits](https://www.conventionalcommits.org/) for your
    commit messages: `feat:`, `fix:`, `docs:`, `ci:`, …. They drive versioning
    and the changelog. Mark protocol-incompatible changes with `!`.
-3. Say what you tested in the game: OS or Proton version, single game or two
-   games, and what you saw. Say clearly what you didn't test.
-4. Update the README or docs when behavior or settings change.
+3. Say what you tested in the game: OS or Proton version, whether it was a
+   single game, two games on one PC (a paired lab test) or two PCs, the
+   transport (Steam or LAN UDP), and what you saw. Say clearly what you
+   didn't test; a one-PC paired test does not establish two-PC behavior.
+4. Update the README or docs when behavior or settings change. When a test
+   changes a feature's status, record the run in the
+   [research log](docs/REPLICATION-RESEARCH.md) and update the
+   [co-op roadmap](docs/COOP-ROADMAP.md).
 
 ## AI-assisted contributions
 

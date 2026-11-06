@@ -9,9 +9,10 @@ see the [current roadmap](COOP-ROADMAP.md) for test scope and next work.
 
 1. **Mission catalog (authoritative for names and objectives).** The
    `mission-state` debug command writes every job and story mission with its
-   display name, act, map and objective texts (see
-   [REPLICATION-RESEARCH.md](REPLICATION-RESEARCH.md), "Story mission
-   catalog"). Mission codes, names, acts and objectives below come from it.
+   display name, act, map and objective texts (see the
+   [story mission catalog](REPLICATION-RESEARCH.md#story-mission-catalog-2026-10-27-single-pc-read-only)
+   in the research log). Mission codes, names, acts and objectives below come
+   from it.
 2. **Game assets.** Cinematic tracks are stored per actor
    (`Cinematics/Act<n>/<mission>/<scene>/<actor>`), which gives the cast of
    every cutscene and which bikes appear in it. Each mission streams its own
@@ -120,7 +121,7 @@ actors in that mission's cutscenes.
 
 | ID | Code | Mission | Companions | Key objectives | Cat. |
 |---|---|---|---|---|---|
-| 51 | `MBF1` | Not Like I Got a Choice | **Boozer** | Track Boozer, **Keep Boozer Alive**, Take Boozer Back to Work | **G** F |
+| 51 | `MBF1` | Not Like I Got a Choice | **Boozer** | Track Boozer, **Keep Boozer Alive**, Take Boozer Back to Work | **G** P? F |
 | 53 | `LBL1` | Better to Light One Candle | **Rikki** (own bike) | Ride with Rikki, Burn the Freaker Nest, **Protect Rikki** | E **G** |
 | 54 | `LBL2` | Outta the Darkness | — | Head To the Lost Lake Infirmary | K |
 | — | `PBC1` job | Trying to Help the Camp | Skizzo | Meet Skizzo | K |
@@ -162,9 +163,9 @@ actors in that mission's cutscenes.
 | 90 | `CLO2` | What Kept Me Going | **Sarah** | Ride To the Thielsen Pass With Sarah, Ride North To Cloverdale | **P** |
 | 91 | `CLO3` | I Knew These People | Sarah | Walk With Sarah | E |
 | 92 | `CLO4` | Expect the Worst | Sarah | Clear the Warehouse, Boost Sarah To the Roof, Clear the Atrium | E F |
-| 93 | `CLO5` | We Couldn't Take the Risk | — | Turn Off the Electric Fences, Burn the Crier Nests | F |
+| 93 | `CLO5` | We Couldn't Take the Risk | — | Turn Off the Electric Fences, Burn the Crier Nests | P? F |
 | — | `COB3` job | Just Checking In | Boozer (radio) | Clear the Ambush Camp, Radio Boozer | F |
-| 94 | `IYK` | This Could Be It | — | Tranquilize and Collect Sarah's Test Subject | **X** |
+| 94 | `IYK` | This Could Be It | — | Tranquilize and Collect Sarah's Test Subject | P? **X** |
 
 ### Act 6: Lost Life
 
@@ -214,7 +215,7 @@ partner; policies are in [`mission_policy.hpp`](../src/coop/mission_policy.hpp).
 | Category | Current behavior and remaining uncertainty |
 |---|---|
 | Mission state and companions | Host story missions do not run fully on the guest. Catch-up is deferred while the host mission runs; joining mid-mission is a separate, unproven case. Host mission weather and display-only companion/vehicle replicas are implemented; Boozer and his bike were shown in one paired lab, not every mission actor. |
-| Passenger seat (P) | A driver in a flagged mission reserves the seat for the story. `OBR` was paired-tested; `RBC` and other ride-alongs remain open. `BIP`, `MBF1`, `CLO5` and `IYK` were flagged from cutscenes or walkthroughs rather than objective text. Scripted rides such as `TLL1` pace to the host only. |
+| Passenger seat (P) | A driver in a flagged mission reserves the seat for the story. `OBR` was paired-tested; `RBC` and other ride-alongs remain open. `BIP`, `MBF1`, `CLO5` and `IYK` (marked P?) were flagged from cutscenes or walkthroughs rather than objective text, but the code treats all four as hard pillion missions. Scripted rides such as `TLL1` (`BP_BikeSpeedController`) run only in the host's game; the mod does not pace the guest, who rides alongside freely. Untested. |
 | Stealth (S) | Enemies are told about the guest's hidden stand-in only once they are already fighting. The `AON1` A/B test stopped idle enemies from targeting it; targeting during an actual fight still needs a test. |
 | Guard and capture (G/C) | Guest damage reaches host-owned enemies in tested debug scenarios. Capture missions deliberately impose no extra restriction on either player; full mission outcomes remain unverified. |
 | Flashbacks and cutscenes (M/K) | The partner is hidden during flagged flashbacks; `WNG` was tested. Ordinary cinematics are not generally hidden. The host's `OBR` intro showed no stray partner, but the guest's view and other scenes remain open. |

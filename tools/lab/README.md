@@ -4,11 +4,13 @@
 touching the desktop or a real install, so paired co-op tests can be scripted.
 
 - **Disposable clones.** `create` makes a reflink clone of an isolated game
-  copy and its Proton prefix (`THEYS_GONE_LAB_BASE`, default
-  `~/TheysGone-coop-test/run1`). Clones share disk blocks with the base, so
-  they are instant and cost only what the test writes. The base is never
-  written; `destroy` throws a clone away. Needs btrfs or XFS: `cp
-  --reflink=always` refuses rather than making a 60 GB copy.
+  copy and its Proton prefix. Set `THEYS_GONE_LAB_BASE` to the folder holding
+  that copy (`game/` and `prefix/`), and optionally `THEYS_GONE_LAB` for
+  where clones go; `lab.sh help` prints the paths in use. Clones share disk
+  blocks with the base, so they are instant and cost only what the test
+  writes. The base is never written; `destroy` throws a clone away. Needs
+  btrfs or XFS: `cp --reflink=always` refuses rather than making a 60 GB
+  copy.
 - **Headless display.** `start` runs the instance in `gamescope --backend
   headless`. Each instance gets its own Xwayland display (`key` sends
   `xdotool` keys to it only) and gamescope socket (`shot` takes a screenshot
@@ -24,19 +26,22 @@ touching the desktop or a real install, so paired co-op tests can be scripted.
 ## Requirements
 
 gamescope 3.16 or newer, `gamescopectl`, `xdotool`, `bwrap`, systemd user
-services, Steam with Proton Experimental and Steam Linux Runtime 4. Two
-instances at 1280×720 used about 4.6 GB of video memory on an RTX 3070.
+services, Steam with Proton Experimental and Steam Linux Runtime 4
+(`THEYS_GONE_STEAM`, `THEYS_GONE_PROTON` and `THEYS_GONE_RUNTIME` override
+their paths). Two instances at 1280×720 used about 4.6 GB of video memory.
 
 ## Paired session
 
 ```sh
 L=tools/lab/lab.sh
-$L steam-login ~/TheysGone-lab/steam-second   # once: sign in to the second account
+export THEYS_GONE_LAB_BASE=/path/to/isolated-copy
+S=/path/to/second-steam-home            # any empty folder for the second account
+$L steam-login "$S"                     # once: sign in to the second account
 for n in host guest; do $L create $n; $L deploy $n package/TheysGone.asi; done
 $L config host Transport=udp PeerHost= Port=27777 PeerPort=27777 DebugTools=1 Discovery=0 PlayerName=Host
 $L config guest Transport=udp PeerHost=127.0.0.1 Port=27778 PeerPort=27777 DebugTools=1 Discovery=0 PlayerName=Guest
 $L start host
-$L start guest --steam-home ~/TheysGone-lab/steam-second
+$L start guest --steam-home "$S"
 $L enter host && $L enter guest         # splash, Continue, wait for gameplay
 $L debug host status                    # any tools/debug_control.py command
 $L shot guest /tmp/guest.png
@@ -54,9 +59,14 @@ for menus.
 
 ## Limitations
 
+- The lab tests LAN UDP only. It cannot cover Steam transport work (lobbies,
+  invites, Steam networking); use two PCs for that.
+- Lab runs are one-PC paired tests, not two-PC tests. Record each run in the
+  [research log](../../docs/REPLICATION-RESEARCH.md) and status changes in
+  the [co-op roadmap](../../docs/COOP-ROADMAP.md).
 - The game still needs a Steam client per account; the sandboxed client does
-  not expose itself to the mod's Steam transport, so paired lab sessions use
-  `Transport=udp`.
+  not expose itself to the mod's Steam transport, which is why paired lab
+  sessions use `Transport=udp`.
 - The splash needs one key press per instance; `enter` sends it, and stops
   if the title menu has no Continue rather than starting a new game.
 - Saves live under `Saved/<SteamID64>`. `start` copies the base copy's saves

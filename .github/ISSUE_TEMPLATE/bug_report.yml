@@ -6,7 +6,7 @@ body:
     id: version
     attributes:
       label: Mod version
-      description: First line of TheysGone.log, e.g. "Theys Gone 0.1.0 starting"
+      description: First line of TheysGone.log, e.g. "Theys Gone X.Y.Z starting (protocol vN)"
     validations:
       required: true
   - type: dropdown
@@ -16,6 +16,33 @@ body:
       options: [Windows, Linux (Proton), Steam Deck, Other]
     validations:
       required: true
+  - type: dropdown
+    id: transport
+    attributes:
+      label: Transport
+      options: [Steam, LAN UDP]
+    validations:
+      required: true
+  - type: dropdown
+    id: setup
+    attributes:
+      label: Setup
+      options: [Two PCs, Two games on one PC]
+    validations:
+      required: true
+  - type: input
+    id: settings
+    attributes:
+      label: Relevant TheysGone.ini values
+      description: HostSave, FreeRoam and MissionObjectiveSync on both PCs, e.g. "host HostSave=1 FreeRoam=0 MissionObjectiveSync=0; guest the same"
+  - type: dropdown
+    id: save-guard
+    attributes:
+      label: Was the guest's save guard active?
+      description: >-
+        Yes if the guest's log has "save guard: guest save sandbox active until restart"
+        and its F8 menu did not report "Save sandbox failed; host save disabled".
+      options: ["Yes", "No", "Unknown"]
   - type: textarea
     id: what
     attributes:

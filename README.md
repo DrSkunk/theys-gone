@@ -23,10 +23,10 @@ the host progress. Host and join sessions through Steam or your local network.
   their passenger, find them on the map or teleport nearby.
 - Play on the host's save, fight host-owned enemies and follow the host's time
   and weather. Friendly fire requires both players to opt in each session.
-- `FreeRoam=1` on both PCs lets distant players simulate enemies in their own
-  regions. A fight in progress can remain with its owner when players split or
-  regroup. Guest-owned enemies attacking the host after regrouping are still
-  unverified.
+- Experimental, outside the main use case: `FreeRoam=1` on both PCs lets
+  distant players simulate enemies in their own regions. A fight in progress
+  can remain with its owner when players split or regroup. Guest-owned enemies
+  attacking the host after regrouping are still unverified.
 - `MissionObjectiveSync=1` on both PCs optionally shares completed objectives;
   starting and completing jobs still requires host-save catch-up.
 - One-PC paired tests have shown Boozer and his bike as display replicas,
@@ -42,7 +42,7 @@ motorcycle physics, fuel, damage and upgrades are not synchronized. Your
 partner uses your outfit model with their chosen colors.
 
 The [co-op roadmap](https://github.com/DrSkunk/theys-gone/blob/main/docs/COOP-ROADMAP.md)
-tracks the current source, exact test scope and next work.
+is the current status, test scope and priorities.
 
 ## Requirements
 
@@ -130,7 +130,8 @@ PlayerName=Partner
 ```
 
 - Allow inbound **UDP 27777** (or your `Port`) through the host's firewall,
-  for example with `sudo ufw allow from 192.168.1.0/24 to any port 27777 proto udp`.
+  for example on Linux with ufw:
+  `sudo ufw allow from 192.168.1.0/24 to any port 27777 proto udp`.
   **Never** forward this port to the Internet: the protocol has no encryption
   or authentication.
 - With `HostSave=1` and an active guest sandbox, the host's save transfers
@@ -205,9 +206,10 @@ Visibility=friends
 
 By default the mod uses the game's own Steam connection, so lobbies belong to
 Days Gone. `SteamApp=spacewar` instead runs the lobby under Spacewar (app 480),
-Valve's public test app, through a second copy of the Steam API. Use it when a
-supported game has no Steam connection of its own; the supported executable
-requirement is unchanged.
+Valve's public test app, through a second copy of the Steam API. It is meant
+for a copy of the game that runs without its own Steam connection, for
+example one started outside Steam. Spacewar lobbies are separate from Days
+Gone lobbies. The executable must still be the supported build.
 
 1. Set `SteamApp=spacewar` in `TheysGone.ini`, and keep the Steam client running.
 2. On first use the mod copies the game's `steam_api64.dll` next to the game
@@ -222,8 +224,7 @@ lobbies. This mode has not been tested in a paired session yet.
 Only traffic from the other lobby member is accepted. `Port` and `PeerHost`
 do not control Steam connections. Epic Online Services is not implemented.
 The lobby owner is the host: their save, story and (in standard mode) enemies
-are authoritative. With `FreeRoam=1` on both peers, distant regions simulate
-their own enemies; each side shows the other's enemies as replicas.
+are authoritative.
 
 ## Controls
 
@@ -234,7 +235,7 @@ their own enemies; each side shows the other's enemies as replicas.
 | Change or activate | Left/Right, Enter or click | D-pad Left/Right or A |
 | Close | Esc | B |
 | Join or leave the partner's bike | F9 | View/Back + X |
-| Teleport next to the partner | F7 (`TeleportKey`) | Menu |
+| Teleport next to the partner | F7 (`TeleportKey`) | F8 menu → Teleport to partner |
 
 The game window must be focused. The F8 settings overlay does not pause the
 game. Session hosting/joining is in the native title/pause **CO-OP** menu.
@@ -251,9 +252,9 @@ While connected, opening the native pause menu, map or inventory keeps
 gameplay running unless **both players** have one of these menus open.
 Closing either player's menu resumes gameplay. When the partner disconnects,
 normal single-player pausing returns. The F8 settings overlay and weapon
-wheel do not count as pause requests. Both players need protocol v11. In one
-lab test a tutorial paused only the host; other scripted pauses remain
-unverified.
+wheel do not count as pause requests. Both players need the same mod
+version. In one lab test a tutorial paused only the host; other scripted
+pauses remain unverified.
 
 On a **Steam Deck**, the mod reads XInput, not Steam Input actions. If the
 gamepad shortcuts do nothing, pick the *Gamepad With Joystick Trackpad*
@@ -278,7 +279,8 @@ stand on.
 
 During story missions where a character rides on the driver's bike (Lisa,
 Sarah, Boozer) or the driver rides on theirs, the seat is kept for the story:
-the prompt does not appear, and a partner already riding is let off.
+the prompt does not appear, and a partner already riding is let off. Which
+missions do this comes from the mission catalog; only `OBR` has been tested.
 
 ## Configuration reference
 

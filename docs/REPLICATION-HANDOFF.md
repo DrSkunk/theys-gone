@@ -28,8 +28,11 @@ investigations are in the [research log](REPLICATION-RESEARCH.md).
 
 These are narrow research results, not working campaign co-op. Guest world
 authority, interaction, UI and mission behavior remain unresolved. Do not
-repeat incompatible controller/pawn combinations or treat a successful debug
-command as proof of player control.
+repeat the mismatched controller/pawn pairs: a plain `PlayerController` with
+the Bend pawn (Run A) fails Bend's controller cast, and a Bend controller
+with a generic `Character` pawn (Run B and the Character pawn fallback)
+leaves the Bend pawn cache null and crashed. Run C used the matching native
+pair. Do not treat a successful debug command as proof of player control.
 
 ## Code and tools
 

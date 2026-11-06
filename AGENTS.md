@@ -15,8 +15,8 @@ Theys Gone is a two-player co-op ASI plugin for Days Gone PC, Steam build
 | Native-replication research | [Research handoff](docs/REPLICATION-HANDOFF.md) |
 
 Most gameplay logic is in `src/coop/coop.cpp`. Pure rules live in headers
-such as `enemy.hpp`, `protocol.hpp`, `streaming.hpp`, `story.hpp` and
-`save_policy.hpp`, with tests in `tools/test_protocol.cpp`. Engine replication
+such as `enemy.hpp`, `protocol.hpp`, `streaming.hpp`, `story.hpp`,
+`mission_policy.hpp` and `save_policy.hpp`, with tests in `tools/test_protocol.cpp`. Engine replication
 experiments belong in `src/coop/research.cpp` behind `[Research]` INI keys;
 they are not normal play.
 

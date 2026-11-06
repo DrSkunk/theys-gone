@@ -1,79 +1,63 @@
-[b]Theys Gone[/b] is an experimental two-player co-op mod for [i]Days Gone[/i] on PC. The host's save is the one that counts: the joining player loads it, fights the host's enemies and helps the host progress. Character movement and animation, motorcycles, time and weather are synchronized. Sessions are hosted and joined from a native [b]CO-OP[/b] menu, over Steam or the local network.
-
-This is [b]not full campaign co-op[/b]: each player still runs their own copy of the game. The joining player starts from the host's save and catches up at later host saves; catch-up is deferred while a host story mission runs. Missions, inventory and loot are not mirrored live.
-
-[b]Back up your saves.[/b] With the default HostSave=1, an active guest sandbox redirects save writes to a disposable folder until the guest restarts, including after the host leaves. The guard can fail without blocking the session, leaving real saves unprotected. After joining, check TheysGone.log for [i]save guard: guest save sandbox active until restart[/i]. If it is absent or F8 reports [i]Save sandbox failed; host save disabled[/i], stop playing and restore your backup if needed.
+[b]Theys Gone[/b] is an experimental two-player co-op mod for [i]Days Gone[/i] on PC. A guest joins the host's save and helps with the host's missions: they see each other, ride together and fight the host's enemies, while story progress stays on the host's save. This is [b]not full campaign co-op[/b]: each player runs their own copy of the game, and the guest catches up at the host's saves rather than sharing missions live.
 
 I just made this because I wanted to join my wife's sessions and drive around together.
 
 The mod is unofficial and is not affiliated with or endorsed by Bend Studio, Sony Interactive Entertainment or the game's publishers.
 
-[url=https://github.com/DrSkunk/theys-gone]Source code can be found on the GitHub repository.[/url]
-
-[b]Upgrading from Days Gone Together[/b]
-
-Both players must run the same release. Releases that change the network protocol cannot connect to older ones.
-
-The mod was renamed from Days Gone Together. Delete the old [i]DaysGoneTogether.asi[/i], [i]DaysGoneTogether.ini[/i] and [i]DaysGoneTogether*.log[/i] files before installing. Old and new versions cannot connect to each other.
-
-[b]Installation instructions[/b]
-
-Install the mod on [b]both PCs[/b]. Both players need the same game build and mod version. Use [b]Manual Download[/b]; Vortex installation is not supported.
-
-[list]
-[*]Back up your saves.
-[*]Download and extract the release archive.
-[*]Download [i]version.dll[/i] in the column [i]Win64[/i] from the latest release of [b][url=https://github.com/ThirteenAG/Ultimate-ASI-Loader/releases/latest]Ultimate ASI Loader (x64)[/url][/b] (tested with v9.7.4).
-[*]Move [i]version.dll[/i] to the game's [i]BendGame/Binaries/Win64[/i] folder, next to [i]DaysGone.exe[/i]. If you already have a [i]version.dll[/i] there, do not overwrite it; check that loader's instructions first.
-[*]Copy [i]TheysGone.asi[/i] and [i]TheysGone.ini[/i] from the archive into that same [i]BendGame/Binaries/Win64[/i] folder.
-[*]Copy [i]BendGame/Content/Paks/pakchunk99-TheysGone_Brand_P.pak[/i] from the archive into the matching folder under your game installation for Theys Gone title and main-menu logos. Delete that pak to restore the original logos.
-[*]On Linux or Steam Deck, add this to the game's Steam launch options:
-[code]WINEDLLOVERRIDES="version=n,b" %command%[/code]
-[*]Start the game on both PCs.
-[/list]
-
-[b]Playing together[/b]
-
-Open [b]CO-OP[/b] in the title menu or the pause menu.
-[list]
-[*][b]Steam:[/b] host a session as friends-only or public. Your friend picks [b]JOIN A FRIEND[/b] or [b]FIND PUBLIC GAMES[/b], or accepts a Steam invite. Two-account sessions reached gameplay on separate machines, but host-save transfer, invite acceptance, newer gameplay paths and Internet/NAT traversal over Steam remain unverified.
-[*][b]LAN:[/b] choose [b]HOST LAN GAME[/b]; the other PC chooses [b]JOIN LAN GAME[/b] and picks the host. Allow inbound UDP 27777 on the host. Never forward that port to the Internet.
-[*]You can host before loading a save, or open a session while already playing. Use [b]CLOSE SESSION[/b] or [b]LEAVE SESSION[/b] to disconnect without restarting.
-[/list]
-
-Press [b]F8[/b] (gamepad: View/Back + Y) for the settings overlay with appearance, friendly fire and teleport options. All options are also in [i]TheysGone.ini[/i].
-
 [b]Main features[/b]
 
 [list]
-[*]Native CO-OP menus for hosting and joining over Steam or LAN, with a lobby and connect/disconnect messages.
-[*]See your partner's character with smoothed movement and streamed skeletal animations.
-[*]See the partner's held weapon or tool.
-[*]See the partner's motorcycle, including selected parts, steering and suspension.
-[*]Ride as a passenger on your partner's motorcycle: walk up and hold the native [b]Ride with[/b] prompt (experimental).
-[*]Host-first progress: with the guest sandbox active, the joining player loads a copy of the host's save.
-[*]Story sync: when the host saves new story progress, the joining player is reloaded onto it.
-[*]Objective sync (opt-in, experimental): with [i]MissionObjectiveSync=1[/i] on both PCs, completed mission objectives reach the joining player within seconds instead of at the host's next save.
-[*]Shared enemies and combat: the host's freakers, animals and hostile humans appear for the joining player, and hits are forwarded to their owner. Enemy melee damage is estimated.
-[*]Free roam (opt-in, experimental): with [i]FreeRoam=1[/i] on both PCs, players can split up. Beyond 250 m each game runs the enemies in its own region and shows the other's; hits reach either side's enemies, and a fight in progress stays with its owner when you split or regroup.
-[*]Synchronize time of day and weather from host to joining player.
-[*]Choose from seven appearance color presets and hide the cap.
-[*]Optionally enable friendly fire when both players opt in.
-[*]Use the in-game settings menu, including with keyboard, mouse or gamepad.
+[*]Native CO-OP menus for hosting and joining over Steam or LAN.
+[*]See your partner's character, animations, held item and motorcycle.
+[*]Ride as a passenger on your partner's motorcycle (experimental).
+[*]Play on the host's save: the guest loads a copy of it and is reloaded onto the host's later story saves.
+[*]Shared enemies: the host's enemies appear for the guest, and the guest's hits count.
+[*]Time of day and weather follow the host.
+[*]Appearance colors, opt-in friendly fire and teleport to partner in the F8 menu.
 [/list]
 
-One-PC paired tests showed Boozer and his bike as display replicas, mission weather and the shared pause menu. Other companions and missions need more testing. A host fast-travel test left the guest behind; use teleport to regroup. Guest-owned enemies attacking the host after regrouping are not yet proven. A cached snapshot may lag a recent host save, so check progress after transfer.
+[b]Experimental:[/b] free roam ([i]FreeRoam=1[/i] on both PCs) lets players split up and simulate enemies in their own regions. It is outside the main use case, and guest-owned enemies attacking the host after regrouping are unproven.
 
-[b]Limits:[/b] live mission state (apart from opt-in completed objectives), inventory, loot, doors, camp NPCs, projectiles and hit effects, and motorcycle physics, fuel, damage and upgrades are not synchronized. At most 16 nearby hostile and friendly companion pawns share the stream limit, so hordes are incomplete. Real aimed combat and ranged enemy damage need further testing. Your partner's outfit model uses your own Deacon outfit, with their selected colors applied.
+[b]Key limitations[/b]
+
+[list]
+[*][b]Back up your saves.[/b] The guest's save guard can fail without blocking the session, leaving real saves unprotected. After joining, check TheysGone.log for [i]save guard: guest save sandbox active until restart[/i]. If it is absent or F8 reports [i]Save sandbox failed; host save disabled[/i], stop playing.
+[*]Missions, inventory, loot, doors and camp NPCs are not shared live. Optional objective sync ([i]MissionObjectiveSync=1[/i]) only shares completed objectives; starting and completing jobs still waits for the host's next save.
+[*]At most 16 nearby enemy and companion pawns are shared, so hordes are incomplete. Enemy melee damage is estimated; aimed combat and ranged enemies need more testing.
+[*]Motorcycle physics, fuel, damage and upgrades are not shared. Your partner uses your outfit model with their colors.
+[*]LAN play is unauthenticated and unencrypted: use it only on a trusted network and never forward its port. Steam sessions are encrypted by Steam, but host-save transfer, invite acceptance and Internet/NAT traversal over Steam remain unverified.
+[/list]
 
 [b]Requirements[/b]
 
 [list]
-[*]The Steam version of [i]Days Gone[/i], build [b]19221447[/b]. The mod checks the game build and disables itself on unsupported versions.
-[*]Two players with the same mod version, connected through Steam or the same LAN.
+[*]The Steam version of [i]Days Gone[/i], build [b]19221447[/b]. The mod disables itself on any other build.
 [*]Ultimate ASI Loader (x64).
-[*]Windows, or Linux/Steam Deck with Proton. Proton has been tested; native Windows has not yet been tested.
-[*]A backup of your saves is strongly recommended.
+[*]Windows, or Linux/Steam Deck with Proton. Proton has been tested; native Windows has not.
+[*]Both players on the same mod version. Releases that change the network protocol cannot connect to older ones.
+[/list]
+
+[b]Installation[/b]
+
+Install on [b]both PCs[/b]. Use [b]Manual Download[/b]; Vortex installation is not supported.
+
+[list]
+[*]Back up your saves.
+[*]Put Ultimate ASI Loader's [i]version.dll[/i] in [i]BendGame/Binaries/Win64[/i], next to [i]DaysGone.exe[/i]. Don't overwrite an existing loader.
+[*]Copy [i]TheysGone.asi[/i] and [i]TheysGone.ini[/i] from the archive into that same folder.
+[*]Optional: copy [i]BendGame/Content/Paks/pakchunk99-TheysGone_Brand_P.pak[/i] into the matching game folder for the Theys Gone logos.
+[*]On Linux or Steam Deck, set the launch options to [code]WINEDLLOVERRIDES="version=n,b" %command%[/code]
+[/list]
+
+Then open [b]CO-OP[/b] in the title or pause menu. On Steam, host as invite-only, friends-only or public; your friend uses [b]JOIN A FRIEND[/b], [b]FIND PUBLIC GAMES[/b] or a Steam invite. On LAN, choose [b]HOST LAN GAME[/b] and [b]JOIN LAN GAME[/b], and allow inbound UDP 27777 on the host. Press [b]F8[/b] (gamepad: View/Back + Y) for gameplay settings. Settings are also in [i]TheysGone.ini[/i], except friendly fire, which both players must enable each session.
+
+Upgrading from [i]Days Gone Together[/i]: delete the old [i]DaysGoneTogether.*[/i] files first; old and new versions cannot connect.
+
+[b]More information[/b]
+
+[list]
+[*][url=https://github.com/DrSkunk/theys-gone]GitHub README[/url]: full setup, controls, settings and troubleshooting.
+[*][url=https://github.com/DrSkunk/theys-gone/blob/main/docs/COOP-ROADMAP.md]Co-op roadmap[/url]: what has been tested and what comes next.
 [/list]
 
 [b]Shout outs[/b]

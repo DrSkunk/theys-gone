@@ -1,7 +1,8 @@
 # Co-op status and roadmap
 
-The goal is reliable two-player co-op in the host's world, not a fully shared
-campaign or a thin client. This is the current status for the repository's
+The goal is for a second player to join the host's save and help with the
+host's missions. Story progress stays on the host's save; this is not a fully
+shared campaign or a thin client. This is the current status for the repository's
 protocol v11 code. The [research log](REPLICATION-RESEARCH.md) contains the
 evidence; its older plans are not the current roadmap.
 
@@ -43,56 +44,73 @@ Important limits for players:
 
 ## Next, in priority order
 
-1. **Protect guest saves on failure.** Prevent guest play from silently
+Work is ordered by the core use case: a guest joins the host's save and helps
+with the host's missions.
+
+1. **Make joining the host's save safe.** Prevent guest play from silently
    continuing without an active save guard; make failure and recovery
    prominent, and notify guests that the sandbox persists after disconnect.
    The existing F8 status alone does not block unprotected play.
-2. **Investigate observed transition problems.** Reproduce the connected
-   guest's failed sleep, then choose and test a shared sleep policy. Prevent
-   teleport placement inside nearby geometry. Decide how tutorial pauses
-   should behave while the other player is active.
-3. **Validate combat and the guest-side host proxy.** Split up with naturally
-   spawned guest-owned enemies; confirm the host receives their replicas before
-   regrouping, then show those enemies targeting the host and reducing host
-   health. Archive both logs; keep this experimental if inconclusive. Also
-   test real aimed guest shots and melee, ranged enemy attacks, stand-in
-   collision and possible duplicate damage.
-4. **Test reloads and real region transitions.** Exercise guest death, repeated
-   host deaths and loads, recent-save transfers and a different mission state.
-   Use legitimately reached `RNA1`/`LRH1` saves to check region changes, guest
-   resync and replica rebuilding. Decide whether fast travel should offer a
-   regroup, and verify enemy ownership beyond the observed split/merge flags.
-5. **Broaden mission policy coverage.** Test the `RBC` Lisa seat, an already
+2. **Make joining reliable on both transports.** Verify host-save transfer and
+   invite acceptance over Steam. Test joining mid-mission, joining right after
+   a host save (the cached snapshot can lag) and rejoining after a disconnect.
+3. **Follow the host through the campaign.** Play host story missions with a
+   connected guest and confirm catch-up after each host save, including
+   mission-start fades, deaths and checkpoint reloads. Use legitimately
+   reached `RNA1`/`LRH1` saves to check region changes, guest resync and
+   replica rebuilding.
+4. **Broaden mission policy coverage.** Test the `RBC` Lisa seat, an already
    fighting enemy in stealth, additional cutscenes, and the partner's return
    after flashbacks. `OBR`, `AON1` and `WNG` do not cover every mission.
-6. **Broaden companion and vehicle replicas.** Test more companions, their
-   meshes and materials, mission trucks, and moving vehicles. Decide whether
-   any interactions should work on these currently display-only replicas.
-7. **Plan for hordes.** Measure a real horde, frame time, bandwidth and the
-   selected pawns with both players; the debug spawner stops at 16. Choose a
-   representation or ownership policy for
+5. **Make the guest's combat count in missions.** Test real aimed guest shots
+   and melee on mission enemies, ranged enemy attacks on the guest, stand-in
+   collision and possible duplicate damage. Archive both logs.
+6. **Broaden companion and vehicle replicas.** Test more mission companions,
+   their meshes and materials, mission trucks, and moving vehicles. Decide
+   whether any interactions should work on these currently display-only
+   replicas.
+7. **Keep the players together.** Decide whether fast travel should offer a
+   regroup; prevent teleport placement inside nearby geometry. Reproduce the
+   connected guest's failed sleep and choose a shared sleep policy. Decide how
+   tutorial pauses should behave while the other player is active.
+8. **Plan for story hordes.** Measure a real horde mission, frame time,
+   bandwidth and the selected pawns with both players; the debug spawner stops
+   at 16. Choose a representation or ownership policy for
    [hordes of 25–500](https://daysgone.fandom.com/wiki/Hordes).
-8. **Share world authority while separated.** Define and implement conflict
-   handling for interactions, pickups and mission progress in the guest's
-   region; test simultaneous interaction and subsequent save/resync.
-9. **Preserve enemy identity across ownership release.** Test split, regroup,
-   death, unload and reload without duplicates or forgotten enemies.
-10. **Broaden Steam and menu timing QA.** Verify host-save transfer, invite
-   acceptance and controller/mouse menu coverage over Steam. Repeat menu timing
-   on separate PCs, including joins/disconnects with a wheel open,
-   focus/combat overlap, photo mode and scripted/cinematic pause transitions.
-   Monitor for new frame-time spikes.
-11. **Polish the partner map icon.** Choose a distinguishable texture and
-    verify minimap and world-map placement and readability.
-12. **Track game updates, branches and DLC.** The mod supports Steam build
+9. **Broaden menu timing QA.** Cover controller/mouse menus over Steam and
+   repeat menu timing on separate PCs, including joins/disconnects with a
+   wheel open, focus/combat overlap, photo mode and scripted/cinematic pause
+   transitions. Monitor for new frame-time spikes.
+10. **Track game updates, branches and DLC.** The mod supports Steam build
     19221447 only; fixed RVAs must be re-derived after an update. Document
     recovery when Steam offers no rollback to that build; `Classic` is a
     different branch. Test the unverified Broken Road modes and saves or assets
     shared between owners and non-owners. Replicas requiring assets missing on
     a peer are skipped.
-13. **Retire or harden the legacy `tools/same-pc` launchers.** They default to
-    the real Steam installation and do not select UDP. Use the isolated lab
-    and `fake_peer.py` instead.
+
+### Later: separated play
+
+These matter only when players split up with `FreeRoam=1`, outside the core
+use case.
+
+- **Validate the guest-side host proxy.** Split up with naturally spawned
+  guest-owned enemies; confirm the host receives their replicas before
+  regrouping, then show those enemies targeting the host and reducing host
+  health. Keep this experimental if inconclusive.
+- **Share world authority while separated.** Define conflict handling for
+  interactions, pickups and mission progress in the guest's region; test
+  simultaneous interaction and subsequent save/resync.
+- **Preserve enemy identity across ownership release.** Test split, regroup,
+  death, unload and reload without duplicates or forgotten enemies.
+
+### Housekeeping
+
+- **Polish the partner map icon.** Choose a distinguishable texture and
+  verify minimap and world-map placement and readability.
+- **Explain phantom disconnect messages.** During Deck testing, the native
+  CO-OP history showed disconnect/leave messages with no matching transport
+  log entries while the UDP session stayed connected. Until the cause is
+  found, do not treat those messages alone as proof of a disconnect.
 
 The separate [native replication handoff](REPLICATION-HANDOFF.md) is research,
 not a prerequisite for this roadmap. Use the [isolated lab](../tools/lab/README.md)

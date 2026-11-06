@@ -1,9 +1,30 @@
-# Built-in Unreal replication: feasibility research
+# Co-op research log
 
-This is the historical evidence log for both production co-op and native
-replication experiments. Entries and their next-step suggestions may be
-superseded by later results; they are not strictly chronological. For current
-status and priorities, see the [co-op roadmap](COOP-ROADMAP.md).
+Dated live-test and offline-analysis evidence for Theys Gone. Entries record
+what was observed at the time and may be superseded by later entries. Current
+status and priorities are in the [co-op roadmap](COOP-ROADMAP.md);
+native-replication conclusions are in the
+[research handoff](REPLICATION-HANDOFF.md).
+
+Sections are not in chronological order. Index by date:
+
+| Date | Section |
+|---|---|
+| 2026-10-21 | Native-replication research (not shipped); Probe results; Phase 1 log |
+| 2026-10-22 | Remote-control preparation; Partial Run A, Character pawn fallback, Run B |
+| 2026-10-23 | Run B crash-site analysis; Run C; Run D and follow-up; Offline client navigation follow-up; Network RPC surface census; Run E; Run F |
+| 2026-10-23/24 | Run G: thin-client movement and look |
+| 2026-10-24 | Runs H to O |
+| 2026-10-24/25 | Steam Deck isolated Run 1 bootstrap; paired production load; late-adoption menu rebuild |
+| 2026-10-25 | Live-save fixture; Enemy pack replication; Mission discovery and passenger boarding |
+| 2026-10-26/27 | Live mission lab |
+| 2026-10-27 | Repeated paired resync attempt; Independent roaming; Free roam; Gradual enemy ownership handoff; Story mission catalog |
+| 2026-10-28 | Passenger seat in a paired session; Stealth missions; Partner avatar during cutscenes |
+| 2026-10-28/29 | Paired mission copies, frame peaks and save reloads |
+| 2026-10-29/30 | Partner on the minimap; Host's story companion; Time and weather |
+| 2026-10-30 | Protocol-v9 proxy second attempt; Host mission on the guest; Host mission weather; Region transition; Companion materials; Companion vehicles |
+| 2026-10-31 | Weapon-wheel and pause timing; Shared menu pause; Co-op review scenarios |
+| 2026-11-01 | Native host load and fast travel; Death, sleep and travel follow-up |
 
 ## Weapon-wheel and pause timing investigation (2026-10-31)
 
@@ -42,7 +63,7 @@ dilation, and pause/camera-tick state.
 | Focus aiming | `FocusSlowMo_DID`, `FocusTimeDilation`; kept unchanged |
 | Vehicle aiming | `VehicleManualAimTimeDilation`; separate native request path, kept unchanged |
 | Melee hit effects | `GetTimeDilationValueForMeleeCriticalHit`, `GetTimeDilationValueForMeleeHitOnBike`; kept unchanged |
-| Native pause menu | `OpenPauseMenu`, `TogglePauseMenu`, `GetPausedStatus`, `SetPauseWithCameraTick`; no shared-pause behavior implemented |
+| Native pause menu | `OpenPauseMenu`, `TogglePauseMenu`, `GetPausedStatus`, `SetPauseWithCameraTick`; shared pause was added afterwards (next section) |
 | Focus loss | Controller `PauseOnFocusLost`/`PauseOnFocusGained` and a static focus-loss handler; unchanged |
 | Cinematic pause | `TurnOnCinematicPause`, world-settings `MatineeTimeDilation` and `Pauser`; not overridden |
 | Map/inventory | Both observed with `paused=1`, `camera-tick=0`, `global=1.0000`; this is a true local pause, not a wheel-style dilation request |
@@ -73,23 +94,17 @@ The first candidate also demonstrated connected opening/closing at
 native scale-1/no-request case, and a missing restoration ID. The native
 request IDs are negative in these runs; only `-1` is treated as invalid.
 
-Logs and screenshots are archived on Host-PC outside the repo at
-`~/TheysGone-lab/archive/time-control-20261031/`: `baseline.log`,
-`candidate-first.log`, `candidate-final.log`, `wheel-single.png`,
-`wheel-final.png`, `pause.png`, `map.png`, and `inventory-final.png`.
-The base ASI matched the clone's pre-test backup
-(`251025671c43a00cb850a80da76ec88ba7755767e42e440132a2dbb294539945`);
-the base INI also matched. The disposable clone was stopped and removed
-after archiving, leaving the base install and saves untouched.
+Logs and screenshots (`baseline.log`, `candidate-first.log`,
+`candidate-final.log`, wheel, pause, map and inventory captures) are archived
+outside the repo as `<archive>/time-control-20261031/`. The base ASI matched
+the clone's pre-test backup
+(`251025671c43a00cb850a80da76ec88ba7755767e42e440132a2dbb294539945`), as did
+the base INI; the clone was removed afterwards.
 
-Remaining after this smoke test (the paired run below covers opening/closing):
-two real games opening/closing independently, joins and
-disconnects in both host/guest roles, actual focus/combat overlap, focus
-loss, and mission/cinematic coverage. The injected request proves selective
-removal, not those gameplay paths. An aim/middle-click attempt did not
-activate focus (`focus-request=0`); it is not counted as a focus test.
-Pause/map/inventory were unchanged in that candidate. The subsequent policy
-and paired verification are recorded below.
+The injected request proves selective removal, not real focus/combat overlap.
+An aim/middle-click attempt did not activate focus (`focus-request=0`); it is
+not counted as a focus test. Pause/map/inventory were unchanged in this
+candidate; the shared menu pause is verified in the next section.
 
 ## Shared menu pause: paired lab verification (2026-10-31)
 
@@ -100,7 +115,7 @@ resumes. Protocol v11 adds state flag `kMenuPause` without changing the
 native pause and wheel timing.
 
 Two **real game instances on one PC**, using disposable `pause-host` and
-`pause-guest` reflink clones on Host-PC, connected over loopback UDP
+`pause-guest` reflink clones on the host PC, connected over loopback UDP
 27883/27884. The guest used the existing sandboxed Steam client and native
 host-save transfer (`HostSave=1`). Both gameplay pawns had health 121.875 at
 `21:46:16.290` / `21:46:16.592`, with partner avatars/poses streaming.
@@ -137,29 +152,24 @@ global-dilation override, or full object scans were introduced.
 | Disconnect with host menu open | Before guest stop, `21:47:53.472`: host `paused=0`. Timeout `21:47:58.507` restored native pause; `21:48:02.627`: `paused=1 connected=0` |
 | Standalone restoration | Close at `21:48:04.176`: `paused=0`. Wheel open `21:48:05.710`: `global=0.2000`; close `21:48:07.259`: global 1 |
 
-The final logs contain no menu timing-control failures. Evidence is archived
-outside the repo at `~/TheysGone-lab/archive/shared-pause-20261031/`:
-`pause-host-final.log`, `pause-guest-final.log`, diagnostic-run logs, and
-screenshots under `pause-host/` and `pause-guest/` (`both-paused.png`,
-`map-inventory.png`, `wheels.png`; host also `menu-navigation.png`).
-Before cleanup, base ASI/INI and the complete base Saved tree matched each
-clone's pre-test backup. Both games were stopped and the disposable clones
-removed; real installs, saves and account configuration were not changed.
+The final logs contain no menu timing-control failures. Evidence
+(`pause-host-final.log`, `pause-guest-final.log`, diagnostic-run logs and
+screenshots) is archived outside the repo as
+`<archive>/shared-pause-20261031/`. Base ASI/INI and the complete base Saved
+tree matched each clone's pre-test backup; the clones were removed.
 
-Still pending: separate-PC/Steam coverage, two-game joins while a wheel is
-already open, actual focus/combat overlap, focus loss, photo mode, and
-mission/cinematic pause transitions. The F8 overlay and wheel do not request
-a shared pause. No blanket unpause is applied outside a controlled menu.
+The F8 overlay and wheel do not request a shared pause, and no blanket unpause
+is applied outside a controlled menu. Open items: see
+[COOP-ROADMAP.md](COOP-ROADMAP.md).
 
-## Engine replication research scope
+## Native-replication research (not shipped)
 
-Status: investigation in progress (2026-10-21). Nothing here is shipped; the
-mod still uses its own datagram layer described in [HOW-IT-WORKS.md](HOW-IT-WORKS.md).
-
-Question: could Theys Gone use Unreal's own listen-server replication
-(`UNetDriver`, actor channels, property replication, RPCs) instead of, or
-underneath, its custom pose/enemy/save streaming? This document records what
-the shipped build contains, what is unknown, and the experiment plan.
+The sections from here through Run O (2026-10-21 to 2026-10-24) test whether
+Theys Gone could use Unreal's own listen-server replication (`UNetDriver`,
+actor channels, property replication, RPCs) instead of, or underneath, its
+custom datagram layer described in [HOW-IT-WORKS.md](HOW-IT-WORKS.md). None
+of it is shipped; see [REPLICATION-HANDOFF.md](REPLICATION-HANDOFF.md) for the
+conclusions.
 
 ## What the build contains
 
@@ -243,7 +253,7 @@ BendPawn > Character > Pawn > Actor` and `SwarmerPawn_C > BendSwarmerPawn >
 BendFreakerPawn > BendAIPawn > BendPawn > Character`. Every pawn is a
 `Character`, so movement replication and `ServerMove` exist for all of them.
 
-## Probe results (2026-10-21, host-pc, main menu)
+## Probe results (2026-10-21, main menu)
 
 `net-probe` (DebugTools, writes `TheysGone-net.txt`) answered the unknowns:
 
@@ -341,186 +351,40 @@ code: the host's `BP_BendGameState_C`, two `PlayerState`s, **the host's
 `Role=1`, simulated proxies), plus the guest's own `PlayerController`
 (`Role=2`).
 
-Not yet checked: whether the replicated Deacon renders and moves on the guest
-once the host is in game, whether host AI replicates (none did at the menu;
-relevance is based on the connection's view target, which is not set yet), and
-what Continue does on either side with the net driver attached.
+Later runs answered the open questions from this point: the host's Deacon
+and populated-world AI replicate to the guest as proxies (Runs B to J).
 
 INI knobs for the experiment: `[Research] ConnectUrl=steam.<host id>` on the
 guest; `ControllerClass=`, `PawnClass=`, `SpectatorJoin=` on the host. Later
-added: `ClientNavigation=1` on the guest (see the offline navigation
-follow-up near the end of this log). The
+added: `ClientNavigation=1` on the guest (see "Offline follow-up: client
+navigation lifecycle and probe artifacts"). The
 probe now also lists `PROXY` actors (Role other than Authority), which on the
 guest shows what the host replicates.
 
-## How it would develop
-
-### Phase 1: can a net driver come up at all? (1–2 days, decisive)
-
-Host side done, see the log above: a `USteamNetDriver` listens on the live
-world without reloading. Guest side: `ExecuteConsoleCommand("open
-steam.<host id>")`, then observe `PendingNetGame`, `Welcome`, the map load,
-`PostLogin` and `SpawnDefaultPawnFor` on the host.
-
-### Phase 2: what the engine replicates for free
-
-With a connection up: does the second Deacon appear on the host and the
-host's Deacon on the guest? Expected: yes for `ReplicatedMovement`
-(both are `Character`s with `bReplicates`), no for animation (AnimBlueprint
-variables are not `CPF_Net`), no for health/inventory unless the ShooterGame
-leftovers still work. Do AI pawns replicate? Their controllers exist only on
-the server, so AI logic becomes host-only for free, which is exactly the
-current design goal. The guest's own ambient generators still run unless the
-client-side game code checks `HasAuthority()`, which single-player code never
-needed to do.
-
-Lever worth testing: `FRepLayout` is built lazily per class from properties
-flagged `CPF_Net`. Flipping that bit on selected `UProperty` objects before the
-first replication of the class would make the engine replicate extra state
-(health, weapon, anim-relevant bools) without any game code change. OnRep
-callbacks would not run, but plain values would arrive.
-
-### Phase 3: hybrid model
-
-If Phase 2 works, the likely end state is: engine replication for actor
-existence, transforms, health and RPC transport; the current pose stream kept
-for skeletons (the engine's montage/anim replication would not cover Bend's
-AnimBlueprints); the save transfer kept for world/progression state, which
-Unreal does not replicate at all (missions, unlocks, map state are in the
-save, not in replicated properties). The custom `DMEH`/`DMPX` hit forwarding
-would be replaced by `ServerNotifyHit`-style RPCs if they still function, or
-by our own RPC-shaped UFunctions invoked through `ProcessRemoteFunction`.
-
-### Phase 4: second-player gameplay
-
-Each place the game assumes one player (`GetFirstPlayerController`, HUD,
-camera, mission triggers keyed to "the" player, the bike, the buddy, saves,
-fast travel, cinematics) is a bug to find. This is open-ended and is where
-true replication would cost months; the save-sandbox architecture sidesteps it
-by giving the guest a complete local world.
-
-## Next steps
-
-Run C tested the matching native Bend controller and Bend pawn after static
-analysis explained the two mismatched host failures. Possession succeeded,
-the native pawn reached the Deck, and both games remained responsive for
-over 90 seconds. Guest takeover was acknowledged, but the Deck then crashed
-at the same `+0x264ee02` site as the generic-pawn run. Its actual caller
-chain identifies a door navigation-area update passing a null
-`World.NavigationSystem`. Next, investigate navigation-system lifetime and
-client-world initialization before another takeover; do not add a broad
-crash-suppression guard. Guest pawn autonomy and PlayerState initialization
-also remain unproven. See the Run C section at the end of this log.
-The sequence below records the earlier attempted path and its outcomes:
-
-| Step | Where | Action | Watch for |
-|---|---|---|---|
-| 1 | both | restart the game; host Continues into gameplay, guest stays at the title menu | |
-| 2 | host | `net-listen` (`SpectatorJoin=1`; Run A used `ControllerClass=PlayerController`, Run B left it empty) | `UWorld::Listen returned true` |
-| 3 | guest | `net-connect` | `HandleClientPlayer ... local player kept` |
-| 4 | both | `net-probe` | host `ClientConnections=1`; guest `PROXY` list now from a host in game: is host AI there? |
-| 5 | host | `net-possess` | Run B attempted with `GuestPawnClass=Character`; host crashed after `Possess` reported success |
-| 6 | guest | `net-takeover` | not reached: guest probe still showed `Pawn=null`, with no replicated `Character_0` |
-| 7 | guest | `net-takeover` again | not reached |
-
-Run A used `ControllerClass=PlayerController` and the default
-`BendDefaultPlayerPawn_C`; host possession crashed. A fallback run with
-`GuestPawnClass=Character` replicated the generic pawn, but takeover crashed
-the Deck. Run B left `ControllerClass` empty, so the host created Days Gone's
-own `BendDefaultPlayerController_C`, and kept `GuestPawnClass=Character` to
-isolate the controller change from the host crash observed with the default
-pawn and plain controller. This compared the two controller paths on the same
-generic pawn; it
-did **not** prove that a Deacon pawn is safe for thin-client control. The
-HUD, the Bend camera and
-controller-bound inputs (focus mode, quick heal, bike exit) live in the Bend
-controller, so missing ones in run A say nothing about the thin client.
-Movement, animation and the camera following the pawn do count. Run B also
-crashed before the guest received the generic pawn, so the two controller
-paths have not yet produced a stable host-owned player. This blocks the
-tested possession combinations, but does not prove that native replication
-of a full game is impossible. The subsequent static analysis supports testing
-the matching native pair before designing a workaround.
-
-The `Character` fallback has now been tried with both controller classes.
-To find which streaming RPC really closed the connection, repeat steps 2
-and 3 with `DropStreamingStatus=0` or `DropLevelVisibility=0`; this is
-independent of the possession experiment.
-
-After that, depending on the result:
-
-1. The engine replicates populated-world actors in this build, including
-   enemy proxies, so continue evaluating it for AI/world-state replication.
-2. Native-pair host possession now works in Run C, but guest control remains
-   blocked by the navigation-system crash. Keep the shipped hybrid as the
-   safe baseline while fixing client-world initialization; these experiments
-   do not prove that a full native architecture is impossible.
-
-## Current recommendation
-
-The engine's own net driver runs between two Days Gone PCs over Steam P2P,
-inside a live world, with five targeted patches (definitions, LoadMap,
-HandleClientPlayer, streaming RPCs, spectator join). In a populated-world
-probe, enemy and other actors appeared as guest proxies. Run C established
-stable native-pair host possession and pawn arrival, but both the generic
-pawn and native pawn takeover runs crashed the Deck. Keep the shipped
-hybrid and save transfer:
-the engine does not replicate missions, unlocks, or map state, and the
-current evidence does not establish safe player control or full campaign
-authority.
+The original phased plan, step table and recommendation written here are
+superseded; current native-replication conclusions are in
+[REPLICATION-HANDOFF.md](REPLICATION-HANDOFF.md).
 
 ## Remote-control preparation (2026-10-22)
 
-With user approval, installed the authenticated HTTPS helper on host-pc and
-steamdeck for visual/input automation. This is test infrastructure, not a
-replication experiment. At the time of this preparation, no `net-*` commands
-had been run and neither installed ASI nor game INI was changed.
-
-- Both PCs accept authenticated HTTPS health/screenshot requests from the
-  Mac. Host-PC initially timed out because UFW blocked TCP 8765; the user
-  approved an allow rule restricted to source 192.0.2.10.
-- Host-PC: KDE Wayland capture works through Spectacle, including its pointer.
-  Keyboard Enter advanced the game's fresh title screen to its main menu.
-  Relative mouse movement was visibly observed; a left click opened Options.
-  Virtual gamepad east/B closed Options and restored the main menu. No
-  settings were changed.
-- Deck: FFmpeg's X11 capture returned a black 1920x1080 image with a cursor,
-  although the game window existed on DISPLAY=:1. Native
-  `gamescopectl screenshot`, on WAYLAND_DISPLAY=gamescope-0, returned the
-  actual 1280x800 compositor output. The helper waits for PNG IEND because
-  the screenshot is written asynchronously.
-- The old Deck game process had about 25 hours uptime and showed a
-  title/HUD state that did not visibly advance with menu input. The mod
-  still logged live ticks. This does not establish whether the problem was
-  stale game state or input routing. With approval, stopped that exact
-  process and relaunched; virtual gamepad south/A visibly activated Steam's
-  Play button and started a fresh game.
-- On the fresh Deck game, keyboard Enter advanced the title screen to the
-  main menu, and keyboard navigation opened Options. Virtual gamepad east/B
-  did **not** close Options, although that same action worked on Host-PC.
-  Treat Deck in-game virtual-controller routing as unverified; Steam UI
-  response and a successful API acknowledgement do not prove it. Keyboard
-  Escape was used to return to the main menu.
-- Both live HTTPS endpoints reject unauthenticated requests with HTTP 401.
-  Both virtual gamepads reported no held buttons and all six analog axes at
-  zero after testing. Deck's ydotool device also reported no held keys.
-- Local `make test` passes 67 Python tests plus the C++ tests after adding
-  compositor-specific capture backends. Actual gameplay movement, combat
-  and concurrent input have not been validated by this preparation.
-
-Deployment locations, permissions and stop/cleanup instructions are in
-REPLICATION-HANDOFF.md under "Remote input and screenshots".
+An authenticated HTTPS helper for screenshots and virtual input was installed
+on both PCs (test infrastructure; no `net-*` command was run and no ASI or INI
+changed). On the host PC, KDE Wayland capture and keyboard, mouse and virtual
+gamepad input worked in the menus. On the Steam Deck only `gamescopectl
+screenshot` captured the real output (X11 capture was black), and virtual
+gamepad east/B did not close Options, so in-game virtual-controller routing on
+the Deck was unverified.
 
 ## Partial Run A (2026-10-22)
 
 **Status: incomplete; this is not a thin-client result.** Both games were
-initially at their title menus. Before entering gameplay, a backup was made on
-each PC under `~/TheysGone-research-backups/20261022-runA-pre/`, including the
-Proton `Saved` tree, game `Saved/SaveGames`, and `TheysGone.ini`.
+initially at their title menus. Before entering gameplay, each PC's Proton
+`Saved` tree, game `Saved/SaveGames` and `TheysGone.ini` were backed up
+outside the repo.
 
 The host INI already had `ControllerClass=PlayerController`,
 `PawnClass=BendDefaultPlayerPawn_C`, and `SpectatorJoin=1`. The guest's
-`ConnectUrl` was `steam.<steamid>`. The host continued into the
+`ConnectUrl` was `steam.<host SteamID>`. The host continued into the
 `Locate sterile bandages` objective while the Deck stayed at the title menu.
 `net-listen` succeeded: `UWorld::Listen returned true` and the host applied
 the configured controller class and spectator-join setting.
@@ -544,19 +408,14 @@ staged and installed on both PCs. The host game was exited before replacing
 the loaded binary. The Deck was relaunched with the new ASI; no network
 experiment commands have been run in that fresh Deck process.
 
-At the time of this initial entry, the host had not yet been relaunched with
-the new ASI. The documented Steam pipe launch and `steam -applaunch 1259420`
-did not leave a running game process. The subsequent continuation is recorded
-below.
-
-At the time of this initial entry, no save or game INI had been intentionally
-edited. The host was quit after continuing, and its pre-run save backup
-remains available on Host-PC; the Deck's backup is also available at the path
-above.
+At that point the host had not been relaunched with the new ASI: the
+documented Steam pipe launch and `steam -applaunch 1259420` did not leave a
+running game process. No save or game INI had been intentionally edited, and
+pre-run backups were kept on both PCs.
 
 ### Run A continuation (2026-10-22)
 
-After completing Steam's first-run Input prompt, Host-PC launched with the
+After completing Steam's first-run Input prompt, the host PC launched with the
 updated ASI and continued into gameplay. `net-listen` succeeded with
 `ControllerClass=PlayerController`, `PawnClass=BendDefaultPlayerPawn_C`, and
 `SpectatorJoin=1`. The Deck's `net-connect` succeeded. The host probe showed
@@ -568,7 +427,7 @@ Host `net-possess` reported success: it spawned
 `BendDefaultPlayerPawn_C_1` for the joined `PlayerController` and set that
 controller's `Pawn` to the new actor. About three seconds later, the host
 process crashed. The Unreal dump
-`~/.../BendGame/Saved/Logs/unreal-v0-2026.10.22-19.54.44.dmp` records
+`.../BendGame/Saved/Logs/unreal-v0-2026.10.22-19.54.44.dmp` records
 exception `0xc0000005` at `DaysGone.exe+0x779962`, reading address `0x3d8`
 from null. This followed possession closely, but the exact faulting code path
 has not been resolved.
@@ -601,7 +460,7 @@ stable. Movement, animation, and continued play were not verified.
 
 The Deck's crash reporter was dismissed with **Don't Report** (no report was
 submitted); a process check afterward found no Deck game or crash-reporter
-process. At the end of this run, Host-PC remained in gameplay with its pause
+process. At the end of this run, the host PC remained in gameplay with its pause
 overlay open and still had the fallback `GuestPawnClass=Character` setting.
 Run B is recorded below.
 
@@ -609,7 +468,7 @@ Run B is recorded below.
 
 For a controlled comparison, the host used an empty `ControllerClass`
 (`BendDefaultPlayerController_C`) while keeping `GuestPawnClass=Character`
-and `SpectatorJoin=1`. Host-PC continued into the live `ORWorld` gameplay.
+and `SpectatorJoin=1`. The host continued into the live `ORWorld` gameplay.
 `net-listen` succeeded. The Deck connected with an open `SteamNetConnection`
 and 222 channels. The guest probe showed the remote
 `BendDefaultPlayerController_C` as a spectator with `Pawn=null`; the host
@@ -623,7 +482,7 @@ populated gameplay world, not synchronized AI decisions, combat, or mission
 state.
 
 Host `net-possess` reported that it spawned `Character_0` and that
-`BendDefaultPlayerController_C_1.Pawn` was set to it. Within seconds, Host-PC
+`BendDefaultPlayerController_C_1.Pawn` was set to it. Within seconds, the host
 crashed and its next debug request received no acknowledgment. The dump
 `unreal-v0-2026.10.22-21.05.29.dmp` (modified at 21:20) records
 `0xc0000005` at `DaysGone.exe+0x724a46`, a null-based read at `0x1f00`.
@@ -633,22 +492,18 @@ with `Pawn=null` and no `Character_0` proxy. `net-takeover` was therefore
 not attempted in Run B.
 
 The host crash reporter was dismissed with **Don't Report**; no report was
-submitted. Host-PC's game is stopped, and its INI was restored from the
-pre-Run-A backup (`ControllerClass=PlayerController`, no
-`GuestPawnClass` override). The Run B INI backup is retained at
-`~/TheysGone-research-backups/20261022-runB-pre/TheysGone.ini`. The Deck
-game process remained running after the host crashed; restart it before any
-future network test.
+submitted. The host INI was restored from the pre-Run-A backup
+(`ControllerClass=PlayerController`, no `GuestPawnClass` override).
 
 ### Run B crash-site analysis (2026-10-23)
 
-The dump and matching game executable were copied from Host-PC for local,
+The dump and matching game executable were copied from the host PC for local,
 read-only analysis; no game files or settings were changed on either PC.
 Their SHA-256 hashes are:
 
 - Dump: `6eb199bfa3c9b03720eda9b5ffca6e675300c956fe20e8461a04b8c135d30651`
 - `DaysGone.exe`: `17c2fca01d566914147a6d4924d038cb1f5a822c2829e4c45862e2bf837730b3`
-- Host-PC's deployed `TheysGone.asi` matches the local package hash:
+- The host PC's deployed `TheysGone.asi` matches the local package hash:
   `6512772bdadfd94ff7f54dc6dbf1e171c82746717b73938ca6449d2f1647fb51`
 
 Disassembly confirms the exception at `DaysGone.exe+0x724a46` is the
@@ -664,15 +519,12 @@ object as a controller, camera, HUD, or any other specific subsystem. The
 minidump includes the relevant stack but not the heap memory for the object
 at `0x129c3ab00`, and the inspected executable has no RTTI result identifying
 these functions. A speculative guard or initialization would therefore be
-unsafe. Next, resolve the owning reflected class/property for offsets
-`0xcf0` and `0x8d8` (or capture a suitable live object/class dump), then
-decide whether the absent component is expected for the remote player and
-whether it can be initialized safely. No new `net-possess` or `net-takeover`
-test was run; the guest pawn was never received in Run B.
+unsafe. No new `net-possess` or `net-takeover` test was run; the guest pawn
+was never received in Run B.
 
 ### Reflection-backed host crash diagnosis (2026-10-23)
 
-Host-PC already had `TheysGone-reflection.txt` with native thunk RVAs and
+The host PC already had `TheysGone-reflection.txt` with native thunk RVAs and
 property offsets. It and the existing object dump were copied for offline
 analysis, without launching either game. The executable hash matches the
 one recorded above.
@@ -714,10 +566,7 @@ guest-side navigation failure is analyzed there.
 ### Run C: matching native controller and native pawn (2026-10-23)
 
 The user approved use of both PCs for this test. Both games were initially
-stopped; settings and saves were backed up before changes:
-
-- Host-PC: `~/TheysGone-research-backups/20261023-190853-runC-pre/`
-- Deck: `~/TheysGone-research-backups/20261023-190854-runC-pre/`
+stopped; settings and saves were backed up outside the repo before changes.
 
 Both deployed ASIs still matched
 `6512772bdadfd94ff7f54dc6dbf1e171c82746717b73938ca6449d2f1647fb51`.
@@ -725,7 +574,7 @@ The host used empty `ControllerClass`, `PawnClass=BendDefaultPlayerPawn_C`,
 `GuestPawnClass=BendDefaultPlayerPawn_C`, and `SpectatorJoin=1`.
 
 **Preflight confounder removed:** both original INIs had `Transport=udp`,
-with Host-PC joining the Deck in the shipped hybrid mode. The initial launch
+with the host PC joining the Deck in the shipped hybrid mode. The initial launch
 auto-connected and started a host-save transfer before any engine-network
 test. Both games were exited normally, both INIs were temporarily changed
 to `Transport=menu`, and both games were relaunched. The actual Run C below
@@ -733,7 +582,7 @@ had no shipped hybrid peer traffic or streamed poses. Prior runs did not
 explicitly isolate this setting, so their broad behavioral observations
 should not be treated as clean native-only comparisons.
 
-**Host possession succeeded.** Host-PC continued into gameplay.
+**Host possession succeeded.** The host continued into gameplay.
 `net-listen` succeeded at 19:18:36. The Deck connected at 19:18:53; the
 probes showed the joined Bend controller, 222 channels and populated-world
 AI proxies. At 19:19:47, host `net-possess` spawned
@@ -753,7 +602,7 @@ or movement verification. Its dump
 `0xc0000005` at `DaysGone.exe+0x264ee02`, reading address `0x350`.
 SHA-256:
 `dfa13f2fb5ee36e942a59c447b437c95ec95001af022920861eb5be858057f68`.
-The Deck executable matches Host-PC's recorded executable hash.
+The Deck executable matches the host PC's recorded executable hash.
 
 The guest's final probe still showed both replicated Bend pawns as
 `Role=1` (simulated proxies), while the remote controller was `Role=2`
@@ -783,21 +632,10 @@ does not establish that the takeover call itself directly causes the null
 system. The reflection dump also exposes the config property
 `NavigationSystem.bAllowClientSideNavigation`, but its runtime value and
 whether enabling it preserves/creates the required system were not tested.
-Next, trace when the guest's navigation system is removed or omitted across
-the LoadMap/MovePendingLevel interception, then evaluate a narrowly scoped
-client-navigation initialization fix. Do not substitute the host's objects
-or blanket-disable door behavior. After fixing that, verify proper
-autonomous-proxy ownership and PlayerState initialization before claiming
-thin-client control.
 
-**Cleanup:** the Deck reporter was dismissed with **Don't Report**, after
-visually verifying the button focus; no report was submitted. Host-PC was
-quit normally. Both original INIs, including their original UDP settings,
-were restored and checked byte-for-byte against the fresh backups. Saves
-were not manually restored or edited; the backups remain available.
-Temporary remote Run C shell scripts were removed. No plugin code was
-deployed during Run C; network-probe instrumentation was added locally
-afterward. Nothing was committed.
+**Cleanup:** the Deck reporter was dismissed with **Don't Report** (no report
+submitted). Restored both original INIs, including their UDP settings; hashes
+verified. Saves were not edited. No plugin code was deployed during Run C.
 
 ### Run D: instrumented native-pair retest (2026-10-23)
 
@@ -809,8 +647,8 @@ controller, PlayerState, and `RideVehicleComponent`. This should show when
 the client world or autonomous ownership is absent across connect,
 possession, and takeover. The diagnostic build (`TheysGone.asi` SHA-256
 `c87dae666fcc51682022ad0adfdfa3155416e81de69660c815f63e5acd023ed8`)
-was deployed for this approved run. Both machines were backed up under
-`~/TheysGone-research-backups/20261023T180214Z-diag-pre/`. Their original
+was deployed for this approved run. Both machines were backed up outside
+the repo (`20261023T180214Z-diag-pre`). Their original
 UDP transport was temporarily set to `menu` to isolate engine replication;
 the host used an empty `ControllerClass`, native Bend pawn classes, and
 `SpectatorJoin=1`.
@@ -856,7 +694,7 @@ No camera or movement verification passed. The Deck dump is
 `unreal-v0-2026.10.23-20.05.02.dmp`, SHA-256
 `9da91af90b3765b7be5ec436f21023c4aedd40029d92ef34b27711770c6967f6`.
 
-Host-PC remained responsive through the guest failure, then produced a
+The host PC remained responsive through the guest failure, then produced a
 separate dump at 20:10:23 with an access violation at
 `DaysGone.exe+0x1abfd5d`; its stack includes plugin frames. That host-side
 failure has not been localized and should not be conflated with the Deck's
@@ -865,25 +703,18 @@ navigation fault. Its dump is SHA-256
 Both crash reporters were dismissed with **Don't Report**; no report was
 submitted.
 
-Both games were stopped. The original INIs and `0.3.0-dev` ASIs were restored
-byte-for-byte from the new backups; both installed ASIs again hash to
-`6512772bdadfd94ff7f54dc6dbf1e171c82746717b73938ca6449d2f1647fb51`.
-Saves were not restored or edited. The dumps, logs, and probe files are
-preserved in the current private session's `files/` directory. Next, trace
-where the guest's navigation system is removed or omitted across
-`HookedLoadMap`/`MovePendingLevel`; do not blindly toggle
-`bAllowClientSideNavigation` or suppress door updates. Then diagnose why the
-replicated PlayerState actors are not referenced by the guest controller and
-pawn, and verify autonomous control, camera, and movement before claiming
-thin-client viability.
+Both games were stopped. Restored both original INIs and `0.3.0-dev` ASIs;
+both ASIs again hash to
+`6512772bdadfd94ff7f54dc6dbf1e171c82746717b73938ca6449d2f1647fb51`. Saves were
+not edited. Dumps, logs and probe files are kept outside the repo.
 
 ## Run D follow-up: transition and PlayerState diagnostics (2026-10-23)
 
 This approved diagnostic-only run used the matching Bend controller and pawn
 classes, `Transport=menu`, and the updated research ASI
 (SHA-256 `a7bcdfb80c0ea0dee9bf51516f811ecf95ce635897e5f5eac68c39fc5feac31d`).
-Both PCs were backed up under
-`~/TheysGone-research-backups/20261023T183152Z-diag-followup-pre/`. The host
+Both PCs were backed up outside the repo
+(`20261023T183152Z-diag-followup-pre`). The host
 listened in its live world, the Deck joined, and no possession or takeover
 command was run.
 
@@ -934,13 +765,13 @@ unless `bAllowClientSideNavigation` is set.*
 
 | Deck object | Role / identity | Association |
 |---|---|---|
-| `PlayerState_0` | local, Role 3, PlayerId 256, `DrSkunk` | In `GameState.PlayerArray`; linked to local controller/pawn |
-| `PlayerState_1` | proxy, Role 1, PlayerId 256, `host-account` | In `GameState.PlayerArray` |
-| `PlayerState_2` | proxy, Role 1, PlayerId 257, `DrSkunk` | Not in `GameState.PlayerArray`; not linked to joined controller |
+| `PlayerState_0` | local, Role 3, PlayerId 256, guest account | In `GameState.PlayerArray`; linked to local controller/pawn |
+| `PlayerState_1` | proxy, Role 1, PlayerId 256, host account | In `GameState.PlayerArray` |
+| `PlayerState_2` | proxy, Role 1, PlayerId 257, guest account | Not in `GameState.PlayerArray`; not linked to joined controller |
 | joined `BendDefaultPlayerController_C_1` | Role 2, SteamNetConnection | `Player=LocalPlayer`, but `PlayerState=null`, `Pawn=null`, `StateName=Spectating` |
 
-The host's joined controller is associated with its `PlayerState_1` for
-`DrSkunk` (PlayerId 257), while its Pawn remains null because this run did not
+The host's joined controller is associated with its `PlayerState_1` for the
+guest account (PlayerId 257), while its Pawn remains null because this run did not
 possess one. On the Deck, the local controller and its original PlayerState
 remain in place while the joined controller is retained by
 `HandleClientPlayer`; the joined controller's `PlayerState` was null both
@@ -964,26 +795,15 @@ The connection remained open through the post-join probes; neither game
 crashed. No camera, movement, enemy behavior, mission progression or
 interaction synchronization was tested. The games were closed without
 running `net-possess`/`net-takeover`; no save restore or edit was performed.
-Both PCs' original ASIs and INIs were restored and hash-verified:
+Restored both PCs' original ASIs and INIs; hashes verified:
 
 | Machine | Original ASI SHA-256 | Original INI SHA-256 |
 |---|---|---|
-| Host-PC | `6512772bdadfd94ff7f54dc6dbf1e171c82746717b73938ca6449d2f1647fb51` | `06244831ebaaa517a736449b64e8dfb7be6892983aa2f56faeb4fcbdf275b1e3` |
-| Deck | `6512772bdadfd94ff7f54dc6dbf1e171c82746717b73938ca6449d2f1647fb51` | `01c062dca61049d9d3e15c7b3bc6d3662248c8cfec070bef7bd3aa1d3ee1d2a0` |
+| Host PC | `6512772bdadfd94ff7f54dc6dbf1e171c82746717b73938ca6449d2f1647fb51` | `06244831ebaaa517a736449b64e8dfb7be6892983aa2f56faeb4fcbdf275b1e3` |
+| Steam Deck | `6512772bdadfd94ff7f54dc6dbf1e171c82746717b73938ca6449d2f1647fb51` | `01c062dca61049d9d3e15c7b3bc6d3662248c8cfec070bef7bd3aa1d3ee1d2a0` |
 
-Evidence is preserved in the private session files:
-`diag-followup-deck-post-net.txt`, `diag-followup-deck-post-net-late.txt`,
-`diag-followup-host-post-net.txt`, `diag-followup-deck-trace.txt`, and the
-Deck's `TheysGone.log`. The offline executable and reflection evidence are in
-`files/runb-analysis/DaysGone.exe` and `TheysGone-reflection.txt`.
-
-Next, identify the trigger and lifecycle around the non-null installation
-call at `0x2631456`, and determine how the correct client-world transition
-recreates navigation in this Bend fork. Separately trace why the joined
-controller's networked PlayerState remains null and why the proxy lacks
-`ReceiveBeginPlay`/`GameState.PlayerArray` membership. Do not attempt another
-takeover until both paths have a supported resolution and are verified
-independently.
+Evidence (post-join probes from both PCs, the Deck trace and log, plus the
+offline executable and reflection dump) is kept outside the repo.
 
 ## Offline follow-up: client navigation lifecycle and probe artifacts (2026-10-23)
 
@@ -1112,24 +932,11 @@ something on the hybrid guest overwriting the field.
 `acf8e12fa4ac84d81bfd7b0954c08aa85d8a82dd9a71218bf6aceeb9355d9402`.
 `make test` and `git diff --check` passed.
 
-**Next diagnostic (needs approval):** a join-only run with no possession or
-takeover, matching Bend controller and pawn, `Transport=menu`, and
-`ClientNavigation=1` on the Deck. It answers:
-
-1. Is `World.NavigationSystem` non-null after join, with `MainNavData`
-   registered, and does the Deck stay stable?
-2. Which GameState is `World.GameState`, and does its `PlayerArray`
-   contain `PlayerState_2`?
-3. What are `PlayerState_2.Owner` and the joined controller's
-   `PlayerState`, and does `OnRep_PlayerState` fire per object?
-
-Takeover stays blocked until (1) passes and (3) is explained.
-
 ## Run E: ClientNavigation join-only run (2026-10-23)
 
-**Setup.** The user approved the run. Both PCs were backed up to
-`~/TheysGone-research-backups/20261023T19460{2,3}Z-clientnav-pre/` (ASI, INI,
-game `Saved`, Proton `Saved`), and both received ASI `acf8e12f…`.
+**Setup.** The user approved the run. Both PCs were backed up outside the
+repo (`20261023T19460{2,3}Z-clientnav-pre`: ASI, INI, game `Saved`, Proton
+`Saved`), and both received ASI `acf8e12f…`.
 
 - Both INIs: `Transport=menu`.
 - Host: `ControllerClass=` and `PawnClass=` empty (matching Bend pair),
@@ -1160,17 +967,17 @@ No `net-possess` or `net-takeover` was run.
 21:54:09.538 HandleClientPlayer after: ... Player=LocalPlayer_0 PlayerState=null Pawn=null
 ```
 
-**Answers to the three questions:**
+**Join-only results:**
 
 | Question | Result |
 |---|---|
 | 1. Navigation after join | `World.NavigationSystem=BendNavigationSystem_1` with `bAllowClientSideNavigation=true` and `MainNavData=null`, still null in the late probe. The Deck ran stably for over three minutes and both games closed without dumps. The census still shows 2 `RecastNavMesh`, 16 `RecastNavMeshDataChunk` and 5 `AbstractNavData` objects, so the nav mesh exists but is not registered with the new system |
 | 2. Active GameState and PlayerArray | `World.GameState` is the replicated `BP_BendGameState_C_1` (Role 1). Its `PlayerArray` holds `PlayerState_0`, `PlayerState_1` and `PlayerState_2`. The Deck's own `BP_BendGameState_C_0` (Role 3) holds only `_0` and `_1`. "Absent from PlayerArray" is confirmed as a probe artifact |
-| 3. PlayerState linkage | `PlayerState_2` (PlayerId 257, "DrSkunk", Role 1) has `Owner=BendDefaultPlayerController_C_1`. Its per-object trace shows `ReceiveBeginPlay`, `OnRep_Owner`, `OnRep_PlayerName` and `OnRep_UniqueId`. The joined controller's `PlayerState` stays null in every probe, and no object received `OnRep_PlayerState`, `OnRep_Pawn` or `ClientRestart`. On the host the same controller has `PlayerState=PlayerState_1` (PlayerId 257) |
+| 3. PlayerState linkage | `PlayerState_2` (PlayerId 257, guest account, Role 1) has `Owner=BendDefaultPlayerController_C_1`. Its per-object trace shows `ReceiveBeginPlay`, `OnRep_Owner`, `OnRep_PlayerName` and `OnRep_UniqueId`. The joined controller's `PlayerState` stays null in every probe, and no object received `OnRep_PlayerState`, `OnRep_Pawn` or `ClientRestart`. On the host the same controller has `PlayerState=PlayerState_1` (PlayerId 257) |
 
-`PlayerState_1` (the host persona) reports `Owner=<stale>`. This is
-expected: the host's controller is not replicated to the guest, so the weak
-pointer cannot resolve.
+`PlayerState_1` (the host persona) reports `Owner=<stale>` because the host's
+controller is not replicated to the guest (weak pointer; see the `Actor.Owner`
+note in the offline follow-up above).
 
 The trace does capture native RepNotifies: 64
 `StateMachine_Animal_C.OnRep_AttachmentReplication` calls, plus GameState
@@ -1207,18 +1014,10 @@ controller's first bunch would carry a reference the client cannot resolve
 yet. The binary has no surviving unmapped-reference log strings to confirm
 this.
 
-**Cleanup.**
-
-- The Deck closed on the second Alt+F4 (the first was not registered);
-  Host-PC closed on the first.
-- Neither PC wrote a crash dump after the backup.
-- Both PCs were restored from the fresh backups and verified with
-  `sha256sum -c`: ASI `6512772b…`, INIs Host-PC `06244831…` and Deck
-  `01c062dc…`.
-- Temporary scripts were removed from `/tmp`.
-
-Evidence is in the session's `files/cn-*` (probes, trace, log, object
-census, screenshots).
+**Cleanup.** Both games closed without crash dumps. Restored both PCs from
+the fresh backups; hashes verified (ASI `6512772b…`, INIs host `06244831…`
+and Deck `01c062dc…`). Evidence (probes, trace, log, object census,
+screenshots) is kept outside the repo.
 
 **New instrumentation (local, not deployed).** While a trace runs:
 
@@ -1233,19 +1032,6 @@ census, screenshots).
 `3b7f0629af8f9d9658b15f277e88e91f1706518a58cbc1459dd6bfaea640a479`.
 `make test` (67 Python tests) and `git diff --check` passed.
 
-**Next (needs approval):** Run F, the first takeover with
-`ClientNavigation=1`.
-
-- Same setup as Run E with the new build; host `net-possess`, then Deck
-  `net-takeover`.
-- The trace watcher records the PlayerState and Pawn transitions.
-- The decisive questions are no crash at the door path, then camera,
-  movement and HUD on the guest-driven Deacon.
-
-The null `Controller.PlayerState` does not block this test: the pawn's own
-`PlayerState` reference replicates after `PlayerState_2` already exists. It
-stays a known defect to fix before release.
-
 ## Run F: first takeover with ClientNavigation (2026-10-23)
 
 > **Correction (Run G):** both Run F blockers below were misread. The
@@ -1259,12 +1045,12 @@ stays a known defect to fix before release.
 **Setup.**
 
 - ASI `3b7f0629…` on both PCs, deployed with `clientnav-deploy.sh`. Backups:
-  Host-PC `20261023T202031Z-clientnav-pre`, Deck
+  host `20261023T202031Z-clientnav-pre`, Deck
   `20261023T202032Z-clientnav-pre`.
 - Both INIs use `Transport=menu`.
 - Host: `ControllerClass=` and `PawnClass=` are empty (Bend's own classes),
   with `SpectatorJoin=1`.
-- Deck: `ClientNavigation=1` and `ConnectUrl=steam.<steamid>`.
+- Deck: `ClientNavigation=1` and `ConnectUrl=steam.<host SteamID>`.
 - Both games were launched through the Steam pipe and loaded into gameplay.
 
 **Timeline (local time).**
@@ -1333,22 +1119,22 @@ the second blocker for thin-client movement. The cause is still unknown.
 `PlayerState` transition for `_C_1` during the whole run, and
 `OnRep_PlayerState` never fired. The pawn's `PlayerState` is null as well.
 
-**Gotcha: Steam Deck focus.** The first screenshots after takeover showed
-other game art. This was the SteamOS idle screensaver with the Steam
-overlay focused (`GAMESCOPE_FOCUSED_APP=769`), not a game fault. Gamepad B
-(east) restored focus to app 1259420. Check with
-`DISPLAY=:0 xprop -root | grep FOCUSED_APP` before trusting an input test,
-and keep sending input so the screensaver does not return.
+**Gotcha: Steam Deck focus and captures.** The first screenshots after
+takeover showed other game art. This was the SteamOS idle screensaver with the
+Steam overlay focused (`GAMESCOPE_FOCUSED_APP=769`), not a game fault. Gamepad
+B (east) restored focus to app 1259420. Before trusting an input test or a
+capture, check `DISPLAY=:0 xprop -root | grep FOCUSED_APP` is 1259420 and keep
+sending input so the screensaver does not return. Desktop or Gamescope
+captures can show another application; use game-owned logs and probes as the
+evidence. (This lesson applies to every later Deck entry.)
 
-**Probe quirk.** The probe prints `Owner=<stale>` even for live owners (for
-example the Deck's own pawn `_C_0`). The Owner field read is unreliable and
-needs fixing before it is used as evidence.
+**Probe note.** `Owner=<stale>` lines in this run are not evidence; see the
+`Actor.Owner` weak-pointer note in the offline follow-up and Run G (G7).
 
-**Cleanup.** Both games closed on the first Alt+F4 pass. Both PCs were
-restored from the `-clientnav-pre` backups and verified with
-`sha256sum -c`. No crash dump was newer than the backup. `/tmp` was cleaned
-on both. Evidence is in the session's `files/rf-*` (screenshots, both
-traces, probes and logs).
+**Cleanup.** Both games closed on the first Alt+F4. Restored both PCs from the
+`-clientnav-pre` backups; hashes verified. No crash dump was newer than the
+backup. Evidence (screenshots, both traces, probes and logs) is kept outside
+the repo.
 
 **Conclusion.** The engine path now survives a full guest takeover. A thin
 client still has two concrete blockers, both on the guest side of the
@@ -1360,29 +1146,12 @@ possession handoff:
 2. The guest pawn is a simulated proxy on the Deck instead of autonomous,
    so CharacterMovement would not send moves even when ticking.
 
-**Next (offline, then Run G with approval).**
-
-- In `net-takeover`, log `PrimaryActorTick` (`bCanEverTick`,
-  `bTickEnabled`, registered state) for the controller and pawn, then call
-  `SetActorTickEnabled(true)` on both. Check that `PlayerInput` exists and
-  call `InitInputSystem` when it does not.
-- Find offline why tick is off: whether Bend disables tick in `BeginPlay`
-  for non-local or non-authority actors (the controller's `BeginPlay` ran
-  before `HandleClientPlayer` set its `LocalPlayer`), or whether tick
-  registration is skipped for actors spawned by the net driver.
-- Find offline why the host sends `SimulatedProxy`: trace `bNetOwner` and
-  `GetNetConnection` for the possessed pawn, and any Bend `PreReplication`
-  or role override. Log the pawn's `Role` on the Deck over time.
-- The null `Controller.PlayerState` stays open (unmapped-reference
-  hypothesis).
-
 ## Run G: thin-client movement and look (G1–G21, 2026-10-23/24)
 
-Host host-pc, guest Deck, both in gameplay, user away with standing approval.
-Every run used the `-clientnav-pre` backups. Both PCs were restored
-afterwards and checked against the original hashes (ASI `6512772b`, INIs
-`06244831` and `01c062dc`). `/tmp` was cleaned on both. Evidence is in
-the session's `files/rg/`.
+Host PC and Steam Deck guest, both in gameplay, user away with standing
+approval. Every run used the `-clientnav-pre` backups; afterwards both PCs
+were restored and hashes verified (ASI `6512772b`, INIs `06244831` and
+`01c062dc`). Evidence is kept outside the repo.
 
 **Result: a guest can drive a host-owned Deacon through the engine's own
 replication.** Walking and turning work with mouse and keyboard. The host
@@ -1424,7 +1193,7 @@ The final pipeline:
 - **Gamepad does not work for the guest.** The virtual pad (ydotool and
   game-remote) never produces UE `InputKey`/`InputAxis` events on either PC,
   and after the takeover sticks move neither the camera nor the pawn (G21,
-  `files/rg/g21-deck-pad-*.png`). Bend most likely reads pads through Steam
+  G21 screenshots). Bend most likely reads pads through Steam
   Input (`BendInputManager`, `SteamInputTable`,
   `WasLastInputKeyFromSteamInput`) and routes them to player 0's pawn or
   the own controller. This needs its own investigation.
@@ -1433,32 +1202,12 @@ The final pipeline:
   promotion fixed rotation, but its other effects are not checked yet:
   which pawn the HUD and minimap show, Blueprint actors now resolving
   `_C_1`, and the menus.
-- **Steam Deck focus.** Before any input test, check that
-  `GAMESCOPE_FOCUSED_APP` is 1259420. Gamepad B restores focus from the
-  Steam screensaver (app 769).
 
 ### What this means for native co-op
 
-Moving and looking around as a thin client is solved with five engine-level
-patches. All of them are small and live in `src/coop/research.cpp`. They
-are not a full co-op game yet. Still open, roughly in order:
-
-1. Gamepad and Steam Input on the guest.
-2. Player 0 side effects: HUD, minimap, map and pause menus, and missions
-   on the guest. The guest's own world (story, AI) still simulates locally
-   and must be suppressed or made to follow the host.
-3. Guest actions beyond movement: the RPC census below shows that only
-   weapon equip, hitscan and the bike have server RPCs. Interactions,
-   looting, crafting, dialogue and missions need a mod-side guest-to-host
-   channel.
-4. AI and enemy behaviour sync. Enemy actor movement replicates, but Run J
-   showed `BendPawn.Health` staying stale on the guest. The archived
-   reflection dump marks it `CPF_Net`, and the existing patch substitutes
-   stock `ACharacter` registration for empty Bend overrides; verify that
-   Bend-specific properties are included in the lifetime list before
-   changing combat synchronization.
-5. Join flow: joining today needs both players in the same loaded world
-   (host save transfer) and the manual command sequence.
+Thin-client movement and look work with five small engine-level patches in
+`src/coop/research.cpp`; this is not a full co-op game. Open items for the
+native path are summarized in [REPLICATION-HANDOFF.md](REPLICATION-HANDOFF.md).
 
 ## Run H: AI spawn probe and host crash (2026-10-24)
 
@@ -1475,7 +1224,7 @@ native pawn replication.
   `PawnReplication=1`, `ClientAuthoritativePosition=1`.
 - Guest settings: `Transport=menu`, `DebugTools=1`, `ClientNavigation=1`,
   `ClientPossess=1`, `PawnReplication=1`,
-  `ConnectUrl=steam.<steamid>`.
+  `ConnectUrl=steam.<host SteamID>`.
 - Fresh backups were made before deployment:
   host `20261024T043724Z-clientnav-pre`, Deck
   `20261024T043725Z-clientnav-pre`.
@@ -1507,8 +1256,8 @@ record that actor's health/location transitions. The test therefore does
 guest screenshot showed the host and guest Deacons, but that does not
 identify the test enemy.
 
-**Host crash evidence.** The saved dump
-`files/rg/h-host-crash.dmp` reports `0xc0000005` at
+**Host crash evidence.** The saved
+host dump reports `0xc0000005` at
 `DaysGone.exe+0x359dc9`, an invalid read from address `0x20d0`. Disassembly
 shows the faulting routine iterating a 16-byte delegate array. Reflection
 identifies the caller at `0x12e5a60` as
@@ -1539,8 +1288,8 @@ crash. The test did not isolate guest join, enemy damage, and player
 respawn.
 
 The host crash reporter was dismissed without submitting a report. The
-dump, host/guest logs, and network probes are retained in the session's
-`files/rg/h-*` evidence. No equivalent Deck dump was created.
+dump, host/guest logs and network probes are kept outside the repo. No Deck
+dump was created.
 
 **Engine-version correction.** The host dump's runtime metadata says
 `UE4 BendGame` and `4.11.1-0+UE4`. Earlier handoff and project documentation
@@ -1548,16 +1297,10 @@ called the game UE 4.10.1 based on source-pattern comparisons. Treat those
 UE 4.10 references as behavioral analogies, not the exact engine version;
 all offsets and conclusions remain specific to executable build 19221447.
 
-**Cleanup.** The guest was closed; original ASI and INI files were restored
-on both PCs and their original hashes verified. Both games are closed.
-Temporary deployment/debug helpers were removed. The host debug session
-ended after its local pawn state changed, cleaned its test actor and
-restored the previous save-block state. The guest was closed while its save
-block was still active.
-
-**Next.** Run I below isolates the unpossessed controller and repeats the
-single-AI test with verified host protection and a matching Bend pawn. The
-remaining gap is actor-specific guest-side property evidence.
+**Cleanup.** Restored original ASIs and INIs on both PCs; hashes verified.
+The host debug session ended on its own after its pawn changed, cleaned its
+test actor and restored the save-block state; the guest was closed while its
+save block was still active.
 
 ## Run I: join-only and protected AI replication (2026-10-24)
 
@@ -1574,7 +1317,7 @@ protection.
   `SpectatorJoin=1`, `ClientAuthoritativePosition=1`.
 - Deck: `Transport=menu`, `DebugTools=1`, `HostSave=1`,
   `PawnReplication=1`, `ClientNavigation=1`, `ClientPossess=1`,
-  `ConnectUrl=steam.<steamid>`.
+  `ConnectUrl=steam.<host SteamID>`.
 - The host and Deck original INI/ASI files and save folders were backed up
   before deployment. `begin` succeeded on the host but failed on the Deck
   because its gameplay guard did not find a settled local pawn; therefore
@@ -1630,19 +1373,9 @@ likely to explain Run H. The fact that Run I stayed stable after assigning
 death/respawn transition having contributed to Run H, but it does not prove
 that diagnosis.
 
-**Cleanup.** Both games were closed. The host and Deck save manifests
-initially showed three and two changed saves, respectively; the exact
-pre-test archives were restored, and every save hash then verified. Both
-original ASI hashes (`6512772b…7fb51`) and their distinct original INI
-hashes were restored and verified. The per-run backups were removed after
-verification.
-
-**Next.** Add bounded actor-specific probe output (full name, role,
-health, and location for `SwarmerPawn_C` actors), then repeat the one-actor
-test to verify guest-side position/property updates instead of relying on
-aggregate counts. After that, test damage/death and AI target behavior on
-both peers. Player interactions, story progression, and suppression of the
-guest's independent world simulation remain separate major workstreams.
+**Cleanup.** Both games were closed. Restored the exact pre-test save
+archives (the host had three changed saves, the Deck two), ASIs
+(`6512772b…7fb51`) and INIs; hashes verified.
 
 ## Network RPC surface census (offline, 2026-10-23)
 
@@ -1654,7 +1387,7 @@ Counted from `TheysGone-reflection.txt` (FUNC_Net = 0x40, FUNC_NetServer = 0x200
 | `/Script/BendGame` | 8182 | 11 | 10 |
 | `/Game` Blueprints | 14513 | 0 | 0 |
 
-The only BendGame server RPCs are `BendPawn.ServerHolsterWeapon` and `ServerEquipWeapon`, debug spawn and cheat RPCs, `BendMovementComp_VehicleNoDrive.BendServerUpdateState`, and `BendWeapon_Instant.ServerNotifyHit` and `ServerNotifyMiss`. None of the 14,513 Blueprint functions (missions, interactions, UI, gameplay scripts) are RPCs. This is leftover early-development multiplayer scaffolding (movement, bike, hitscan, weapon equip), not a networked game. With a thin-client guest, almost every guest action other than moving, riding and shooting has no path to the host. The mod would have to add its own guest-to-host channel for interactions, looting, crafting, mission triggers, dialogue and menus, and its own host-to-guest sync for anything not carried by replicated properties.
+The 11 BendGame RPCs are listed under "Bend's gameplay is almost entirely single-player code" above; 10 are server RPCs. None of the 14,513 Blueprint functions (missions, interactions, UI, gameplay scripts) are RPCs. This is leftover early-development multiplayer scaffolding (movement, bike, hitscan, weapon equip), not a networked game. With a thin-client guest, almost every guest action other than moving, riding and shooting has no path to the host. The mod would have to add its own guest-to-host channel for interactions, looting, crafting, mission triggers, dialogue and menus, and its own host-to-guest sync for anything not carried by replicated properties.
 
 ## Run J: actor-specific movement and health replication (2026-10-24)
 
@@ -1724,43 +1457,23 @@ vtable entries with stock `ACharacter::GetLifetimeReplicatedProps`, which
 chains `APawn` and `AActor`. A leading hypothesis is that the stock function
 does not register Bend-specific properties such as Health, despite their
 `CPF_Net` flags. `bReplicateHealthToAll` is a non-net bool adjacent to Health
-in `BendPawn`; its role is not yet known. Test whether setting it true on
-only the owned host test actor allows a later health update to reach the
-guest. If not, inspect the resulting FRepLayout or registration path before
-implementing a derived-property registration.
+in `BendPawn`. Runs K and L tested both leads: the flag was already true, and
+the stock lifetime list omits Health.
 
 The new save-blocked `enemy-health-all-on` command sets this flag only on
 live test enemies owned by the host, and the per-actor `net-probe` output
 records the flag on each peer. The command is idempotent; `end` destroys the
 owned actor, so the experiment does not persist the change.
 
-**Cleanup.** Host `end` logged destruction of the owned test actor and
-restoration of the original damage and saving state. The post-cleanup guest
-probe no longer contained the received proxy at the test location. Both
-Days Gone processes were stopped by their verified PIDs. The initial save
-manifests showed three changed files on Host-PC and two on the Deck; the exact
-pre-run archives were restored, and every manifest hash then verified.
-Original ASI and INI files on both PCs were restored byte-for-byte from their
-Run J backups. Those temporary backups and the remote debug helper were
-removed after verification.
-
-**Run K preparation status (superseded by the away-session run below).**
-Tooling was built and tested, but the paired test was initially
-deferred: Days Gone was not active, and the Deck display showed another game.
-No test build/config was installed and no input was sent.
-
-**Next.** Once the Deck is free, capture paired probes, damage the owned host
-swarmer, enable `bReplicateHealthToAll`, damage it again, and compare guest
-health. If it stays stale, verify whether stock `ACharacter` lifetime
-registration omits the five BendPawn properties from the replication
-layout; then test a minimal host-to-guest registration for Health and
-`OnRep_Health` before a controlled enemy-death test.
+**Cleanup.** Host `end` destroyed the owned test actor and restored damage
+and saving; the post-cleanup guest probe no longer contained the proxy.
+Restored the pre-run save archives (three changed files on the host, two on
+the Deck), ASIs and INIs; hashes verified.
 
 ## Run K: health-all flag is already enabled (2026-10-24)
 
 The user granted control of both PCs for the current away session. Fresh
-save/config/plugin backups were created and verified under
-`~/TheysGone-research-backups/20261024T1525Z-runK-pre` on each PC before
+save/config/plugin backups were verified on each PC before
 deploying ASI `248a006143bdaa678946dc31c8e98500dedd051c04f23b8028ad7c8ccedc1dcc`.
 Both debug `begin` calls succeeded. The host's native damage-protection probe
 kept health at 121.875. Engine join and matching Bend possession succeeded;
@@ -1777,19 +1490,15 @@ a false-to-true transition experiment. The sampled actor moved between the
 sequential probes, so their positions are not a new sub-centimeter sync
 measurement.
 
-Host `end` destroyed the owned actor and restored damage/saving state;
-guest `end` restored its debug session. Both verified Days Gone PIDs were
-stopped. Save directories (including game/proton config) and original ASI/INI
-files were restored, with exact manifest and SHA-256 verification. No new
-crash dumps were found. Evidence is retained in the session's private
-`files/runK/` directory and the remote backup evidence directories.
+Host `end` destroyed the owned actor and restored damage/saving state; guest
+`end` restored its debug session. Restored saves, config, ASIs and INIs on
+both PCs; hashes verified. No new crash dumps. Evidence is kept outside the
+repo.
 
-Next: instrument the actual `GetLifetimeReplicatedProps` output, not just
-`CPF_Net` flags. Offline disassembly of stock `ACharacter` registration
-confirms 12-byte lifetime entries (16-bit RepIndex at +0, condition at +4,
-RepNotify condition at +8) and UProperty RepIndex at +0x40. The diagnostic
-wrapper preserves stock registration and reports whether Health's RepIndex
-is actually present.
+Offline disassembly of stock `ACharacter` registration confirms 12-byte
+lifetime entries (16-bit RepIndex at +0, condition at +4, RepNotify condition
+at +8) and UProperty RepIndex at +0x40. Run L's diagnostic wrapper preserves
+stock registration and reports whether Health's RepIndex is present.
 
 The native `OnRep_Health` thunk (`0x12e3a50`) dispatches to vtable `+0xb00`.
 Offline reads of the BendPawn, BendSwarmerPawn, and BendPlayerPawn vtables
@@ -1814,18 +1523,16 @@ index:condition = 1:0,7:0,3:0,4:0,0:0,2:0,8:0,6:8,9:0,5:6,
 
 This directly confirms the registration gap; it is no longer inferred from
 `CPF_Net` flags. Host possession also succeeded. No enemy spawn or damage
-was needed. Both sessions ended, verified Days Gone PIDs were stopped, and
-original saves/config/plugin files were restored with manifest/hash checks.
-Full logs are retained alongside Run K evidence.
+was needed. Restored both installs; hashes verified.
 
-The next build adds disabled-by-default `[Research] BendHealthReplication=1`
-(requires `PawnReplication=1` on both peers). It preserves every stock entry
-and adds only Health's reflected RepIndex with `COND_None` and
-`REPNOTIFY_OnChanged`, using the engine allocator if the array must grow.
-The option freezes when the vtable wrapper is installed; changing layouts
-requires restarting both games. Unit tests cover entry layout, duplicate
-preservation, no-condition/no-notify-override values, growth, allocation
-failure, invalid arrays, and capacity bounds. Paired testing is still needed.
+The following build (Run M) adds disabled-by-default
+`[Research] BendHealthReplication=1` (requires `PawnReplication=1` on both
+peers). It preserves every stock entry and adds only Health's reflected
+RepIndex with `COND_None` and `REPNOTIFY_OnChanged`, using the engine
+allocator if the array must grow. The option freezes when the vtable wrapper
+is installed; changing layouts requires restarting both games. Unit tests
+cover entry layout, duplicate preservation, no-condition/no-notify-override
+values, growth, allocation failure, invalid arrays, and capacity bounds.
 
 ## Run M: native Health updates now replicate (2026-10-24)
 
@@ -1853,14 +1560,9 @@ native Health notification virtual remains empty. The separate
 `OnRep_LastTakeHitInfo` thunk (`0x12bed60`) also jumps directly to the folded
 empty function, so adding that property alone would not restore hit reactions.
 
-Both debug sessions ended, the host-owned enemy was destroyed, both verified
-game PIDs were stopped, and original save/config/plugin hashes were restored
-and checked. Full logs, paired probes and the guest trace are retained in
-the session's private `files/runK/` directory.
-
-Next: a single owned-enemy lethal native-damage probe, with explicit
-`IsAlive`, `bIsDying`, `bTearOff`, skeletal-mesh and animation-instance
-telemetry on both peers. Do not equate Health=0 with a correct visible corpse.
+Both debug sessions ended and the host-owned enemy was destroyed. Restored
+both installs; hashes verified. Logs, paired probes and the guest trace are
+kept outside the repo.
 
 ## Run N: appearance gap and a guarded lethal probe (2026-10-24)
 
@@ -1897,10 +1599,9 @@ there is no `ReturnValue` property. Earlier diagnostic `returned=0` output
 was the reflection helper's absent-field default, not an engine damage
 return value. The probe now logs only directly measured Health.
 
-Both sessions ended and the owned actor was destroyed. Both verified game
-PIDs were stopped, and originals were restored and hash/manifest verified.
-The paired probes and host/guest traces are retained with the other run
-evidence.
+Both sessions ended and the owned actor was destroyed. Restored both
+installs; hashes verified. Paired probes and host/guest traces are kept
+outside the repo.
 
 ## Run O: native enemy death reaches the guest, presentation does not (2026-10-24)
 
@@ -1959,684 +1660,83 @@ SteamNetDriver's `_60` pawn is not the ASI's poseable visual replica. Thus
 the empty native mesh/animation, guest `bIsDying=false`, and surviving
 torn-off native proxy are valid findings about the experimental engine
 path, but **do not establish a defect in the production `DMEN`/`DPOS` layer**.
-The production enemy appearance, death pose and timeout behavior remain
-unverified live.
-
-No visual corpse correctness is claimed. Both games were stopped after
-the probes. Original saves/configuration/ASI/INI were restored and verified
-against the pre-K manifests and hashes on both PCs. Neither Saved tree
-contained a new crash dump since the verified backup. Evidence is retained
-as `runO-host-*` / `runO-deck-*` beside runs K-N, including paired death and
-cleanup probes and notification traces.
-
-### Next bounded gate: automate QA of the existing enemy visual stream
-
-Do not add another appearance protocol based on Runs N/O. First run two
-isolated game copies with the ordinary co-op transport and enemy sync enabled,
-driven by a scripted bot rather than a human playtest. Save one host and one
-guest log/probe per phase and require nonzero `DMEN`/`DPOS` send, receive and
-apply counters before interpreting any visual result.
-
-Run the bot in this order: (1) stream one enemy and assert that the guest
-creates the poseable replica with the host's mesh path and applies complete
-bone frames; (2) repeat with two visually different enemies, including
-modular parts; (3) hit one enemy on the guest and verify one host-side
-damage application despite packet resend; (4) kill it on the host and verify
-the guest stops offering it as a hit target while following the streamed
-death pose; (5) let the host's source disappear and assert the guest replica
-expires within the configured timeout; (6) repeat with packet loss/reorder,
-late asset availability, reconnect and a new session.
-
-Record `DMEN` and `DPOS` counters, entity/session identity, selected asset
-paths, live/dead state, current and last-arrival timestamps, duplicate-hit
-outcomes, replica count, and cleanup time on both peers. Verify no guest AI,
-native pawn, collision, loot or progression is created by the visual replica.
-Only a reproducible failure in this path justifies a code change. Native
-`bIsDying` is not expected to be set on a non-colliding poseable component;
-if the streamed bone pose does not adequately communicate death, then design
-a presentation-only state after observing that test, without replaying
-host-authoritative death/reward logic on the guest.
-
-## Isolated Run 1 staging (2026-10-24; paused before gameplay)
-
-The user authorized isolated copies, test configuration, and launching them.
-Both 63 GB installs were copied to `~/TheysGone-coop-test/run1/game` with
-`rsync -a --exclude=/BendGame/Saved/`. Each copied executable matched the
-documented build SHA-256
-`17c2fca01d566914147a6d4924d038cb1f5a822c2829e4c45862e2bf837730b3`.
-The current ASI was staged only in the copies; its SHA-256 is
-`4eb28055b5cb52bed3bcbfd1ee6b29e0e8cac4c3591db46cebe0101b27225bd4`.
-Previous diagnostic files included by the copy were moved under each
-`run1/precopy-artifacts/` directory. The original installs and save trees
-were not modified, and no original saves were copied.
-
-Both test INIs use `Transport=udp`, port 27777, `SyncEnemies=1`,
-`Discovery=1`, `DebugTools=1`, and `HostSave=1`; the guest targets the
-host's LAN address. Each client has a separate Proton prefix at
-`~/TheysGone-coop-test/run1/prefix`. `HostSave=1` is retained for matching
-test state; any save generated or transferred in a future test must remain
-within those prefixes.
-
-The first direct Proton launch exited with status 53 and did not load the
-ASI. Restarting with the documented
-`WINEDLLOVERRIDES=version=native,builtin` override succeeded on the host:
-the ASI logged Steam readiness, UDP port 27777 open, and automatic LAN host.
-The host reached the title menu, but `status` reported `active=0`,
-`playerHealth=0`, and `owned=0`; no debug session or enemy test had begun.
-The host prefix contains only fresh saves generated by this first-run game.
-The guest process was started, but no guest ASI log appeared before the
-pause, and no guest input was sent.
-
-The Deck capture showed another game in the foreground. To avoid disrupting
-an active desktop session, only our two named test-copy processes were
-stopped; both prefixes and copies remain staged. No `DMEN`/`DPOS` traffic,
-enemy appearance, hit, death, or expiry was tested. The game was run directly
-through Proton rather than with the Steam `steam://` launcher; the game did
-report Steam ready, and Steam Cloud behavior was not independently verified.
-Proton also populated its normal shared shader cache outside the test
-directory. `make build` succeeded and `make test` passed (C++ protocol checks
-and all 67 Python tests).
-
-Resume only after confirming both PCs are available for remote input. Use the
-existing copies and prefixes; do not recopy or touch the live installs/saves.
-First finish each first-run menu, verify both ASI logs and the LAN handshake,
-then load the host's fresh test save and verify any save-transfer path is
-under the test prefixes before starting the bounded enemy QA.
-
-### Resume attempt: Deck remained occupied (2026-10-24)
-
-After the user reconfirmed availability, the host test copy restarted and
-remained at its splash screen with the ASI loaded. The Deck's Proton 11 launch
-reported an error copying `amdxcffx64.dll` into the new prefix and never
-created a `TheysGone.log`. A retry with `WAYLAND_DISPLAY=gamescope-0` and a
-separate test prefix reached a running `DaysGone.exe` process, but the
-Gamescope capture again showed a different game in the foreground. No input
-was sent to the Deck. Only the host/guest test-copy services were stopped;
-the other game was left alone. Neither peer reached gameplay or exchanged
-enemy traffic. Both test copies and prefixes remain staged, and another
-fresh availability confirmation is required before remote input.
-
-### Direct Proton retry: Deck bootstrap unresolved (2026-10-24)
-
-After a fresh availability confirmation, read-only captures showed the Deck
-at the Days Gone Steam page. The host copy restarted with its ASI loaded and
-remained at the splash screen. The Deck copy was launched with Proton 11.0,
-the isolated `prefix-gamescope`, and `WAYLAND_DISPLAY=gamescope-0`. Proton
-reported the same missing `amdxcffx64.dll` copy; `DaysGone.exe` remained at
-low memory/CPU use, no guest `TheysGone.log` appeared, and the Gamescope
-capture stayed on the Steam bootstrap screen. The cause is unresolved.
-
-Only our two test-copy services were stopped. No Deck input was sent and no
-other application was stopped. There is still no gameplay or enemy-stream
-evidence. The existing test copies, prefixes, and generated host test save
-remain in place. A different Steam launch integration may be needed on the
-Deck; do not modify Steam library metadata outside the test directory without
-separate user authorization.
-
-### SteamOS Run 1 launch and first enemy-stream telemetry (2026-10-24)
-
-The user authorized control of both test PCs and a temporary Deck Steam
-shortcut. In Desktop Mode, Steam's native **Add a Non-Steam Game** UI added
-`Days-Gone-Coop-Test-Run-1`, targeting
-`/home/<user>/TheysGone-coop-test/run1/launch-deck-test.sh`; the original
-`shortcuts.vdf` backup was not restored over this new Steam-managed entry.
-The entry remains temporary and must be removed during cleanup.
-
-Before launch, inspection found that the staged Deck script was broken:
-variables had expanded during creation, leaving `/game`, `/prefix-gamescope`,
-and a Mac-local executable path. It was replaced with a script that explicitly
-targets the isolated Deck copy, its `prefix-gamescope`, Proton 11.0, and
-`WINEDLLOVERRIDES=version=native,builtin`. The script passed `bash -n`; no
-live-install path is referenced. It does not force a display name.
-
-The first Desktop Mode launch loaded the ASI and reached `ORWorld`, but the
-captured game image stayed black for over four minutes. The process consumed
-high CPU, repeatedly logged `OnGameSaved_Event_0 type=6`, and did not respond
-visibly to Escape. It was stopped by its exact test-copy PID. This is a
-launch/display observation, not enemy-stream evidence.
-
-The same Steam entry then launched the isolated Deck process in Gaming Mode.
-The ASI logged Steam readiness as `<steamid>`, UDP port 27777 open,
-and the local Bend controller. Steam's log also reported a failed
-`amdxcffx64.dll` copy into the isolated prefix, even though `DaysGone.exe`
-continued to run. The Deck game process is on Xwayland `:1` with focus title
-`Days Gone`; the Gamescope capture remained on a Steam launch screen for
-several minutes and later returned an unrelated-looking results screen.
-Deck status remains `active=0 playerHealth=0 owned=0`. A keyboard Enter was
-sent to the focused test window, but no transition to gameplay was confirmed;
-do not treat the current capture as proof that the guest UI is visible.
-
-The host copy was launched through a transient user unit,
-`theys-gone-run1-host.service`, using its isolated `prefix` and Proton
-Experimental. It passed Steam readiness as `<steamid>` and opened
-UDP 27777. The guest connected automatically; the host offered snapshot
-`81a5efc1` (3 files, 225,546 bytes), and the Deck log confirms installation
-under `TheysGone-guest-saves`. The host was started into a fresh Easy
-story-mode test campaign. At the latest observation it is still in the
-opening mission/cinematic: host status is `active=0 playerHealth=135
-owned=0`, and world-sync logs report mission/cinematic gating. `DebugBegin`
-correctly refuses this state, so no test actors have been spawned.
-
-This is the first observed production enemy-source/send activity in Run 1:
-the host log reported `perf: enemies streamed=4`, with nonzero `DMEN` info
-and `DPOS` send rates (peaks observed were 107.9 pose packets/s and 3.4
-appearance infos/s). The guest has no `perf: enemies` line and no replica
-application; it is still at `active=0`, so this only verifies host-side
-collection/transmission while the opening mission runs. It does **not** prove
-guest appearance, pose application, hits, death presentation, or expiry.
-
-Both game processes are currently running from the isolated copies; neither
-live install was launched. Cloud remained off as found. Host saves and the
-guest's installed save files are confined to the Run 1 test data. Next:
-finish or safely exit the host opening mission to reach a world state accepted
-by `DebugBegin`; resolve the Deck's SteamOS launch/display and transferred-save
-Continue path; then require guest `DMEN`/`DPOS` receive/apply counters before
-interpreting any visuals. Do not modify the mod based on the current incomplete
-guest evidence.
-
-### Run 1 follow-up: tutorial movement and Deck foreground identification (2026-10-24)
-
-The host capture confirmed that the test copy had reached gameplay. A short
-two-second `W` input moved Deacon through the initial bike tutorial to the
-`CHASE DOWN LEON` objective; a later short input returned him to the Boozer
-checkpoint with `GOING TOO FAR FROM BOOZER` and the `Hold W to accelerate`
-prompt. Host status remains `active=0 playerHealth=135 owned=0`, while the
-world manager continues to report `mission=1 cinematic=0`; the test harness
-therefore remains correctly gated. The production stream continued to detect
-`leon_head_standard` and crows and send `DMEN`/`DPOS` data. The guest had no
-loaded local pawn or replica apply.
-
-The Deck's earlier Steam/Gamescope screenshots were not reliable evidence of
-the Days Gone window. A direct X11 frame was black, and the later Gamescope
-capture showed the Assetto Corsa splash (red car/AC logo) with Steam reporting
-`Days Gone Away`; the visible foreground was another game, not the test copy.
-The Days Gone process existed in the background and consumed high CPU, but
-the guest's status remained inactive. One keyboard Enter action had already
-been sent before the foreground was identified and did not change the capture
-or status. Stop all further Deck input and do not manipulate Steam UI or the
-foreground game.
-
-For a bounded render/Proton comparison, the isolated Deck launcher was
-temporarily switched from Proton 11.0 to Proton 10.0 and launched through the
-existing Steam shortcut. Proton 10 logged DXVK and a Gamescope surface, but
-the capture still showed Assetto Corsa; the guest ASI had only startup/overlay
-logs and did not acknowledge a debug `status` request within 20 seconds.
-Only the exact isolated `DaysGone.exe` process was stopped. No Deck game,
-Proton runner, or crash-handler process remains. The launcher was restored to
-Proton 11.0, passed `bash -n`, and the temporary backup and X11 frame were
-removed. The Steam shortcut remains installed. The host is still running in
-its isolated test service; after the Deck process stopped, host receive rate
-fell to zero. No live game install or save was opened.
-
-This does not establish a Days Gone rendering defect: the available capture
-shows the other game in the foreground, and Deck game visibility is
-unresolved. Resume only after the Deck is confirmed available and the isolated
-Days Gone surface can be captured without disturbing the foreground session.
-The host's opening mission must also reach a stable state before `DebugBegin`
-can be used. No code changes or new enemy-replica conclusions follow from
-this attempt.
-
-### Run 1 safely paused (2026-10-24)
-
-With the Deck unavailable for further input and the guest process stopped,
-the host could no longer participate in paired testing. The isolated
-`theys-gone-run1-host.service` was stopped after its 32-minute run; systemd
-reported it inactive, and no test-copy `DaysGone.exe` or CRS crash-handler
-process remained. The last host state was the opening `CHASE DOWN LEON`
-mission/checkpoint (`active=0`, health 135, `mission=1`), with no debug actors.
-The host's copied files, prefix and test save remain in place.
-
-Both isolated game processes are now stopped. The temporary Steam shortcut,
-the corrected Deck Proton 11 launcher, test copies/prefixes, and transferred
-guest save sandbox remain staged. The Steam shortcut was not removed because
-the Deck's foreground belonged to another game; no further Deck input, Steam
-UI changes, or live-install/save changes were made. The remote-control
-services were left untouched. Continue only after the user confirms the Deck
-is available and the correct isolated Days Gone surface is visible.
-
-### Co-op Anything QA requirements for the next run (2026-10-25)
-
-Read the upstream
-[Co-op Anything `AGENTS.md`](https://github.com/cranebeaker/coop-anything/blob/main/AGENTS.md)
-and its automated-QA, bots/playbooks and multi-instance-testing guidance. The
-mod already exists, so the relevant path is to finish and verify that work.
-The QA bar is stricter than a successful launch or a visual impression:
-drive two real clients with an in-game bot, check both clients' shared state
-after each step, and report `PASS`, `FAIL`, `SKIP`, or `BLOCKED` honestly.
-If the adapter cannot perform a required step, the run is partial, never a
-pass. Use game-owned logs and in-game captures for evidence; desktop/Gamescope
-captures can show another app and must not be used to claim game state.
-
-The last Run 1 used `game_remote.py` key input to bootstrap the host tutorial
-and desktop captures to inspect the Deck. Those actions were exploratory setup
-only, not valid automated co-op QA. The Deck capture actually showed Assetto
-Corsa, confirming why desktop capture is unsuitable. For the next test, use
-the in-game debug mailbox/code for fixture setup and bot actions, gather
-per-client `status`/enemy probes and the `DMEN`/`DPOS` counters after each
-step, and add game-window/in-game capture only if it does not capture another
-application. `DebugBegin` is unavailable while the opening mission flag is
-set, so the scenario must start in an allowed world or explicitly report that
-fixture as blocked. Keep one test pair at a time, track exact process
-identities, and stop only the processes started by the run.
-
-## Run 1 startup retry: guarded title transition and Deck exit (2026-10-25)
-
-The retry was intended to get both isolated copies to a real gameplay state
-before continuing the production `DMEN`/`DPOS` QA. It did not reach that gate.
-The latest ASI was built with `make build`, installed only in the two isolated
-Run 1 game folders, and had SHA-256
-`832eef44d015b8192834d929e7aabefa5571884bc68a48c050788ab97e3a4c31`.
-Pre-test ASIs were preserved as `.pre-continue-title`, `.pre-title-splash`,
-and `.pre-button-animation` backups. `make test` passed (67 Python tests),
-and `git diff --check` passed.
-
-### Title-transition results
-
-- The first native `CloseTitleScreen` call returned through the mailbox but
-  did not visibly advance the game; the game-owned status and later diagnostic
-  capture still showed the startup prompt.
-- The guarded `continue-title` path was tightened to require a title widget
-  with `ShowButton`, `IsInViewport`, and visible state before attempting
-  `ButtonAnimation`. Otherwise it only acts on a visible main-menu Continue
-  row. Neither isolated copy satisfied either guard, so the latest command
-  refused safely on both. No button animation or Continue action was issued.
-- Latest host status remained `active=0 playerHealth=0 owned=0`; the host
-  never reached a gameplay pawn or test-ready world.
-- The Deck direct launch loaded the ASI and logged Steam readiness, then
-  exited with X11 `BadWindow` (`X_UnmapWindow`). This was not a successful
-  startup transition and provides no evidence about the replication path.
-
-### Process and report handling
-
-The Deck's named test unit had exited, and a check found no remaining isolated
-game or crash-handler process. The game crash reporter automatically uploaded
-a minidump and returned `Discarded=1`. This means a report was transmitted
-before the server response; do not describe it as “not uploaded.” The dump
-was not downloaded or copied. The host's named unit was stopped; systemd
-reported `Result=timeout`, `ExecMainStatus=15`, and no game process remained.
-The failed Deck unit state was reset after confirming it had exited; the
-process check remained empty.
-
-Do not launch either game again until automatic crash reporting can be
-disabled or the user explicitly approves a run that may transmit another
-report. Further startup-flow investigation should remain offline until then.
-No enemy appearance, hit, death, expiry, or guest-side `DMEN`/`DPOS` apply
-assertion was tested in this attempt. Desktop captures remain diagnostic only.
-
-A read-only inspection of the isolated Deck game copy and its
-`prefix-gamescope` found no explicit crash/report/telemetry upload toggle in
-the available INI files. The comment about the native API report in
-`TheysGone.ini` is unrelated and does not establish control over the game
-crash reporter. No launch was made to probe possible flags or settings.
-
-### Offline title-flow clue
-
-The existing Run B reflection dump contains these static definitions:
-
-- `UI_TitleScreenWidget_C` exposes Blueprint functions `ButtonAnimation` and
-  `CloseTitleScreen`, plus `ShowButton`.
-- `Debug_UXTesting_Screen_C` has a `UI_TitleScreenWidget` object property,
-  `HasPressedKeySinceStart`, `CanExit`, and timing fields; its `Tick` graph
-  references `WasInputKeyJustPressed` and `IsInputKeyDown`.
-- `BP_MissionManager_C` has a `Debug_UXTestingWidget` object property.
-
-This is a possible parent/child path for title input, not proof that the
-debug UX screen owns the active splash in the current startup state. The
-reflection dump describes classes, not live object ownership or viewport
-membership. The latest `continue-title` guard only accepts a title widget
-that is itself in the viewport, so it can miss a nested widget. Before
-changing that guard, a safe runtime diagnostic should report the live
-mission-manager/debug-screen/title-widget references, owner chain, viewport
-membership, visibility, `ShowButton`, and `HasPressedKeySinceStart` without
-calling input or transition functions. That diagnostic must wait until the
-crash-upload risk is addressed.
-
-### Isolated CRS upload suppression (2026-10-25)
-
-The isolated game copies contain `Engine/Binaries/ThirdParty/CRS` with
-`crs-handler.exe` and `crs-uploader.exe`. The handler's strings include the
-explicit `--no-uploads` option and the message “Cancelling report due to
-settings disabled uploads.” Both isolated Proton prefixes also contain
-`BendGame/Saved/Logs/CRS/settings.dat`.
-
-The 40-byte settings files had Crashpad magic `CPds`, version 1, and options
-word `1`. Crashpad's `Settings::SetUploadsEnabled(false)` clears bit 0 of
-that word. I backed up each original settings file and changed only that bit
-to zero; byte-for-byte comparisons confirmed all other bytes are unchanged:
-
-| Isolated copy | Original settings SHA-256 | Disabled settings SHA-256 | Backup |
-|---|---|---|---|
-| Deck `prefix-gamescope` | `42dd90101508d3b6331d36d8b80a01e9fb917d6081438d7e77864c0244907257` | `2da42106296c93ea8012a8617e1221f13b89c12b89f4602f61093ef2e84250b1` | `settings.dat.pre-no-uploads-20261025T0859` |
-| Host `prefix` | `d965b6339c24cc1e3a36f00f51b2454580635e6a44522f8bff19ce6d7af0964e` | `5edd21aba9afe6f84843a5ea43b02e9872b16ef077075c2814d58df992c6960a` | `settings.dat.pre-no-uploads-20261025T0859` |
-
-This is scoped to the two isolated prefixes; no live install, global firewall,
-or Steam networking setting was changed. The option was verified on disk but
-the following launch showed that it is not a reliable guard by itself.
-Do not launch either copy on the assumption that this setting remains off.
-
-References: [Crashpad `settings.h`](https://github.com/chromium/crashpad/blob/main/client/settings.h),
-[Crashpad `settings.cc`](https://github.com/chromium/crashpad/blob/main/client/settings.cc),
-and the [Days Gone CRS network-blocking guide](https://steamcommunity.com/sharedfiles/filedetails/?id=2490873667).
-
-### Safe display retry and CRS setting reset (2026-10-25)
-
-The Deck's current Steam Big Picture window is on Xwayland `:0`; the separate
-game display `:1` was empty. The prior direct launch used `:0`. A new
-isolated launch on `DISPLAY=:1` created a `Days Gone` window on `:1` and
-remained running for at least 25 seconds. This supports (but does not prove)
-that using the Steam UI display caused the earlier `BadWindow`.
-
-That launch also reset the Deck's `settings.dat` options word from `0` to
-`1` and started `crs-handler.exe` with a report-upload URL. I stopped the
-isolated game immediately, then terminated its only remaining
-`winedevice.exe` child by exact PID. The service is inactive and no
-`DaysGone.exe`/CRS process remains. The game did not crash in this short run;
-the queried service log had no CRS upload-status line, but outbound network
-traffic was not monitored, so no broader “nothing was transmitted” claim is
-possible. The previous Run 1 minidump upload remains the only confirmed report
-transmission.
-
-A user-level systemd unit accepted `IPAddressDeny=any` and allow-list
-properties, but a local-only test showed it did not enforce them: a client in
-the filtered unit successfully connected to a loopback listener on `::1`.
-`sudo -n` is unavailable, so no system-level firewall rule was added. Do not
-rely on the user-unit IP filter. The next entry records a Deck-only test with
-the handler and uploader absent from the isolated game copy. No crash was
-induced, so crash-report suppression itself remains untested.
-
-### Isolated Deck UI probe with CRS binaries disabled (2026-10-25)
-
-**Safety and setup.** Before relaunching, I preserved the Deck test copy's
-existing `TheysGone.asi` as
-`TheysGone.asi.before-ui-probe-20261025` (SHA-256
-`832eef44d015b8192834d929e7aabefa5571884bc68a48c050788ab97e3a4c31`) and
-installed the UI-probe build (SHA-256
-`e3627902a9b62764243051dbc2f8f63e37ac652755b03cc3ceab0aff2eaf46d9`).
-This was confined to `~/TheysGone-coop-test/run1/game`; the host and both
-live installs/saves were not touched. The isolated copy's
-`crs-handler.exe` and `crs-uploader.exe` remained renamed with the
-`.disabled-no-upload-20261025` suffix. The Deck game ran for over two minutes
-with no CRS process present and did not crash. This is a non-crash check that
-the game starts without those executables, not proof of behavior during a
-crash. Do not deliberately crash to test it.
-
-The in-game `ui-probe` mailbox command only reads object references, widget
-properties, and UMG getters; it does not call title-transition functions.
-At 09:26:08 CET it reported:
-
-```
-BP_MissionManager_C=0
-Debug_UXTesting_Screen_C=0
-UI_TitleScreenWidget_C=1
-UI_MainMenuWidget_C=0
-title ShowButton=true, Button=null
-viewport=false, visibility=collapsed, visible=false
-focus=false, hovered=false, owning player=null
-```
-
-The only `UI_TitleScreenWidget_C` object had the full path
-`...Debug_UXTesting_Screen.Debug_UXTesting_Screen_C.WidgetTree.UI_TitleScreenWidget`.
-That is the widget template inside the Blueprint class's `WidgetTree`, not a
-runtime screen. The `UI_TitleScreenWidget_C=1` census count must not be read
-as an active title screen. There was no manager, UX-testing screen, or main
-menu instance, so the guarded `continue-title` action was not invoked.
-`net-probe` nevertheless found the active world
-`/Game/Maps/ORWorld/ORWorld`, a local `BendDefaultPlayerController_C_0`,
-`PlayerState_0`, `BP_BendGameState_C_0`, and a navigation system; the
-world's `NetDriver` was null. The game's save guard routed its repeated
-`mainmenu.sav` writes to the isolated guest-save sandbox.
-
-**Display caveat and stop.** The read-only Gamescope screenshot showed a
-different game's “Winner Winner Chicken Dinner” result screen, not Days Gone.
-This means the compositor capture did not show the test process; it does not
-prove Days Gone failed to render. No Deck input or Steam UI action was sent.
-Because another game was in the foreground, I stopped only the isolated
-Days Gone unit and its exact remaining `winedevice.exe` child (PID 149016).
-The unit is inactive; no isolated Days Gone or CRS process remains. Do not
-touch the Deck or launch another run until the user confirms it is available.
-
-**Next at the time of this run.** Continue offline analysis. The UI transition
-was blocked by the absence of runtime menu/splash instances, not by the title
-guard. Do not run two-client enemy QA until both isolated copies reach
-gameplay; no `DMEN`/`DPOS` appearance, death, or expiry assertions were
-collected here.
-
-### Deck follow-up after availability confirmation (2026-10-25)
-
-After the user confirmed the Deck was available for another isolated
-diagnostic, I installed the final local build
-(`6315e1de8a3fae210f9d2ca3ea253f86e88b2602e9d820ee9901bb798e8b17bb`) in the
-isolated Deck copy, preserving the prior `e3627902...` build as
-`TheysGone.asi.before-ui-probe-final-20261025`. The handler and uploader
-remained absent from their original paths; no CRS process started.
-
-At 11:46 CET, `status` reported `active=0 playerHealth=0.000 owned=0`. The
-11:46 UI probe found one `BP_MissionManager_C`, but its
-`Debug_UXTestingWidget` reference was null; there were no
-`Debug_UXTesting_Screen_C` or `UI_MainMenuWidget_C` objects. The one
-`UI_TitleScreenWidget_C` remained the collapsed, unowned widget-tree template
-described above. No title transition or other in-game input was sent.
-
-The screenshot captured through the existing read-only remote helper showed
-Company of Heroes 2 in the Deck foreground, not the isolated Days Gone
-window. It cannot establish whether the hidden `:1` Days Gone window rendered.
-To avoid consuming resources or interfering with that foreground session, I
-stopped only the isolated Days Gone unit and its exact remaining
-`winedevice.exe` child (PID 150140). The unit is inactive with no Days Gone or
-CRS process. The final UI-probe ASI remains installed in the isolated copy;
-the old isolated ASI is backed up. The host, live game installs, and live
-saves were untouched.
-
-**Next at that point.** The Deck was still displaying another game. Do not
-change its focus or close it without explicit permission. No paired enemy
-replication assertions had been collected.
-
-### Foreground switch attempt after explicit permission (2026-10-25)
-
-The user explicitly authorized closing the currently displayed game and
-bringing the isolated Days Gone test forward. A bounded Alt+F4 closed the
-Company of Heroes 2 foreground; Steam then showed an old error dialog for the
-`Days-Gone-Coop-Test-Run-1` shortcut (“Game configuration unavailable”).
-I dismissed that test-shortcut dialog with Escape. The Steam page for the
-shortcut returned, and the direct isolated launcher started the Deck game on
-`:1` with the final UI-probe ASI. The CRS handler/uploader were still absent;
-no CRS process started.
-
-The Steam Deck compositor remained on its Steam launch/“Abort Game” screen
-for at least 30 seconds. Meanwhile the in-game probes ran successfully:
-
-- `status` at 13:50:38: `active=0 playerHealth=0.000 owned=0`.
-- `ui-probe` at 13:50:50: one mission manager, but
-  `Debug_UXTestingWidget=null`; no UX-testing screen; one title widget
-  template, collapsed and unowned; one main-menu widget in the viewport with
-  `visibility=self-hit-test-invisible`, `visible=true`, `focus=false`,
-  `hovered=false`, and the local Bend controller as owner. Its
-  `CursorPosition=0`, `MaxMenuOptions=0`, `MenuOptionNames_Text.num=0`, and
-  `ActiveTextFields` did not select `TextEntry0`. No title row was available.
-- `net-probe`: active ORWorld, GameMode/GameState, local controller and
-  PlayerState; `NetDriver=null`, and `PAWN: none`.
-
-The `:1` X11 tree contained a viewable “Days Gone” window, but activating
-that window did not make it visible in the Gamescope capture. The subsequent
-read-only screenshot showed Assetto Corsa rather than Days Gone. This shows a
-Steam/Gamescope foreground mismatch; it is not evidence about the rendered
-Days Gone window. No gameplay input was sent.
-
-To avoid leaving the test game consuming resources, I stopped only its
-isolated systemd unit and exact remaining `winedevice.exe` child (PID 151203).
-The unit is inactive; no Days Gone or CRS process remains. The foreground is
-now Assetto Corsa. At the end of that run, the user had approved closing
-Company of Heroes 2 but had not yet approved closing this newly displayed
-game; further focus or input changes required permission. The isolated final
-ASI remains installed, and the previous
-version is backed up. Host, live installs and live saves remain untouched.
-
-The next attempt and its current findings are recorded below.
-
-### Steam-launched foreground and menu retry (2026-10-25)
-
-After the user authorized closing Assetto Corsa and continuing, the Deck
-showed the Steam page for `Days-Gone-Coop-Test-Run-1` with its Play button.
-Pressing Enter started the isolated game through the shortcut, Proton 11.0,
-and the isolated prefix `~/TheysGone-coop-test/run1/prefix-gamescope`. Steam's
-`gameprocess_log.txt` recorded AppID 1259420 tracking the Proton and game
-processes (PIDs 152413 and 152503). The game's `:1` X11 window was active,
-named “Days Gone” (`steam_app_1259420`), and sized 1920x1080. The game process
-was responsive to all three debug commands and was using substantial CPU.
-
-Despite this, Gamescope screenshots at launch, after about 65 seconds, and
-again after roughly 2:40 showed Steam's loading/“Abort Game” screen rather
-than the game. The surface mismatch is therefore reproducible with a
-Steam-tracked process and an active X11 game window, not only with the earlier
-direct launch. This still does not distinguish a Gamescope presentation
-problem from a stalled/black game surface.
-
-`ui-probe` at 15:20:55 found one `BP_MissionManager_C` with
-`Debug_UXTestingWidget=null`, no `Debug_UXTesting_Screen_C`, and one title
-widget only as a collapsed, unowned Blueprint `WidgetTree` template. The
-template had `ShowButton=true` but `Button=null`. The runtime main-menu widget
-was in the viewport and visible but had no options (`MaxMenuOptions=0`,
-`MenuOptionNames_Text.num=0`, `mainPageActive=false`) and no focus. No title
-transition or gameplay input was attempted. `net-probe` at 15:20:59 found
-ORWorld, 76 world objects, zero NetDrivers, 247/3048 replicating actors, and
-no gameplay pawn. These results establish a UI/startup blocker; they are not
-enemy replication evidence.
-
-The game was stopped by sending SIGTERM only to its isolated executable PID
-152503; both Proton wrappers exited. No Days Gone or CRS process remained.
-Temporary debug scripts and remote captures were removed; the isolated CRS
-handler/uploader remained absent and no crash was induced. The user
-authorized this isolated run and closing Assetto Corsa. Host, live game
-installs, and live saves were untouched.
-
-**Mod-side UI trace.** The co-op title-menu hook does not clear or initialize
-the game's menu options. `MainUpdate` calls `MainInject` only when the main
-page is active; `MainInject` returns immediately when `MenuOptionNames_Text`
-is missing or empty, and otherwise only inserts the CO-OP row. The guarded
-`ContinueTitle` path also refuses an empty menu and requires the first row to
-be Continue. Since `mainPageActive=false`, options=0, and no title transition
-was requested, the latest empty menu is not explained by the co-op row
-injection or a `continue-title` action. Next analysis should focus on the
-game's own UI initialization and Steam/Gamescope surface presentation.
-
-**Next.** Investigate the Steam/Gamescope surface mismatch and why the
-runtime main-menu widget has no rows. Do not call `continue-title` without a
-real visible splash or an interactive Continue-first menu. Once both peers
-reach gameplay, resume the planned bot-driven paired `DMEN`/`DPOS` assertions;
-no production enemy-visual code change is justified by this startup result.
-
-### Desktop Mode and required-runtime comparison (2026-10-25)
-
-At 15:26 the user reported switching the Deck to Desktop Mode. Read-only
-session inspection confirmed KDE Wayland, `DISPLAY=:0`,
-`WAYLAND_DISPLAY=wayland-0`, and no Gamescope compositor. The existing remote
-helper service retained `WAYLAND_DISPLAY=gamescope-0`; it must not be used
-as the desktop screenshot source without reconfiguration. Spectacle launched
-through the user systemd manager captured the actual KDE desktop correctly.
-
-The unchanged isolated launcher was started in the current desktop
-environment as `theys-gone-run1-desktop-20261025.service`. Desktop captures
-showed a black fullscreen game surface. The game thread remained responsive:
-`status` at 15:28:53 reported `active=0 playerHealth=0 owned=0`. A later
-`ui-probe` at 15:29:37 found the same empty runtime main-menu widget
-(`max=0`, options=0, `mainPageActive=false`) and the unowned title-widget
-template; no real title splash was present.
-
-The launch journal exposed a concrete environment defect: Proton's
-GStreamer plugins could not load `libvpx.so.9`, `libtheoradec.so.1`, and
-`libnettle.so.8`. The installed Proton 11 `toolmanifest.vdf` requires AppID
-4183110, verified against its installed app manifest as Steam Linux Runtime
-4. The isolated launcher directly executes Proton and does not enter that
-runtime itself.
-
-After stopping the first test unit, a second controlled run used the same
-launcher, game, mod, and prefix, wrapped in the installed runtime's
-`_v2-entry-point --verb=waitforexitandrun --`. No packages were installed and
-the launcher was not edited. The multimedia plugin warnings disappeared
-from this run's journal. A capture after about 75 seconds showed the game's
-loading icon at the lower right, establishing some rendered game output
-through the KDE capture path. A later capture was black again. At 15:34:26,
-`ui-probe` still found a visible main-menu widget with zero options and no
-focus; `status` remained inactive with no gameplay pawn. This comparison
-does not establish the missing multimedia libraries as the startup blocker.
-Both variants also reported a failed prefix copy of `amdxcffx64.dll`, whose
-significance remains unknown.
-
-Both desktop test units were stopped, and an exact process-name check found
-no Days Gone or CRS handler/uploader. Remote temporary helpers and captures
-were removed; private session copies of logs and captures preserve the
-comparison. The isolated CRS binaries remained disabled. No title action,
-gameplay input, multiplayer connection, or deliberate crash was attempted.
-Host and live installs/saves were untouched.
-
-### Isolated no-ASI baseline reaches Initial Setup (2026-10-25)
-
-The user authorized the comparison ("do what you must, make it work").
-The prefix's resolved BendGame Saved path remained inside the isolated test
-tree, with no symlinks found within it. Its 96 KiB contents were backed up to
-`run1/Saved.before-no-asi-20261025`. Only `TheysGone.asi` was temporarily
-renamed; the `version.dll` loader remained present. The same game, prefix,
-launcher, Desktop Mode, and Steam Linux Runtime 4 wrapper were used.
-
-The run started at 16:15:49. At about 100 seconds, Spectacle captured a real
-Initial Setup screen with audio, gameplay, display, subtitle settings, and
-an Escape/Close prompt. At 145 seconds, most labels were no longer visible,
-though the selected speaker value and Close prompt remained. No input was
-sent, so this proves a first-run setup screen can render without the ASI,
-not that the main menu or gameplay works. It is evidence for investigating
-mod startup/profile handling, not a complete identification of the cause.
-
-The bounded test stopped its own unit and restored the ASI automatically.
-Its SHA-256 was rechecked as
-`6315e1de8a3fae210f9d2ca3ea253f86e88b2602e9d820ee9901bb798e8b17bb`;
-no Days Gone or CRS process remained. The mod log timestamp stayed at
-15:34:47, consistent with the ASI not loading during this run.
-
-### Initial Setup completed; mod-enabled main menu restored (2026-10-25)
-
-A second no-ASI run used the same isolated prefix and required runtime,
-with a ten-minute automatic lifetime bound. The ASI was restored on disk
-after startup; its unchanged log timestamp confirmed it was not loaded in
-that already-running baseline process. Escape closed the confirmed Initial
-Setup screen, exposing a real Days Gone "Press Any Key" title splash. Enter
-on that visible splash opened the game's first-run Game Data Collection
-prompt. The user explicitly selected Limited Data; Escape selected that
-displayed option. The resulting native menu visibly contained NEW GAME,
-CHALLENGES, OPTIONS, and QUIT TO DESKTOP. No new game was started.
-
-After stopping that baseline, the initialized prefix Saved tree was backed
-up as `run1/Saved.initial-setup-complete-20261025`. The same ASI was restored
-and hash-checked, and the mod-enabled run restarted under Steam Linux Runtime
-4. It now displayed a real title splash. Enter on that confirmed splash
-opened the main menu, and `ui-probe` at 16:25:55 reported `max=5`, options=5,
-`mainPageActive=true`, and firstLabel=NEW GAME. The log showed the four native
-rows and insertion of CO-OP at row 3; the desktop screenshot confirmed all
-five rows. `status` remained inactive with no pawn because gameplay had not
-been started.
-
-This operationally resolves the Deck startup/menu blocker with an initialized
-isolated profile and the required runtime. It does not by itself prove the
-specific save-guard mechanism responsible for the original first-run failure.
-Source inspection found guest startup enables the sandbox before gameplay,
-and wildcard listings before host-save adoption enumerate the original
-folder rather than new sandbox-only files; that is a candidate first-run
-interaction, not yet a reproduced root cause or justification for a code fix.
-
-The isolated Deck launcher was then persistently updated to enter the
-installed Steam Linux Runtime 4 before invoking Proton 11. Its original is
-preserved as `launch-deck-test.sh.before-runtime4-20261025`; local and remote
-`bash -n` passed. New launcher SHA-256:
-`dc3a9cf42f9676303ed4b5e2c587ca4e56f41c74462bb503f05250c6e4a96a53`.
-No game source, ASI, packages, live install, or live saves were changed.
-The successful mod-enabled test unit was stopped, with no game or CRS process
-remaining. The host was reachable and had no Days Gone process; its isolated
-prefix contains a staged autosave.
-
-**Next.** Smoke-test the persistent launcher directly, bring the isolated
-host into gameplay, and then use the existing production transport and
-host-save transfer to get the guest into gameplay. NEW GAME is currently
-the Deck's first row: do not invoke `continue-title` on it. Multiplayer
-enemy receive/apply assertions remain untested.
+The production enemy appearance, death pose and timeout behavior were
+unverified live at the time (see the 2026-10-25 live-save fixture).
+
+No visual corpse correctness is claimed. Restored both installs against the
+pre-K manifests; hashes verified, and no new crash dump. Evidence
+(`runO-host-*`, `runO-deck-*`, including paired death and cleanup probes and
+notification traces) is kept outside the repo.
+
+## Steam Deck isolated Run 1 bootstrap (2026-10-24/25, summary)
+
+Both installs were copied to isolated `run1` test directories (excluding
+`BendGame/Saved/`), each with its own Proton prefix; each copied executable
+matched build SHA-256 `17c2fca0…37730b3`. Test INIs used `Transport=udp`,
+port 27777, `SyncEnemies=1`, `Discovery=1`, `DebugTools=1` and `HostSave=1`.
+ASIs across these attempts: `4eb28055…`, `832eef44…`, `e3627902…` (UI probe)
+and `6315e1de…`. Live installs and saves were not modified, and only
+processes started by each run were stopped.
+
+- **Launch.** Direct Proton launches need
+  `WINEDLLOVERRIDES=version=native,builtin` (exit 53 without it). On the Deck,
+  Proton 11 always reported a failed copy of `amdxcffx64.dll` into the prefix;
+  the game ran anyway and the significance is unknown. A direct launch on
+  `DISPLAY=:0` (the Steam UI display) exited with X11 `BadWindow`
+  (`X_UnmapWindow`); `DISPLAY=:1` created the game window.
+- **First host DMEN/DPOS send (2026-10-24).** The guest connected and
+  installed host snapshot `81a5efc1` (3 files, 225,546 bytes) under
+  `TheysGone-guest-saves`. During the host's opening mission the host log
+  reported `perf: enemies streamed=4` with nonzero `DMEN` and `DPOS` send
+  rates (peaks 107.9 pose packets/s and 3.4 appearance infos/s;
+  `leon_head_standard` and crows). The guest had no `perf: enemies` line and
+  no replica application, so this verified host collection/transmission only.
+  `DebugBegin` correctly refused the opening-mission state.
+- **Captures.** Deck captures repeatedly showed other applications or the
+  Steam launch screen instead of the test copy (see the focus gotcha under
+  Run F); none is used as evidence.
+- **Crash-report upload risk (2026-10-25).** The Deck's game crash reporter
+  automatically uploaded a minidump and returned `Discarded=1`, so a report
+  was transmitted. `crs-handler.exe` (`Engine/Binaries/ThirdParty/CRS`)
+  supports `--no-uploads`, and `BendGame/Saved/Logs/CRS/settings.dat` is a
+  Crashpad settings file (magic `CPds`, version 1, options bit 0 = uploads
+  enabled). Clearing that bit (Deck `42dd9010…` → `2da42106…`, host
+  `d965b633…` → `5edd21ab…`) did not hold: the next launch reset it to 1 and
+  started the handler with an upload URL. The working guard was renaming
+  `crs-handler.exe` and `crs-uploader.exe` in the isolated copies
+  (`.disabled-no-upload-20261025`); the game runs without them (a non-crash
+  check only). References: [Crashpad `settings.h`](https://github.com/chromium/crashpad/blob/main/client/settings.h),
+  [`settings.cc`](https://github.com/chromium/crashpad/blob/main/client/settings.cc),
+  [Days Gone CRS network-blocking guide](https://steamcommunity.com/sharedfiles/filedetails/?id=2490873667).
+  A user-level systemd `IPAddressDeny=any` filter was accepted but not
+  enforced, so it is not a guard.
+- **Empty main menu.** With the mod, the Deck reached `ORWorld` with a
+  runtime `UI_MainMenuWidget_C` that had no options (`MaxMenuOptions=0`,
+  `mainPageActive=false`) and no gameplay pawn. The only
+  `UI_TitleScreenWidget_C` was the collapsed template in
+  `Debug_UXTesting_Screen_C`'s `WidgetTree`, not a runtime screen, so the
+  UX-testing-screen clue was a dead end. The mod's CO-OP row injection and
+  the guarded `continue-title` neither clear nor create menu rows.
+- **Steam Linux Runtime 4 requirement.** Proton 11's `toolmanifest.vdf`
+  requires AppID 4183110 (Steam Linux Runtime 4), but the isolated launcher
+  ran Proton directly. Wrapping it in the runtime's
+  `_v2-entry-point --verb=waitforexitandrun --` removed missing
+  multimedia-library warnings but did not by itself fix the menu.
+- **Initialized-profile requirement.** A no-ASI baseline (same prefix and
+  runtime, Desktop Mode) rendered the first-run Initial Setup screen about
+  100 s after its 16:15:49 start. Completing Initial Setup and the Game Data
+  Collection prompt (the user chose Limited Data) gave the native NEW GAME /
+  CHALLENGES / OPTIONS / QUIT TO DESKTOP menu. With that initialized profile
+  the mod-enabled run under Runtime 4 showed a real title splash, and
+  `ui-probe` at 16:25:55 reported `max=5`, `mainPageActive=true` and first
+  label NEW GAME, with CO-OP inserted at row 3. The Deck launcher was then
+  changed to enter Runtime 4 (SHA-256
+  `dc3a9cf42f9676303ed4b5e2c587ca4e56f41c74462bb503f05250c6e4a96a53`).
+- **Startup root cause.** The blocker is resolved operationally by an
+  initialized profile plus Steam Linux Runtime 4. The exact first-run
+  mechanism is not proven; a candidate is the guest save sandbox being
+  enabled before gameplay while pre-adoption wildcard listings enumerate the
+  original folder.
 
 ### Paired production load and fresh-guest menu failure (2026-10-25)
 
@@ -2679,7 +1779,7 @@ the host's opening-mission bike state: it requires a settled living pawn on
 foot. The mission restriction also remains intact. No guard was bypassed and
 no owned-enemy spawn/hit/death test ran. Desktop captures were setup
 diagnostics only, not the automated co-op oracle. Both exact test units were
-stopped, with no DaysGone.exe left, and paired logs preserved privately.
+stopped, with no DaysGone.exe left, and paired logs kept outside the repo.
 
 **Refresh investigation:** the runtime reflection dump identifies
 `UI_MainMenuWidget_C.RecheckSaves()` with zero parameters. Adoption previously
@@ -2734,14 +1834,6 @@ removed from source, rather than shipping an invocation-only false fix.
 Only the diagnostic cached/fresh-query logging remains. The Continue-first
 guard, mission fixture gate, original guest saves, and live installs/saves
 were preserved. Final source build and all regression tests passed again.
-Snyk integration was not available through tool discovery; no scan is claimed.
-
-**Next:** identify the actual native menu reconstruction path without
-replaying unrelated lifecycle events or inventing menu labels. Test the exact
-late-adoption five-to-seven-row transition and one CO-OP row, then guarded
-Continue and an adopted load. Controlled enemy hit/death/expiry assertions
-still require a verified on-foot/non-mission fixture; observed pose-apply and
-expiry logs alone are not that pass.
 
 ### Late-adoption title menu rebuild: PASS (2026-10-25)
 
@@ -2794,14 +1886,10 @@ now also lists the instance and default text arrays of the main menu.
 `make build` and `make test` (67 tests) passed. Live installs and saves
 were not touched.
 
-**Still open:** controlled enemy hit/death QA needs an on-foot, non-mission
-fixture. The host's Continue lands in the opening bike mission, which the
-`begin` gate correctly refuses.
-
 ## Live-save fixture: enemy, story and reconnect QA: PASS (2026-10-25)
 
-**Fixture.** With the user's permission, the isolated host SaveGames on host-pc
-was replaced by a copy of the live host-account saves (autosave01–05,
+**Fixture.** With the user's permission, the isolated host SaveGames on the
+host PC was replaced by a copy of the host account's live saves (autosave01–05,
 checkpoint, missionstart, profile, slot01, slot02). The previous isolated
 opening saves are kept as `run1/SaveGames.host-opening-20261025`, and the
 live copy as `run1/SaveGames.live-host-copy-20261025`. The live install and
@@ -2842,7 +1930,7 @@ guest teleported back to the host at 17:59:15. Health was 121.875 and the
 signature was back to `6071903c`. The whole resync took about 26 s with no input.
 
 **Reconnect.** At 18:00:54 the guest unit was stopped while the host kept
-running. The host logged "DrSkunk disconnected" and removed the guest
+running. The host logged the guest's disconnect and removed the guest
 stand-in. A fresh guest launch adopted the host save at 18:02:05 (before the
 menu). The menu was `CONTINUE | LOAD GAME | NEW GAME | CHALLENGES | OPTIONS |
 CO-OP | QUIT TO DESKTOP`. Continue loaded the host save at 18:02:55 and
@@ -2855,12 +1943,9 @@ again, with health 121.875 and signature `6071903c`.
 identical to `run1/SaveGames.before-host-bootstrap-20261025`. The isolated
 host SaveGames still holds the live-save fixture.
 
-**Still open:**
-- The visual fidelity of enemy death on the guest (ragdoll versus frozen
-  corpse pose). It was not checked visually; logs only show the corpse pose
-  streaming until host cleanup.
-- Mission start/complete sync during play.
-- World interactions and pickups.
+Not verified here: the visual fidelity of enemy death on the guest (logs
+only show the corpse pose streaming until host cleanup; see the next
+section). Mission sync and interactions are covered by later sections.
 
 ## Enemy pack replication and death-pose observation (2026-10-25)
 
@@ -2914,7 +1999,7 @@ helper changed the visible prompt to an Xbox-style X, and its keyboard W input
 moved the guest about 1 m, confirming those input events reached gameplay.
 
 On the guest, `ride-test` spawned the native interact actor and set its label
-to `Ride with host-account`. Neither controller X nor keyboard E produced an
+to `Ride with <host>`. Neither controller X nor keyboard E produced an
 `OnInputSucceeded`/`interaction completed` event, even after moving toward the
 prompt. The screenshot showed no active interaction hint, so the probe may
 still have been outside the actor's interaction range. This is not a pass or
@@ -2934,7 +2019,7 @@ showed the E prompt, and pressing E logged both `interaction completed` and
 it does not verify production passenger boarding.
 
 For the production path, the host mounted its bike and the guest visibly showed
-`Ride with host-account` with an E prompt. Pressing E did not produce
+`Ride with <host>` with an E prompt. Pressing E did not produce
 `OnInputSucceeded`, `ride prompt: interaction completed`, or a passenger
 boarding log. A three-second guest `ProcessEvent` trace recorded 229 unique
 calls. The custom actor's `InteractComponentHandler` returned
@@ -2951,10 +2036,8 @@ and its isolated SaveGames compare identical to
 `run1/SaveGames.before-host-bootstrap-20261025`. The guest log and trace are
 archived as `run1/logs/guest-passenger-interaction.log` and
 `run1/logs/guest-passenger-interaction-trace-20261025.txt`. The host's debug
-save gate was ended through `tools/re/rssh` using the documented target
-`user@host-pc`; the command acknowledged successfully and the isolated
-host unit is inactive. Its log is archived as
-`run1/logs/host-passenger-interaction.log`.
+save gate was ended, the isolated host unit is inactive, and its log is
+archived as `run1/logs/host-passenger-interaction.log`.
 
 ### Follow-up: production passenger boarding and bike follow (2026-10-25)
 
@@ -2967,7 +2050,7 @@ both clients into the same on-foot open-world area; the host's `begin` gate
 accepted the state and later restored its original damage/saving settings.
 
 The host mounted the parked bike. The guest spawned the production native
-interaction labeled `Ride with host-account`. An initial E press did not
+interaction labeled `Ride with <host>`. An initial E press did not
 complete because the guest was not yet overlapping the prompt actor. After
 moving closer, the guest trace recorded
 `BP_BasicInteractBase_C.ReceiveActorBeginOverlapComponent` and
@@ -3003,7 +2086,7 @@ interaction trace is
 
 ## Live mission lab: observe and drive job transitions (2026-10-26)
 
-**Setup.** Host PC `host-pc`, isolated game copy, live-save fixture (story
+**Setup.** Host PC, isolated game copy, live-save fixture (story
 signature `6071903c`, episode 2, tracked `IND-JobData` at objective 5,
 "Locate sterile bandages"). Saves were backed up to
 `SaveGames.host-before-20261026-missionlab` and restored afterwards, because the
@@ -3033,8 +2116,8 @@ After adding objective indices to the story hash, the host-only live check
 reported signature `efeda779` at IND objective 5. Calling
 `MedBoxObtained` advanced it to objective 6, triggered a save, and changed the
 reported signature to `94993472`. This verifies host-side detection and
-persisted-signature capture; the guest's save-resync reaction still needs a
-paired test.
+persisted-signature capture; the paired save-resync reaction is validated
+below.
 
 **Observation limits.** With `mission-watch-on` active through the whole
 transition, the ProcessEvent filter logged **zero** mission calls. The
@@ -3079,30 +2162,19 @@ The isolated host ASI, INI and saves were restored and compared with the
 pre-test backup.
 
 **Implications for mission sync.**
-- Host side: `ReadStory` now includes each job's objective index in the
-  signature and the identifier/index/state of current objectives in active
-  jobs. The host's periodic `DMST` packet is version 3 and sequenced; the
-  guest rejects duplicate/stale sequence numbers. Both peers need this version.
-  When a transition is saved,
-  the existing six-second reconciliation detects the objective-aware saved
-  signature and reloads the host save. This is save-backed synchronization,
-  not immediate direct application; the paired `DMOB` test below validates
-  one immediate completed-objective transition, but not save-resync fallback.
-- Guest side: the job scripts expose the generic, Blueprint-callable primitives
+- `ReadStory` now includes each job's objective index and the
+  identifier/index/state of active jobs' current objectives; the host's
+  periodic `DMST` packet is version 3 and sequenced (stale or duplicate
+  numbers are rejected). A saved transition is caught by the six-second
+  reconciliation, which reloads the host save: save-backed, not immediate.
+- Job scripts expose the Blueprint-callable primitives
   `UpdateJobObjectiveStatusAndProgression(Name ObjIdentifier, Byte ObjState)`,
   `GoBackToJobObjectiveStage(Int)`, `CompleteTheJob` and `FailTheJob`, plus
-  `BP_JobManager_C.StartJobAtID`/`UnlockJobAtID`. `CompleteTheJob` is verified
-  for a full job transition. The generic objective updater is verified for
-  state 2 with the real ID `IND3`; the paired test below also verifies the
-  opt-in guest application path for that completed state.
-- Offline implementation: opt-in `MissionObjectiveSync=1` sends uniquely
-  identified completed objectives in sequenced `DMOB` v1 packets every 3 s.
-  The guest queues fresh packets and applies them only after the host save is
-  adopted and gameplay is ready, using `GetObjectiveState` and the verified
-  idempotent updater. The fake peer decodes and observes these packets. Save
-  resync remains the fallback for unavailable jobs, ambiguous IDs, job
-  start/completion (validated below) and failed applications. This path is disabled by default
-  and must be enabled on both peers.
+  `BP_JobManager_C.StartJobAtID`/`UnlockJobAtID`.
+- Opt-in `MissionObjectiveSync=1` (default off, both peers) sends completed
+  objectives in sequenced `DMOB` v1 packets every 3 s; the guest applies them
+  after host-save adoption with `GetObjectiveState` and the idempotent
+  updater, with save resync as the fallback.
 - **Host-only packet validation (2026-10-26).** Deployed build
   `7a8e81fb567b606dd34892935add89e173690c099b2db0eba0b5a91c81ee4a72` to the
   isolated host copy and enabled the option only in its test INI. In gameplay,
@@ -3232,9 +2304,6 @@ pre-test backup.
   `before-save-slot-trace-20261027-0904` backup. Final logs, mission reports
   and save artifacts remain under `after-save-slot-trace-20261027-0904/` on
   each machine.
-- Next: exercise additional campaign transitions and an objective retry at
-  normal update rates, preserving the paired state assertions. Keep
-  `MissionObjectiveSync` default-off and opt-in on both peers.
 
 **Tooling fixes found during the run.** `Parameters()` printed Blueprint
 locals that lie past `ParmsSize`, which read outside the caller's buffer; it
@@ -3252,7 +2321,7 @@ The same build was staged on both isolated clients after creating fresh
 rollback copies. Crash-handler and uploader executables remained disabled in
 the isolated game copies. No live install or save was accessed.
 
-**Host baseline.** Host-PC loaded the isolated on-foot fixture. Its first menu
+**Host baseline.** The host loaded the isolated on-foot fixture. Its first menu
 row was verified as `CONTINUE`; the in-game Continue command loaded story
 signature `fa97ef49` with player health 121.875.
 
@@ -3280,18 +2349,10 @@ with no runtime main menu or visible Continue row. No host was running and no
 story action was issued. That diagnostic was also archived, and the Deck
 state was restored and hash-checked against the same backup.
 
-**Next.** Resolve the Deck's missing runtime menu on the isolated prefix, then
-repeat the paired objective-retry scenario. Do not change resync logic based
-on this startup blocker; the test never reached a guest story load or host
-objective mutation.
-
 ## Independent roaming: native streaming path (2026-10-27)
 
-**Target.** The user clarified that complete gameplay integration and an
-independently roaming second player take priority, including targeted
-decompilation where needed. Neither a visible partner nor nearby enemy
-replication proves that foundation. This does not yet select a replacement
-transport or prove the research native-network path is production-ready.
+**Question.** What would an independently roaming second player need beyond
+the existing close-range partner and enemy streaming?
 
 **Current production limitations established from source.**
 
@@ -3305,7 +2366,7 @@ transport or prove the research native-network path is production-ready.
 - Consequently, passing the existing close-range enemy tests must not be
   described as independent-world simulation or unrestricted free roam.
 
-**Read-only native analysis.** Used Host-PC's isolated
+**Read-only native analysis.** Used the host PC's isolated
 `run1/game/BendGame/Binaries/Win64/DaysGone.exe` and retained
 `precopy-artifacts/TheysGone-reflection.txt`. The executable SHA-256 matched
 the supported build:
@@ -3348,8 +2409,8 @@ remain separate validation tasks.
 ## Free roam: dual-focus streaming and regional enemy authority (2026-10-27)
 
 **Result: PASS for separation, guest-region simulation, reunion handover and
-death recovery on the isolated Host-PC host / Steam Deck guest fixture.** Opt-in
-with `FreeRoam=1` on both peers; protocol v7.
+death recovery on the isolated host PC / Steam Deck guest fixture.** Opt-in
+with `FreeRoam=1` on both peers; protocol v7 at the time.
 
 ### Native dual-focus streaming hook
 
@@ -3414,7 +2475,7 @@ then timed out after 5 s. The flag mask now includes `kSeparated`, the
 protocol version was bumped to 7, and a regression test covers both the
 round-trip and rejection of unknown bit 11.
 
-### Paired live evidence (Host-PC host, Deck guest, `move-by` relocation)
+### Paired live evidence (host PC, Steam Deck guest, `move-by` relocation)
 
 - **Separation.**
   - At 1200 m and 401 m the host logged "players separated", and kept 43
@@ -3454,26 +2515,21 @@ round-trip and rejection of unknown bit 11.
 
 ### Open limitations
 
-- Guest-region enemies are replicas on the host, not host-controlled AI;
-  health, AI and combat remain guest-authoritative. Since protocol v8 (see
-  the gradual handoff below), host hits on them are sent to the guest and
-  applied there, and the guest keeps enemies that are still fighting through a
-  reunion instead of despawning them. Protocol v9 adds a guest-side host
-  proxy so those enemies can target the host; paired validation is still
-  pending. The host still cannot directly redirect guest-owned AI.
-- Mission interactions, pickups and world state changed in the guest's region
-  are not yet host-authoritative while separated.
-- Frame-time peaks of about 600–800 ms appear on both sides while paired.
-  They predate separation, so free roam is not the cause, but they are
-  unexplained.
+At the time (protocol v7), guest-region enemies were replicas on the host,
+with health, AI and combat guest-authoritative; the gradual handoff below
+(protocol v8/v9) changed hit routing. The 600–800 ms frame peaks seen while
+paired predate free roam and were later largely removed (see "Paired mission
+copies, frame peaks and save reloads"). Open items: see
+[COOP-ROADMAP.md](COOP-ROADMAP.md).
 
 ## Gradual enemy ownership handoff (2026-10-27)
 
-**Result: PASS for protocol-v8 handoff in both directions on the Host-PC host /
-Steam Deck guest fixture.** Protocol v9 adds a guest-side host proxy; its
-enemy-retarget and damage path is not yet paired-validated. The design follows
-Multivoid and SifuCoop: each enemy has one owner at a time, and ownership
-changes gradually.
+**Result: PASS for protocol-v8 handoff in both directions on the host PC /
+Steam Deck guest fixture.** At the time, protocol v9 added a guest-side host
+proxy whose retarget and damage path was not paired-validated (see the
+2026-10-30 second attempt, also inconclusive). The design follows Multivoid
+and SifuCoop: each enemy has one owner at a time, and ownership changes
+gradually.
 
 ### Design
 
@@ -3497,9 +2553,9 @@ changes gradually.
   the calm clock also waits while it is absent.
 - **Guest-side host proxy (protocol v9).** While the guest keeps enemies
   through a reunion, it spawns an AI-less pawn at the host avatar and makes
-  nearby guest-owned enemies aware of it. `DMPX` strikes are now accepted by
-  either player's owner. This remains experimental until a paired test
-  confirms retargeting and host health changes.
+  nearby guest-owned enemies aware of it. `DMPX` strikes are accepted by
+  either player's owner. Experimental at the time; see the 2026-10-30
+  second attempt.
 
 ### Paired live evidence
 
@@ -3521,8 +2577,8 @@ changes gradually.
   away 299 m, spawned 8 Swarmers, then regrouped. It kept 8 of 10 sources
   (the two uninvolved sources were not kept); cleanup released all 8 and
   completed the handoff. A subsequent host hit was correctly rejected at
-  292 m. Test logs are archived under each machine's
-  `TheysGone-coop-test/run1/handoff-*-regroup-final-20261027.log`.
+  292 m. Test logs are archived outside the repo
+  (`handoff-*-regroup-final-20261027.log`).
 - **Protocol-v9 guest-proxy attempt (inconclusive).** The guest spawned 8
   debug Swarmers, but they never entered the streamed enemy-source list: the
   host received no replicas, and reunion logged `0 sources`. With no kept
@@ -3530,17 +2586,13 @@ changes gradually.
   result is claimed. A valid retry must first confirm streamed sources and
   host replicas, then keep the guest alive through reunion and verify both
   proxy targeting and a host health change. Logs are archived outside the
-  repository as `TheysGone-coop-test/run1/v9-guest-proxy-attempt-host.log` and
-  `TheysGone-coop-test/run1/v9-guest-proxy-attempt-deck.log`.
+  repo (`v9-guest-proxy-attempt-{host,deck}.log`).
 
 ### Limitations
 
-- Protocol-v9 proxy retargeting and damage to the host remain unverified in a
-  paired live test.
-- `GetCurrentTargetPawn` may not exist on every controller; such enemies are
-  never kept.
-- Identities are not carried over at release; the new owner's own AI takes
-  over.
+`GetCurrentTargetPawn` may not exist on every controller, and such enemies are
+never kept; identities are not carried over at release, so the new owner's
+own AI takes over. Open items: see [COOP-ROADMAP.md](COOP-ROADMAP.md).
 
 ## Story mission catalog (2026-10-27, single PC, read-only)
 
@@ -3620,7 +2672,7 @@ dismount) needs a second game; it uses the existing permission-removal path.
 
 ### Passenger seat in a paired session on one PC (2026-10-28)
 
-Two games on host-pc, each a disposable reflink clone of `run1` in its own
+Two games on the host PC, each a disposable reflink clone of `run1` in its own
 headless gamescope (`tools/lab/lab.sh`, introduced with the test lab). The
 host used the desktop Steam client; the guest ran in a bubblewrap sandbox
 with a second Steam client signed in to another account. They paired over
@@ -3647,8 +2699,8 @@ aace70ce differs from ours fa97ef49; fetching the host's save`, reloaded,
 and reported `mission: active 'OBR'`. *Correction (2026-10-29):* the
 screenshots taken as the guest's were captures of the host, and later paired
 runs showed that the mission does not start on the guest (no mission script;
-its start fade stays black). There is no second copy of the mission. Logs and screenshots are in
-`~/TheysGone-lab/archive/paired-seat-20261028/` on host-pc.
+its start fade stays black). There is no second copy of the mission. Logs and
+screenshots are archived outside the repo (`<archive>/paired-seat-20261028/`).
 
 Not tested: a mission whose pillion character joins mid-mission (Lisa in
 `RBC`), the guest-side policy (the guest applied the same flags, but only the
@@ -3661,8 +2713,8 @@ missions? Every 0.5 s the host calls `SetAwarenessOfPawn(stand-in, 1)` and
 `SetFactionValueOfPawn` for streamed hostile AI within 40 m that is nearer
 the partner than the host, whether or not anyone has been seen.
 
-Setup: lab pair (host on the desktop Steam, guest in the `sandbox-account`
-sandbox, UDP over loopback), fresh clones per run. The host started `AON1`
+Setup: lab pair (host on the desktop Steam, guest in the sandbox Steam
+account, UDP over loopback), fresh clones per run. The host started `AON1`
 (*I Kept My Name*, Ripper compound, detection fails the checkpoint) with
 `StartMissionFromID 59`; the guest followed through the mission-start save
 and stood about 3 m from the host. Neither player moved after the escape
@@ -3677,9 +2729,8 @@ In the control run nine Rippers hunted the invisible stand-in for over a
 minute although nobody had been seen. Within that window neither player left
 the starting room, and the host's checkpoint did not reload. With the fix,
 enemies in `kMissionStealth` missions are only told about the stand-in once
-they already have a target. Logs and screenshots are in
-`~/TheysGone-lab/archive/stealth-control-20261028/` and
-`~/TheysGone-lab/archive/stealth-fix-20261028/` on host-pc.
+they already have a target. Logs and screenshots are archived outside the
+repo (`<archive>/stealth-control-20261028/`, `<archive>/stealth-fix-20261028/`).
 
 Not tested: a full mission failure caused by the stand-in (the control run
 shows alerted enemies, not the fail screen); enemies that are already
@@ -3688,14 +2739,10 @@ native sight of the stand-in, which the fix does not change.
 
 ### Partner avatar during mission cutscenes (2026-10-28, paired, one PC; inconclusive)
 
-The host started `OBR`; the guest followed through the mission-start save
-(mission active 19 s after the host's). Twelve screenshot pairs, 4 s apart,
-were taken during the intro cutscene, but a later hash comparison showed that
-the lab's `shot` command captured the **host** for both instances:
-`gamescopectl` uses `GAMESCOPE_WAYLAND_DISPLAY` (default `gamescope-0`), not
-`WAYLAND_DISPLAY`. The host's 24 frames show no second Deacon, which says
-nothing about what the guest saw. The mod does not hide the partner avatar
-during cinematics; whether it shows up in a cutscene remains untested.
+INCONCLUSIVE: all twelve intro-cutscene screenshot pairs captured the host
+(see "Lab corrections" below), so they say nothing about the guest's view.
+The mod does not hide the partner avatar during cinematics; whether it shows
+in a cutscene remains untested.
 
 ## Paired mission copies, frame peaks and save reloads (2026-10-28/29, paired, one PC)
 
@@ -3738,8 +2785,8 @@ known.
 captures of the host (`gamescopectl` reads `GAMESCOPE_WAYLAND_DISPLAY`), and
 after a reboot the desktop Steam client signed in to the sandbox's account,
 which left the host without Continue; both are fixed in `tools/lab/lab.sh`.
-Logs and screenshots: `~/TheysGone-lab/archive/sync-20261028-1139/`,
-`sync-20261029-2054/` and `reload-loop-20261028/` on host-pc.
+Logs and screenshots are archived outside the repo (`sync-20261028-1139/`,
+`sync-20261029-2054/`, `reload-loop-20261028/`).
 
 ## Partner on the minimap and world map (2026-10-29, paired, one PC)
 
@@ -3766,7 +2813,7 @@ partner on both games (guest marker at the host's exact coordinates).
 - The colour tint (`MinimapColor`, `MarkerColor`) is not applied to this
   icon; the partner triangle resembles the game's player icons.
 
-Archives: `~/TheysGone-lab/archive/map-*` and `mm-off-*`/`mm-on-*` on host-pc.
+Archives (`map-*`, `mm-off-*`, `mm-on-*`) are kept outside the repo.
 
 ## Host's story companion on the guest (2026-10-29/30, paired, one PC)
 
@@ -3793,8 +2840,9 @@ replica (`look-companion`), the guest's screenshot showed a Boozer-shaped
 figure walking 12 m away at Boozer's position; the host's screenshot showed
 Boozer at the same spot. The replica rendered grey and blue, not textured.
 
-Not done: Boozer's bike, his materials/textures, other companions. Archives:
-`~/TheysGone-lab/archive/buddy-*` on host-pc.
+Materials and Boozer's bike: see "Companion materials on the guest" and
+"Companion vehicles on the guest" below. Archives (`buddy-*`) are kept outside
+the repo.
 
 ## Time and weather during host missions (2026-10-29, paired, one PC)
 
@@ -3804,7 +2852,8 @@ missions (pausing only for cinematics), and the guest applies them unless it
 runs a mission script or a cinematic itself. During `OBR` the guest went to
 the host's 12.5 h. The mission's fog did not follow: the host's
 `WorldWeather` stayed 0 (clear); the fog comes from the mission's weather
-sublevel (`OBR1_Weather`). Syncing it needs the host's mission on the guest.
+sublevel (`OBR1_Weather`), which is streamed on the guest in "Host mission
+weather on the guest" below.
 
 ## Protocol-v9 guest-side proxy, second attempt (2026-10-30, paired, one PC; inconclusive)
 
@@ -3822,8 +2871,8 @@ and the host's health stayed 121.875.
 Likely reason: the pack consists of debug-spawned pawns owned by the guest's
 debug session, which may stay locked on the local player, so the stand-in is
 never chosen. A valid test needs naturally spawned enemies that the guest owns
-and that are fighting it at the regroup. Logs: `~/TheysGone-lab/archive/
-v9proxy-20261030/` on host-pc.
+and that are fighting it at the regroup. Logs are archived outside the repo
+(`v9proxy-20261030/`).
 
 ## Host mission on the guest, flashbacks and a marker crash (2026-10-30, paired, one PC)
 
@@ -3967,13 +3016,11 @@ mission trucks, frame time with several vehicles, two PCs.
 
 ## Co-op review scenarios (2026-10-31, paired, one PC)
 
-Two real games on Host-PC, disposable `host`/`guest` reflink clones of `run1`
-created by `pair.sh`, loopback UDP, `HostSave=1`, `FreeRoam=1` (base INI).
-Both ran ASI `49b4311d…f9144`, the shared-pause build. Scripts
-`review-run.sh` and `review-run2.sh` are in `~/TheysGone-lab-tools/`;
-logs and screenshots are archived at
-`~/TheysGone-lab/archive/review-20261031-2337/` and
-`review2-20261031-2350/`. This is **not** a separate-PC or Steam test.
+Two real games on the host PC, disposable `host`/`guest` reflink clones of
+`run1` created by `pair.sh`, loopback UDP, `HostSave=1`, `FreeRoam=1` (base
+INI). Both ran ASI `49b4311d…f9144`, the shared-pause build. Scripts, logs and
+screenshots are archived outside the repo (`review-20261031-2337/`,
+`review2-20261031-2350/`). This is **not** a separate-PC or Steam test.
 
 | Scenario | Evidence | Result |
 |---|---|---|
@@ -3990,30 +3037,27 @@ logs and screenshots are archived at
 No `FATAL` lines in any log. The only errors were the `continue-title`
 retries that `lab.sh enter` makes while the splash loads.
 
-Game files: the Host-PC install and `run1` share `DaysGone.exe` SHA-256
-`17c2fca0…37730b3`, Steam build 19221447, only depot `1259421` (no DLC)
-installed, one 30.7 GB `BendGame-WindowsNoEditor.pak` plus the branding
-pak. Build 19221447 is Patch 1.13 (21 July 2025,
-[SteamDB](https://steamdb.info/patchnotes/19221447/)), after the April 2025
-*Remastered* update (build 18212596, Patch 1.08,
-[Bend](https://support.bendstudio.com/hc/en-us/articles/40647771372051-Days-Gone-Update-April-24-2025)).
-Steam's `Classic` beta branch is Patch 1.07
+Game files: the host install and `run1` share `DaysGone.exe` SHA-256
+`17c2fca0…37730b3`, Steam build 19221447 (Patch 1.13, 21 July 2025,
+[SteamDB](https://steamdb.info/patchnotes/19221447/)), depot `1259421` only
+(no DLC), one 30.7 GB `BendGame-WindowsNoEditor.pak` plus the branding pak.
+The April 2025 *Remastered* update was build 18212596 (Patch 1.08); Steam's
+`Classic` beta branch is Patch 1.07
 ([Bend](https://support.bendstudio.com/hc/en-us/articles/45621253674771-Steam-Beta-Branch-Option)).
 
 ## Native host load and fast travel (2026-11-01, paired, one PC)
 
-Two real games on Host-PC, disposable `host`/`guest` reflink clones of `run1`,
-loopback UDP, `HostSave=1`, `FreeRoam=1`; both ran ASI
+Two real games on the host PC, disposable `host`/`guest` reflink clones of
+`run1`, loopback UDP, `HostSave=1`, `FreeRoam=1`; both ran ASI
 `49b4311d…f9144`. This was a one-PC lab run, not a separate-PC or Steam test.
-Full logs are archived outside the repository at
-`~/TheysGone-lab/archive/travel-load-20261101/`.
+Full logs are archived outside the repo (`travel-load-20261101/`).
 
 | Scenario | Evidence | Result |
 |---|---|---|
 | Load an older host autosave from the native pause menu | At 09:07 the host loaded the Oct 24 autosave from the Load Game screen. Host world sync resumed at 09:08:02 (`time=10.377`); the guest restored local time `18.930 -> 10.386`. The host's position changed from `(-1445 -236761 440)` to `(-29960 -205984 -9908)`. The partner marker hid at 09:07:57 and returned at 09:08:07; the guest continued reporting the host, with no disconnect | Pass for session continuity, clock sync and marker rebuild; death and changed-story reloads not tested |
 | Host fast travel to O'Leary Mountain Safehouse | At 09:10:58 the host synced at `time=12.356`, rebuilt its avatar, and hid/showed the partner marker (09:10:58–09:11:03). The guest synced `11.550 -> 12.356` at 09:10:58. The host arrived at `(2002 -239652 421)` while the guest remained at `(-30177 -205938 -9854)`, about 466 m horizontally away | Pass for host travel and time sync; guest did not teleport |
-| Safehouse sleep | The host arrived at the camp and was navigated around its structures, but the bedroll interaction was not reached or activated | Not tested |
-| Host death | No death was triggered in this run | Not tested |
+| Safehouse sleep | The host arrived at the camp and was navigated around its structures, but the bedroll interaction was not reached or activated | Not tested here; see "Death, sleep and travel follow-up" |
+| Host death | No death was triggered in this run | Not tested here; see "Death, sleep and travel follow-up" |
 
 After fast travel, the guest continued receiving host positions as the host
 moved around the camp. The travel itself showed normal update timing afterward
@@ -4025,13 +3069,12 @@ before and after the run; both disposable clones were stopped and destroyed.
 
 ## Death, sleep and travel follow-up (2026-11-01, paired, one PC)
 
-Two real games on Host-PC used disposable clones of `run1`, loopback UDP,
+Two real games on the host PC used disposable clones of `run1`, loopback UDP,
 `HostSave=1`, `FreeRoam=1` and ASI SHA-256
-`49b4311def3b59db7e04ac0d6e869a4695252603b9317248f9989d970b3f9144`.
-Logs, screenshots and setup scripts are archived outside the repository at
-`~/TheysGone-lab/archive/death-sleep-20261101-t1/` and
-`~/TheysGone-lab/archive/death-confirm-20261101/`. These are not two-PC or
-Steam-transport tests.
+`49b4311def3b59db7e04ac0d6e869a4695252603b9317248f9989d970b3f9144`. Logs,
+screenshots and setup scripts are archived outside the repo
+(`death-sleep-20261101-t1/`, `death-confirm-20261101/`). These are not two-PC
+or Steam-transport tests.
 
 | Scenario | Evidence | Result |
 |---|---|---|
@@ -4045,8 +3088,7 @@ Steam-transport tests.
 
 Both guest save guards reported active. In each run, both copies of the 11
 guest real `.sav` files matched the isolated base's originals, including after
-the guest's disconnected sleep. Each run backed up the base ASI, INI and
-`Saved` tree; the executable, ASI, INI and entire `Saved` file manifests matched
-before and after clone destruction. All four disposable clones were stopped
-and destroyed. Guest death, natural guest-owned enemy combat, mission-time
-sleep/death, and separate-PC behavior remain untested.
+the guest's disconnected sleep. Restored base ASI, INI and `Saved` tree;
+executable and file manifests verified; all four clones destroyed. Not tested:
+guest death, natural guest-owned enemy combat, mission-time sleep/death, and
+separate-PC behavior.
