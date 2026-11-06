@@ -3256,7 +3256,10 @@ separate-PC behavior.
 | 7 | `pawn` + `move-tick`/`keep-controller` variants | 55.5–64.5° | – | idle |
 | 9 | `pawn`, `pawn:intent`, `pawn:copy-vars` | 52.0–57.9° | 0–3 of 55–57 | idle |
 | 10 | `pawn:state`, `pawn:intent,state` | 64.4–67.6° | 0–1 of 57 | idle |
-| 12 | `pawn:intent,state` + movement request | **44.7°** | **14 of 57** | movement, turns, walks |
+| 12 | `pawn:intent,state` + movement request | 44.7° | 14 of 57 | movement, turns, walks |
+| 13 | `pawn:move-request` (no anim variables copied) | 53.3° | **26 of 57** | movement, turns |
+| 13 | `pawn:move-request,state` | 58.4° | 17 of 58 | movement, turns |
+| 13 | `pawn:intent,state` (run 12 repeated) | 61.9° | 10 of 54 | movement; grapples missed |
 
 - **Observed:**
   - Run 5: the graph has 12 state machines and 123 asset players; median
@@ -3292,19 +3295,27 @@ separate-PC behavior.
     played `Idle_to_Move` instead.
   - The `pawn:ai` control (clone keeps its AI, not fed) idled for all 57
     samples, so it did not establish what a working clone scores.
+  - Run 13 (bisect): with the movement request but **no anim variables
+    copied**, `Swarmer_Movement` matched in 23 samples and the clone played
+    only locomotion assets. Its divergence log still listed 48 variables
+    (`SmoothSpeedNotSlowedDownForTurn`, `DesiredVelocityInterpolated_*`,
+    `DeltaToDesiredMovementDirectionYaw` and others), so the clone derives
+    those differently without changing the action. Attacks (`swm_atk_*`)
+    showed as `Swarmer_Idle_to_Move` on the clone in all variants.
+  - Bone error did not follow the action match (53–62° in run 13).
 - **Derived:** the swarmer's locomotion graph is driven by the AI's movement
   request (acceleration, requested velocity, desired speed and rotation), not
-  by the resulting velocity. Sending that request plus position, velocity and
-  the one-byte Bend anim state is enough for natively animated locomotion on a
-  pawn without AI. The inputs copied in run 12 total about 150 bytes before
-  quantization, against about 1.7 KB for streamed bones. Attack and grapple
-  animations need their own event data (which attack, its target and
-  timing). About 70% of run 12's samples show the same kind of movement; this
-  figure is a manual reading of the logged pairs, not a computed metric.
-- **Unknown:** whether the anim-intent copy is needed once the movement
-  request is sent (run 12 sent both); the attack and grapple event data; the
-  behavior of other enemy types; the error floor of a correct clone; two-PC
-  behavior and the real wire format.
+  by the resulting velocity. Native inputs alone (position, velocity,
+  movement mode and that request, no anim-instance variables) are enough for
+  locomotion on a pawn without AI: about 60 bytes before quantization,
+  against about 1.7 KB for streamed bones. Forwarding the Bend anim state did
+  not improve locomotion; each variant saw a different stretch of the fight,
+  so the differences between run 13's variants are not significant. Attack
+  and grapple animations need their own event data (which attack, its target
+  and timing). Bone error is not a usable pass/fail measure for this approach.
+- **Unknown:** the attack and grapple event data; hit reactions and death;
+  the behavior of other enemy types; what a correct clone scores (no working
+  control yet); two-PC behavior and the real wire format.
 - **Cleanup:** lab clone destroyed after each run; base game copy never
   written. Archives: `<archive>/anim-mirror-20261106-2147/` through
   `<archive>/anim-mirror-20261106-2226/`.

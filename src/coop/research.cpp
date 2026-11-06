@@ -3351,6 +3351,8 @@ struct AnimMirror {
     // source's state is forwarded to the clone with RequestStateChange when it changes.
     bool forwardState = false;
     bool keepAi = false; // pawn mode with ai: the clone keeps its AI and is not fed (control)
+    // Pawn mode with move-request (implied by intent): copy the movement component's AI move request.
+    bool moveRequest = false;
     UObject* sourceStates = nullptr;
     UObject* cloneStates = nullptr;
     int32_t lastState = -1, stateChanges = 0, stateRequestsOk = 0;
@@ -3610,7 +3612,7 @@ void FeedPawnClone() {
     CopyProp(g_mirror.sourceMove, g_mirror.cloneMove, "MovementMode");
     // With collision off the clone never lands on its own; the source's grounded flag stands in for it.
     CopyProp(g_mirror.source, g_mirror.clone, "bHasTouchedGroundAfterSpawningOrTeleporting");
-    if (!g_mirror.intent.empty()) {
+    if (g_mirror.moveRequest) {
         // The movement request the AI's path following makes: what the stopped clone's movement lacks.
         for (auto name : {"Acceleration", "RequestedVelocity", "bHasRequestedVelocity", "desiredSpeed", "DesiredRotation",
                           "DeltaToDesiredRotation", "MaxWalkSpeed"})
@@ -3674,6 +3676,7 @@ bool AnimMirrorStart(UObject* localPawn, AnimMirrorMode mode, const std::string&
     AnimMirror m;
     m.mode = mode;
     m.copyVars = copyVars;
+    m.moveRequest = HasOption(options, "move-request") || HasOption(options, "intent");
     m.pawn = best;
     if (!m.pawn || !GetProp(m.pawn, "Mesh", m.mesh) || !IsLive(m.mesh)) { summary = "no live AI pawn with a mesh within 30 m"; return false; }
     Call sourceAnim(m.mesh, "GetAnimInstance");
