@@ -3230,3 +3230,81 @@ separate-PC behavior.
   worktree version (backup `debug_control.py.bak-before-anim-mirror`).
   Archives: `<archive>/anim-mirror-20261106-2112/` through
   `<archive>/anim-mirror-20261106-2128/`.
+
+## Pawn mirror: native-style enemy animation from movement and state (2026-11-06, one PC, one game)
+
+- **Question:** native Unreal clients animate another machine's enemy from its
+  movement plus state events, on a real pawn. Can a guest-side swarmer pawn
+  without AI animate correctly from the host's inputs alone, and which inputs
+  are needed?
+- **Build:** worktree `anim-mirror-probe`, final ASI SHA-256 `af1276ed…`, game
+  build 19221447. New modes `anim-mirror-nodes` and `anim-mirror-pawn
+  [--arg <options>]` ([debug tools](DEVELOPMENT.md#debug-tools)).
+- **Setup:** as in the previous entry. From run 9 on, a chase pattern moved the
+  player 10 m every 3 s (`move-by`) so the swarmer kept walking, turning and
+  stopping instead of grappling the god-mode player.
+- **Metrics:** bone error as before, plus a phase-insensitive **action match**:
+  whether the highest-weighted body animation (facial `_face_` layers
+  excluded) is the same asset on source and clone.
+- **Result:** PARTIAL PASS. Locomotion works natively once the AI's movement
+  request is sent; attacks and grapples do not yet.
+
+| Run | Mode | Bone error median | Action match | Clone played |
+|---|---|---|---|---|
+| 5 | `nodes` (graph state copied) | crashed after ~10 s | – | – |
+| 6 | `pawn` | 67.4° | – | idle |
+| 7 | `pawn` + `move-tick`/`keep-controller` variants | 55.5–64.5° | – | idle |
+| 9 | `pawn`, `pawn:intent`, `pawn:copy-vars` | 52.0–57.9° | 0–3 of 55–57 | idle |
+| 10 | `pawn:state`, `pawn:intent,state` | 64.4–67.6° | 0–1 of 57 | idle |
+| 12 | `pawn:intent,state` + movement request | **44.7°** | **14 of 57** | movement, turns, walks |
+
+- **Observed:**
+  - Run 5: the graph has 12 state machines and 123 asset players; median
+    3–5 players are active at once (max 11). Writing state-machine
+    `CurrentState`/`ElapsedTime` raw crashed the game.
+  - A pawn of the source's class (`SpawnAIFromClass`, look from the source,
+    brain stopped, controller unpossessed and destroyed, collision off) gets
+    its own `SwarmerBVim_C` with `BendPawn` set and a live
+    `StateMachine_Swarmer_C`. Its anim `Velocity` follows the copied movement
+    `Velocity` (for example 126 → 147, 58 → 59).
+  - Anim `Speed` is not velocity: the source shows tiers (0, 3, 85, 150, 450,
+    500) while its velocity is around 80. Run 9's divergence log (pawn fed
+    velocity only) listed what the clone does not derive: `Speed`,
+    `DesiredSpeedNotSlowedDownForTurn`, `DesiredVelocity*`,
+    `DeltaToDesired*`, `DesiredTurnAngleAsFloat`,
+    `WantsToTransitionIdleToMove`/`MoveToIdleNEW` and others (64 variables).
+  - `BendPawn.AnimStateMachine` (`StateMachine_Swarmer_C : BendAnimStateMachine`)
+    is Bend's gameplay anim state. `IsInStateEnum` and
+    `RequestStateChange(State)` work on the clone: GroundMovement (0),
+    MeleeAttack (5) and Grapple (6) were forwarded, 23 of 23 accepted in
+    run 10. Forwarding alone left the graph idle.
+  - Run 11 moved the clone without `bTeleport` and copied
+    `bHasTouchedGroundAfterSpawningOrTeleporting`; still idle.
+  - Run 12 also copied the movement component's `Acceleration`,
+    `RequestedVelocity`, `bHasRequestedVelocity`, `desiredSpeed`,
+    `DesiredRotation`, `DeltaToDesiredRotation` and `MaxWalkSpeed`. The clone
+    then played `Swarmer_Movement`, `Swarmer_Idle_to_Move`,
+    `BlendSpace2D_Swarmer_TurnInPlace` and `swm_h_walk_fwd_*`. 14 samples
+    matched exactly; most others were the same kind of movement at another
+    moment (`walk_fwd_a` vs `walk_fwd_d`, `TurnToMove` vs `TurnInPlace`,
+    `Movement` vs `Idle_to_Move`).
+  - Attacks (`swm_atk_low_run_5M`) and grapples were not reproduced; the clone
+    played `Idle_to_Move` instead.
+  - The `pawn:ai` control (clone keeps its AI, not fed) idled for all 57
+    samples, so it did not establish what a working clone scores.
+- **Derived:** the swarmer's locomotion graph is driven by the AI's movement
+  request (acceleration, requested velocity, desired speed and rotation), not
+  by the resulting velocity. Sending that request plus position, velocity and
+  the one-byte Bend anim state is enough for natively animated locomotion on a
+  pawn without AI. The inputs copied in run 12 total about 150 bytes before
+  quantization, against about 1.7 KB for streamed bones. Attack and grapple
+  animations need their own event data (which attack, its target and
+  timing). About 70% of run 12's samples show the same kind of movement; this
+  figure is a manual reading of the logged pairs, not a computed metric.
+- **Unknown:** whether the anim-intent copy is needed once the movement
+  request is sent (run 12 sent both); the attack and grapple event data; the
+  behavior of other enemy types; the error floor of a correct clone; two-PC
+  behavior and the real wire format.
+- **Cleanup:** lab clone destroyed after each run; base game copy never
+  written. Archives: `<archive>/anim-mirror-20261106-2147/` through
+  `<archive>/anim-mirror-20261106-2226/`.

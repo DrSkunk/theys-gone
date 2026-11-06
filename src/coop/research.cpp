@@ -3318,16 +3318,17 @@ bool MissionAct(const std::string& spec, bool allowed, std::string& summary) {
     return true;
 }
 
-// Anim mirror: can an AI anim instance's reflected variables alone drive a second mesh's AnimBP? A clone of the
-// nearest AI pawn's body mesh runs the same anim class 3 m away, without a pawn or controller. Each frame the
-// source instance's own variables are copied into the clone (none in bare mode, as a control), and twice a
-// second the clone's component-space bone rotations are compared with the source's.
+// Anim mirror: can an AI anim instance's reflected state drive a second mesh's AnimBP? A clone of the nearest AI
+// pawn's body mesh runs the same anim class 3 m away, without a pawn or controller. Each frame the source
+// instance's state is copied into the clone (variables, optionally anim-graph node state too, or nothing as a
+// control), and twice a second the clone's component-space bone rotations are compared with the source's.
 namespace {
 
-struct MirrorField { int offset, size; bool object; };
+struct MirrorField { int offset, size; bool object; std::string name; bool real = false; };
 
 struct AnimMirror {
-    bool active = false, copy = true;
+    bool active = false;
+    AnimMirrorMode mode = AnimMirrorMode::bare;
     UObject* pawn = nullptr;      // source AI pawn
     UObject* mesh = nullptr;      // its body mesh component
     UObject* source = nullptr;    // its anim instance
@@ -3336,6 +3337,27 @@ struct AnimMirror {
     UObject* clone = nullptr;     // clone anim instance
     std::vector<MirrorField> fields;
     int bytes = 0;
+    // Anim-graph node state: state machines' current state and elapsed time, asset players' time, asset and
+    // blend inputs. Copied in nodes mode only. weights are the asset players' BlendWeight offsets.
+    std::vector<MirrorField> nodes;
+    std::vector<int> weights;
+    std::vector<int> playerAssets; // per weights entry: offset of the player's Sequence/BlendSpace, or -1
+    int nodeBytes = 0, machines = 0, players = 0;
+    std::vector<int> activePlayers;
+    int actionSamples = 0, actionMatches = 0;
+    bool copyVars = false; // pawn mode: also copy the anim variables over what the clone derives itself
+    std::vector<MirrorField> intent; // pawn mode with intent: the AI's locomotion intent variables only
+    // Pawn mode with state: Bend's gameplay anim-state machines (BendPawn.AnimStateMachine) of both pawns; the
+    // source's state is forwarded to the clone with RequestStateChange when it changes.
+    bool forwardState = false;
+    bool keepAi = false; // pawn mode with ai: the clone keeps its AI and is not fed (control)
+    UObject* sourceStates = nullptr;
+    UObject* cloneStates = nullptr;
+    int32_t lastState = -1, stateChanges = 0, stateRequestsOk = 0;
+    std::map<std::string, int> divergent; // pawn mode: variable name -> samples where source and clone differ
+    // Pawn mode: the movement components whose Velocity and MovementMode are copied.
+    UObject* sourceMove = nullptr;
+    UObject* cloneMove = nullptr;
     coop::BoneTable bones;
     double started = 0, nextSample = 0;
     std::vector<float> meanErrors;
@@ -3379,9 +3401,220 @@ void CollectMirrorFields(UObject* animClass, std::vector<MirrorField>& out, int&
                          (kind == "StructProperty" && size <= 48);
             bool object = kind == "ObjectProperty" && size == 8;
             if (!plain && !object) continue;
-            out.push_back({offset, size, object});
+            out.push_back({offset, size, object, Name(field), kind == "FloatProperty"});
             bytes += size;
         }
+    }
+}
+
+bool StructDerives(UObject* structure, UObject* base) {
+    for (int depth = 0; IsLive(structure) && depth < 16; structure = Super(structure), ++depth)
+        if (structure == base) return true;
+    return false;
+}
+
+void AddNodeField(std::vector<MirrorField>& out, int& bytes, UObject* structure, int base, const char* name, bool object) {
+    auto p = FindChild(structure, name);
+    if (!p) return;
+    out.push_back({base + PropertyOffset(p), ElementSize(p), object, name});
+    bytes += ElementSize(p);
+}
+
+// The anim-graph nodes the Blueprint class declares (AnimGraphNode_* struct properties). State machines carry
+// CurrentState/ElapsedTime and asset players InternalTimeAccumulator plus their asset, rate and blend inputs:
+// together the runtime state a Source-style replicator would send.
+void CollectNodeFields(AnimMirror& m) {
+    auto scriptStruct = FindClass("ScriptStruct");
+    auto machine = FindObject("AnimNode_StateMachine", scriptStruct);
+    auto player = FindObject("AnimNode_AssetPlayerBase", scriptStruct);
+    auto stop = FindClass("BendAnimInstance");
+    if (!machine || !player) return;
+    for (auto c = m.source->cls; IsLive(c) && c != stop; c = Super(c)) {
+        int budget = 0;
+        for (auto field = Children(c); field && budget < 8192; field = Next(field), ++budget) {
+            if (!IsLive(field) || Name(field->cls) != "StructProperty") continue;
+            auto structure = PropertySubclassObject(field, "ScriptStruct");
+            int base = PropertyOffset(field);
+            if (!structure || base < 0) continue;
+            if (StructDerives(structure, machine)) {
+                AddNodeField(m.nodes, m.nodeBytes, structure, base, "CurrentState", false);
+                AddNodeField(m.nodes, m.nodeBytes, structure, base, "ElapsedTime", false);
+                ++m.machines;
+            } else if (StructDerives(structure, player)) {
+                for (auto name : {"InternalTimeAccumulator", "PlayRate", "X", "Y", "Z"})
+                    AddNodeField(m.nodes, m.nodeBytes, structure, base, name, false);
+                AddNodeField(m.nodes, m.nodeBytes, structure, base, "Sequence", true);
+                AddNodeField(m.nodes, m.nodeBytes, structure, base, "BlendSpace", true);
+                if (auto weight = FindChild(structure, "BlendWeight")) {
+                    m.weights.push_back(base + PropertyOffset(weight));
+                    auto asset = FindChild(structure, "Sequence");
+                    if (!asset) asset = FindChild(structure, "BlendSpace");
+                    m.playerAssets.push_back(asset ? base + PropertyOffset(asset) : -1);
+                }
+                ++m.players;
+            }
+        }
+    }
+}
+
+void CopyFields(const std::vector<MirrorField>& fields) {
+    auto from = reinterpret_cast<const uint8_t*>(g_mirror.source);
+    auto to = reinterpret_cast<uint8_t*>(g_mirror.clone);
+    for (const auto& f : fields) {
+        if (f.object) {
+            UObject* value = nullptr;
+            std::memcpy(&value, from + f.offset, 8);
+            if (value && !IsAnimAsset(value)) continue;
+        }
+        std::memcpy(to + f.offset, from + f.offset, static_cast<size_t>(f.size));
+    }
+}
+
+// Phase-insensitive check: the animation asset of the highest-weighted asset player. Native-style sync lets each
+// machine run its own walk cycle, so bone error can stay high while the action is right; matching dominant
+// assets means both play the same action.
+UObject* DominantAsset(UObject* instance) {
+    auto base = reinterpret_cast<const uint8_t*>(instance);
+    float best = 0.001f;
+    UObject* asset = nullptr;
+    for (size_t i = 0; i < g_mirror.weights.size(); ++i) {
+        float weight = 0;
+        std::memcpy(&weight, base + g_mirror.weights[i], sizeof weight);
+        if (weight <= best || g_mirror.playerAssets[i] < 0) continue;
+        UObject* candidate = nullptr;
+        std::memcpy(&candidate, base + g_mirror.playerAssets[i], sizeof candidate);
+        // Facial layers blend at full weight over any body action; only body animation counts.
+        if (!IsLive(candidate) || Name(candidate).find("_face_") != std::string::npos) continue;
+        best = weight;
+        asset = candidate;
+    }
+    return asset;
+}
+
+int ActivePlayers() {
+    int active = 0;
+    for (int offset : g_mirror.weights) {
+        float weight = 0;
+        std::memcpy(&weight, reinterpret_cast<const uint8_t*>(g_mirror.source) + offset, sizeof weight);
+        if (weight > 0.001f) ++active;
+    }
+    return active;
+}
+
+const char* ModeName(AnimMirrorMode mode) {
+    switch (mode) {
+    case AnimMirrorMode::nodes: return "nodes";
+    case AnimMirrorMode::variables: return "variables";
+    case AnimMirrorMode::pawn: return "pawn";
+    default: return "bare";
+    }
+}
+
+// Copies one reflected property by raw bytes between two objects of the same class.
+void CopyProp(UObject* from, UObject* to, const char* name) {
+    if (!IsLive(from) || !IsLive(to) || from->cls != to->cls) return;
+    if (auto p = FindChild(from->cls, name); p && PropertyOffset(p) >= 0 && ElementSize(p) > 0)
+        std::memcpy(reinterpret_cast<uint8_t*>(to) + PropertyOffset(p),
+                    reinterpret_cast<const uint8_t*>(from) + PropertyOffset(p), static_cast<size_t>(ElementSize(p)));
+}
+
+// A pawn of the source's class with the source's look, its AI controller removed and collision off, the way a
+// native client holds another machine's enemy. Returns the pawn or nullptr.
+UObject* SpawnPawnClone(UObject* context, UObject* source, UObject* asset, bool keepController, bool keepAi,
+                        std::string& summary) {
+    auto library = FindDefaultObject("AIBlueprintHelperLibrary");
+    Call where(source, "K2_GetActorLocation"), facing(source, "K2_GetActorRotation");
+    if (!library || !where.invoke() || !facing.invoke()) { summary = "spawn library or source transform unavailable"; return nullptr; }
+    auto at = where.get<FVector>("ReturnValue");
+    at.y += 300.f;
+    Call spawn(library, "SpawnAIFromClass");
+    if (!spawn.set("WorldContextObject", context).set("PawnClass", source->cls)
+             .set("BehaviorTree", static_cast<UObject*>(nullptr)).set("Location", at)
+             .set("Rotation", facing.get<FRotator>("ReturnValue")).setBool("bNoCollisionFail", true).invoke()) {
+        summary = "SpawnAIFromClass failed";
+        return nullptr;
+    }
+    auto pawn = spawn.get<UObject*>("ReturnValue");
+    if (!IsLive(pawn)) { summary = "SpawnAIFromClass returned no pawn"; return nullptr; }
+    UObject* body = nullptr;
+    if (GetProp(pawn, "Mesh", body) && IsLive(body)) Call(body, "SetSkeletalMesh").set("NewMesh", asset).invoke();
+    UObject* controller = nullptr;
+    if (keepAi) return pawn; // control: an ordinary AI swarmer, to show the clone's anim graph can leave idle
+    if (GetProp(pawn, "Controller", controller) && IsLive(controller)) {
+        UObject* brain = nullptr;
+        if (GetProp(controller, "BrainComponent", brain) && IsLive(brain))
+            Call(brain, "StopLogic").set("Reason", FStringRaw{}).invoke();
+        if (!keepController) {
+            Call(controller, "UnPossess").invoke();
+            Call(controller, "K2_DestroyActor").invoke();
+        }
+    }
+    Call(pawn, "SetActorEnableCollision").setBool("bNewActorEnableCollision", false).invoke();
+    return pawn;
+}
+
+bool HasOption(const std::string& options, const char* name) {
+    size_t start = 0;
+    while (start <= options.size()) {
+        size_t end = options.find(',', start);
+        if (end == std::string::npos) end = options.size();
+        if (options.compare(start, end - start, name) == 0) return true;
+        start = end + 1;
+    }
+    return false;
+}
+
+std::string CurrentStateName(UObject* machine) {
+    Call name(machine, "GetCurrentStateFName");
+    if (!IsLive(machine) || !name.invoke()) return "?";
+    auto value = name.get<FName>("ReturnValue");
+    return value.index ? NameString(value.index) : "-";
+}
+
+// The enum value of a Bend anim-state machine's current state, found with IsInStateEnum.
+int32_t CurrentStateEnum(UObject* machine) {
+    for (int32_t state = 0; state < 64; ++state) {
+        Call test(machine, "IsInStateEnum");
+        if (!test.set("State", static_cast<uint8_t>(state)).invoke()) return -1;
+        if (test.get<bool>("ReturnValue")) return state;
+    }
+    return -1;
+}
+
+// Pawn mode with state: forwards the source's gameplay anim state to the clone, as a replicated state event.
+void ForwardState() {
+    int32_t state = CurrentStateEnum(g_mirror.sourceStates);
+    if (state < 0 || state == g_mirror.lastState) return;
+    g_mirror.lastState = state;
+    ++g_mirror.stateChanges;
+    Call request(g_mirror.cloneStates, "RequestStateChange");
+    bool ok = request.set("State", static_cast<uint8_t>(state)).setBool("ForceReenter", false).invoke() &&
+              request.get<bool>("ReturnValue");
+    if (ok) ++g_mirror.stateRequestsOk;
+    Log("anim mirror state: source %s (%d) -> clone request %s, clone now %s", CurrentStateName(g_mirror.sourceStates).c_str(),
+        state, ok ? "accepted" : "refused", CurrentStateName(g_mirror.cloneStates).c_str());
+}
+
+// Pawn mode: the clone follows the source 3 m to the side with the source's velocity and movement mode, and its
+// own movement tick stays off so the copied values are what its anim instance reads.
+void FeedPawnClone() {
+    Call where(g_mirror.pawn, "K2_GetActorLocation"), facing(g_mirror.pawn, "K2_GetActorRotation");
+    if (!where.invoke() || !facing.invoke()) return;
+    auto at = where.get<FVector>("ReturnValue");
+    at.y += 300.f;
+    // Not a teleport: a teleport every frame keeps the anim graph in its post-teleport reset (it gates
+    // locomotion on bHasTouchedGroundAfterSpawningOrTeleporting), which a native proxy's smooth moves never do.
+    Call(g_mirror.actor, "K2_SetActorLocationAndRotation").set("NewLocation", at)
+        .set("NewRotation", facing.get<FRotator>("ReturnValue")).setBool("bSweep", false).setBool("bTeleport", false).invoke();
+    CopyProp(g_mirror.sourceMove, g_mirror.cloneMove, "Velocity");
+    CopyProp(g_mirror.sourceMove, g_mirror.cloneMove, "MovementMode");
+    // With collision off the clone never lands on its own; the source's grounded flag stands in for it.
+    CopyProp(g_mirror.source, g_mirror.clone, "bHasTouchedGroundAfterSpawningOrTeleporting");
+    if (!g_mirror.intent.empty()) {
+        // The movement request the AI's path following makes: what the stopped clone's movement lacks.
+        for (auto name : {"Acceleration", "RequestedVelocity", "bHasRequestedVelocity", "desiredSpeed", "DesiredRotation",
+                          "DeltaToDesiredRotation", "MaxWalkSpeed"})
+            CopyProp(g_mirror.sourceMove, g_mirror.cloneMove, name);
     }
 }
 
@@ -3416,7 +3649,10 @@ void PlaceMirror() {
 
 bool AnimMirroring() { return g_mirror.active; }
 
-bool AnimMirrorStart(UObject* localPawn, bool copy, std::string& summary) {
+bool AnimMirrorStart(UObject* localPawn, AnimMirrorMode mode, const std::string& options, std::string& summary) {
+    bool keepController = HasOption(options, "keep-controller");
+    bool moveTick = HasOption(options, "move-tick");
+    bool copyVars = HasOption(options, "copy-vars");
     if (g_mirror.active) { summary = "anim mirror already running"; return false; }
     auto aiClass = FindClass("BendAIPawn");
     auto statics = FindDefaultObject("GameplayStatics");
@@ -3436,7 +3672,8 @@ bool AnimMirrorStart(UObject* localPawn, bool copy, std::string& summary) {
         if (d < bestDistance) { bestDistance = d; best = obj; }
     }
     AnimMirror m;
-    m.copy = copy;
+    m.mode = mode;
+    m.copyVars = copyVars;
     m.pawn = best;
     if (!m.pawn || !GetProp(m.pawn, "Mesh", m.mesh) || !IsLive(m.mesh)) { summary = "no live AI pawn with a mesh within 30 m"; return false; }
     Call sourceAnim(m.mesh, "GetAnimInstance");
@@ -3447,22 +3684,45 @@ bool AnimMirrorStart(UObject* localPawn, bool copy, std::string& summary) {
         return false;
     }
     if (!coop::ReadBoneTable(m.mesh, m.bones)) { summary = "cannot read the source bone table"; return false; }
-    FTransform xf{};
-    xf.rotation = {0, 0, 0, 1};
-    xf.translation = me;
-    xf.scale = {1, 1, 1};
-    Call begin(statics, "BeginSpawningActorFromClass");
-    begin.set("WorldContextObject", localPawn).set("ActorClass", actorClass).set("SpawnTransform", xf).setBool("bNoCollisionFail", true);
-    m.actor = begin.invoke() ? begin.get<UObject*>("ReturnValue") : nullptr;
-    if (!m.actor) { summary = "cannot spawn the clone actor"; return false; }
-    Call(statics, "FinishSpawningActor").set("Actor", m.actor).set("SpawnTransform", xf).invoke();
-    if (!GetProp(m.actor, "SkeletalMeshComponent", m.component) || !IsLive(m.component)) {
-        Call(m.actor, "K2_DestroyActor").invoke();
-        summary = "clone actor has no mesh component";
-        return false;
+    if (mode == AnimMirrorMode::pawn) {
+        m.keepAi = HasOption(options, "ai");
+        m.actor = SpawnPawnClone(localPawn, m.pawn, asset, keepController, m.keepAi, summary);
+        if (!m.actor) return false;
+        GetProp(m.actor, "Mesh", m.component);
+        GetProp(m.pawn, "CharacterMovement", m.sourceMove);
+        GetProp(m.actor, "CharacterMovement", m.cloneMove);
+        if (!IsLive(m.component) || !IsLive(m.sourceMove) || !IsLive(m.cloneMove)) {
+            Call(m.actor, "K2_DestroyActor").invoke();
+            summary = "pawn clone has no mesh or movement component";
+            return false;
+        }
+        if (!moveTick) Call(m.cloneMove, "SetComponentTickEnabled").setBool("bEnabled", false).invoke();
+        if (HasOption(options, "state")) {
+            GetProp(m.pawn, "AnimStateMachine", m.sourceStates);
+            GetProp(m.actor, "AnimStateMachine", m.cloneStates);
+            m.forwardState = IsLive(m.sourceStates) && IsLive(m.cloneStates);
+            Log("anim mirror: state machines source %s (%s), clone %s (%s)",
+                IsLive(m.sourceStates) ? Name(m.sourceStates).c_str() : "none", CurrentStateName(m.sourceStates).c_str(),
+                IsLive(m.cloneStates) ? Name(m.cloneStates).c_str() : "none", CurrentStateName(m.cloneStates).c_str());
+        }
+    } else {
+        FTransform xf{};
+        xf.rotation = {0, 0, 0, 1};
+        xf.translation = me;
+        xf.scale = {1, 1, 1};
+        Call begin(statics, "BeginSpawningActorFromClass");
+        begin.set("WorldContextObject", localPawn).set("ActorClass", actorClass).set("SpawnTransform", xf).setBool("bNoCollisionFail", true);
+        m.actor = begin.invoke() ? begin.get<UObject*>("ReturnValue") : nullptr;
+        if (!m.actor) { summary = "cannot spawn the clone actor"; return false; }
+        Call(statics, "FinishSpawningActor").set("Actor", m.actor).set("SpawnTransform", xf).invoke();
+        if (!GetProp(m.actor, "SkeletalMeshComponent", m.component) || !IsLive(m.component)) {
+            Call(m.actor, "K2_DestroyActor").invoke();
+            summary = "clone actor has no mesh component";
+            return false;
+        }
+        Call(m.component, "SetSkeletalMesh").set("NewMesh", asset).invoke();
+        Call(m.component, "SetAnimInstanceClass").set("NewClass", m.source->cls).invoke();
     }
-    Call(m.component, "SetSkeletalMesh").set("NewMesh", asset).invoke();
-    Call(m.component, "SetAnimInstanceClass").set("NewClass", m.source->cls).invoke();
     Call cloneAnim(m.component, "GetAnimInstance");
     m.clone = cloneAnim.invoke() ? cloneAnim.get<UObject*>("ReturnValue") : nullptr;
     if (!IsLive(m.clone) || m.clone->cls != m.source->cls) {
@@ -3476,6 +3736,26 @@ bool AnimMirrorStart(UObject* localPawn, bool copy, std::string& summary) {
     PinFullPose(m.mesh, 1, 0, false);
     PinFullPose(m.component, 1, 0, false);
     CollectMirrorFields(m.source->cls, m.fields, m.bytes);
+    CollectNodeFields(m);
+    if (HasOption(options, "intent")) {
+        // The locomotion intent a pawn without AI cannot derive from its velocity (lab, 2026-11-06): the
+        // requested speed tier, desired direction and turn, and the idle/move transition requests.
+        static const std::unordered_set<std::string> names = {
+            "Speed", "DesiredSpeedNotSlowedDownForTurn", "SmoothSpeed", "SmoothSpeedNotSlowedDownForTurn",
+            "DesiredVelocity_LocalYaw", "DesiredVelocityInterpolated_LocalYaw", "DesiredVelocityInterpolated_Length",
+            "DeltaToDesiredRotationYaw", "DeltaToDesiredRotationForPivotTriggerYaw",
+            "DeltaToDesiredMovementDirectionYaw", "DeltaToDesiredMovementDirectionForPivotTriggerYaw",
+            "DesiredTurnAngleAsFloat", "DesiredSustainedStrafeAngleYaw", "WantsToTransitionIdleToMove",
+            "WantsToTransitionMoveToIdleNEW", "WantsToTransitionIdleToTurn", "WantsToTransitionMoveToTurn",
+            "RedirectRootMotionYaw", "TorsoPitchAngle"};
+        int intentBytes = 0;
+        for (const auto& f : m.fields)
+            if (names.count(f.name)) {
+                m.intent.push_back(f);
+                intentBytes += f.size;
+            }
+        Log("anim mirror: intent set %d fields, %d bytes", static_cast<int>(m.intent.size()), intentBytes);
+    }
     uint64_t weakPawn = 0;
     GetProp(m.clone, "BendPawn", weakPawn);
     m.started = m.nextSample = Seconds();
@@ -3483,11 +3763,14 @@ bool AnimMirrorStart(UObject* localPawn, bool copy, std::string& summary) {
     g_mirror = std::move(m);
     PlaceMirror();
     auto clonePawn = ResolveWeak(weakPawn);
-    char text[320];
-    std::snprintf(text, sizeof text, "%s mirror of %s (%s, %s, %d bones, %.0f m away): %zu fields, %d bytes/frame; clone BendPawn=%s",
-                  copy ? "copying" : "bare", Name(g_mirror.pawn).c_str(), Name(g_mirror.source->cls).c_str(), Name(asset).c_str(),
+    char text[400];
+    std::snprintf(text, sizeof text,
+                  "%s mirror of %s (%s, %s, %d bones, %.0f m away): %zu variable fields (%d bytes); %d state machines and "
+                  "%d asset players, %zu node fields (%d bytes); clone BendPawn=%s; options '%s'",
+                  ModeName(mode), Name(g_mirror.pawn).c_str(), Name(g_mirror.source->cls).c_str(), Name(asset).c_str(),
                   static_cast<int>(g_mirror.bones.names.size()), std::sqrt(bestDistance) / 100, g_mirror.fields.size(),
-                  g_mirror.bytes, clonePawn ? Name(clonePawn).c_str() : "null");
+                  g_mirror.bytes, g_mirror.machines, g_mirror.players, g_mirror.nodes.size(), g_mirror.nodeBytes,
+                  clonePawn ? Name(clonePawn).c_str() : "null", options.c_str());
     summary = text;
     Log("anim mirror: %s", text);
     return true;
@@ -3498,14 +3781,31 @@ bool AnimMirrorStop(std::string& summary) {
     if (IsLive(g_mirror.actor)) Call(g_mirror.actor, "K2_DestroyActor").invoke();
     if (IsLive(g_mirror.mesh))
         PinFullPose(g_mirror.mesh, g_mirror.sourceForcedLod, g_mirror.sourceUpdateFlag, g_mirror.sourceUro);
-    char text[256];
+    std::vector<float> active(g_mirror.activePlayers.begin(), g_mirror.activePlayers.end());
+    char text[320];
     std::snprintf(text, sizeof text,
-                  "%s mirror stopped after %.1f s: %zu samples, mean bone error median %.1f deg p90 %.1f deg; %llu copies",
-                  g_mirror.copy ? "copying" : "bare", Seconds() - g_mirror.started, g_mirror.meanErrors.size(),
+                  "%s mirror stopped after %.1f s: %zu samples, mean bone error median %.1f deg p90 %.1f deg; "
+                  "dominant action match %d/%d; active asset players median %.0f max %.0f of %d; %llu copies",
+                  ModeName(g_mirror.mode), Seconds() - g_mirror.started, g_mirror.meanErrors.size(),
                   Percentile(g_mirror.meanErrors, 0.5f), Percentile(g_mirror.meanErrors, 0.9f),
+                  g_mirror.actionMatches, g_mirror.actionSamples,
+                  Percentile(active, 0.5f), Percentile(active, 1.f), g_mirror.players,
                   static_cast<unsigned long long>(g_mirror.copies));
     summary = text;
     Log("anim mirror: %s", text);
+    if (g_mirror.forwardState)
+        Log("anim mirror: %d source state changes, %d clone requests accepted", g_mirror.stateChanges,
+            g_mirror.stateRequestsOk);
+    if (!g_mirror.divergent.empty()) {
+        std::vector<std::pair<int, std::string>> ranked;
+        for (const auto& [name, count] : g_mirror.divergent) ranked.push_back({count, name});
+        std::sort(ranked.rbegin(), ranked.rend());
+        std::string list;
+        for (size_t i = 0; i < ranked.size() && i < 40; ++i)
+            list += (i ? ", " : "") + ranked[i].second + "=" + std::to_string(ranked[i].first);
+        Log("anim mirror: %d variables diverged (of %d samples): %s", static_cast<int>(ranked.size()),
+            static_cast<int>(g_mirror.meanErrors.size()), list.c_str());
+    }
     g_mirror = {};
     return true;
 }
@@ -3522,18 +3822,23 @@ void AnimMirrorTick() {
     // Breadcrumbs for the first tick only: a crash here leaves the last completed step in the log.
     bool first = g_mirror.copies == 0 && g_mirror.meanErrors.empty();
     if (first) Log("anim mirror: first tick, placing clone");
-    PlaceMirror();
+    if (g_mirror.mode == AnimMirrorMode::pawn && g_mirror.keepAi) {
+        ++g_mirror.copies;
+    } else if (g_mirror.mode == AnimMirrorMode::pawn) {
+        FeedPawnClone();
+        if (g_mirror.copyVars) CopyFields(g_mirror.fields);
+        if (!g_mirror.intent.empty()) CopyFields(g_mirror.intent);
+        if (g_mirror.forwardState && IsLive(g_mirror.sourceStates) && IsLive(g_mirror.cloneStates)) ForwardState();
+        ++g_mirror.copies;
+    } else {
+        PlaceMirror();
+    }
     if (first) Log("anim mirror: first tick, clone placed");
-    if (g_mirror.copy) {
-        auto from = reinterpret_cast<const uint8_t*>(g_mirror.source);
-        auto to = reinterpret_cast<uint8_t*>(g_mirror.clone);
-        for (const auto& f : g_mirror.fields) {
-            if (f.object) {
-                UObject* value = nullptr;
-                std::memcpy(&value, from + f.offset, 8);
-                if (value && !IsAnimAsset(value)) continue;
-            }
-            std::memcpy(to + f.offset, from + f.offset, static_cast<size_t>(f.size));
+    if (g_mirror.mode == AnimMirrorMode::variables || g_mirror.mode == AnimMirrorMode::nodes) {
+        CopyFields(g_mirror.fields);
+        if (g_mirror.mode == AnimMirrorMode::nodes) {
+            if (first) Log("anim mirror: first tick, copying node state");
+            CopyFields(g_mirror.nodes);
         }
         ++g_mirror.copies;
     }
@@ -3552,15 +3857,63 @@ void AnimMirrorTick() {
     // GetCurrentStateName takes an anim-node property index, not a state machine number; index 0 of
     // SwarmerBVim_C crashed the game (lab, 2026-11-06), so states are not compared.
     float speed = 0, cloneSpeed = 0;
-    uint8_t aware = 0;
+    uint8_t aware = 0, cloneAware = 0;
     int32_t sourceLod = -1, cloneLod = -1;
     GetProp(g_mirror.source, "Speed", speed);
     GetProp(g_mirror.clone, "Speed", cloneSpeed);
     GetProp(g_mirror.source, "AwareState", aware);
+    GetProp(g_mirror.clone, "AwareState", cloneAware);
     GetProp(g_mirror.mesh, "PredictedLODLevel", sourceLod);
     GetProp(g_mirror.component, "PredictedLODLevel", cloneLod);
-    Log("anim mirror +%.1fs: bone error mean %.1f max %.1f deg; speed %.0f (clone %.0f) aware %u; lod %d/%d",
-        now - g_mirror.started, mean, worst, speed, cloneSpeed, aware, sourceLod, cloneLod);
+    int active = ActivePlayers();
+    g_mirror.activePlayers.push_back(active);
+    auto sourceAction = DominantAsset(g_mirror.source), cloneAction = DominantAsset(g_mirror.clone);
+    ++g_mirror.actionSamples;
+    if (sourceAction == cloneAction) ++g_mirror.actionMatches;
+    Log("anim mirror action: %s / %s%s", sourceAction ? Name(sourceAction).c_str() : "-",
+        cloneAction ? Name(cloneAction).c_str() : "-", sourceAction == cloneAction ? " (match)" : "");
+    if (g_mirror.mode == AnimMirrorMode::pawn && !g_mirror.copyVars && g_mirror.intent.empty()) {
+        // Variables the clone's own anim update does not reproduce from position, velocity and movement mode:
+        // what a native-style replicator would still have to send. Floats within 5% count as equal.
+        auto from = reinterpret_cast<const uint8_t*>(g_mirror.source);
+        auto to = reinterpret_cast<const uint8_t*>(g_mirror.clone);
+        for (const auto& f : g_mirror.fields) {
+            if (f.object) continue;
+            bool differs;
+            if (f.real) {
+                float a = 0, b = 0;
+                std::memcpy(&a, from + f.offset, 4);
+                std::memcpy(&b, to + f.offset, 4);
+                differs = std::fabs(a - b) > 0.05f * std::max(1.f, std::fabs(a));
+            } else {
+                differs = std::memcmp(from + f.offset, to + f.offset, static_cast<size_t>(f.size)) != 0;
+            }
+            if (differs) ++g_mirror.divergent[f.name];
+        }
+    }
+    if (g_mirror.mode == AnimMirrorMode::pawn) {
+        auto length =[](const FVector& v) { return std::sqrt(v.x * v.x + v.y * v.y + v.z * v.z); };
+        FVector animVelocity{}, moveVelocity{}, sourceMoveVelocity{};
+        uint64_t weakMove = 0, weakController = 0;
+        UObject* controller = nullptr;
+        bool moveTicks = false;
+        GetProp(g_mirror.clone, "Velocity", animVelocity);
+        GetProp(g_mirror.cloneMove, "Velocity", moveVelocity);
+        GetProp(g_mirror.sourceMove, "Velocity", sourceMoveVelocity);
+        GetProp(g_mirror.clone, "BendCharacterMovement", weakMove);
+        GetProp(g_mirror.clone, "BendController", weakController);
+        GetProp(g_mirror.actor, "Controller", controller);
+        Call ticking(g_mirror.cloneMove, "IsComponentTickEnabled");
+        if (ticking.invoke()) moveTicks = ticking.get<bool>("ReturnValue");
+        Log("anim mirror pawn: move velocity %.0f (source %.0f), anim velocity %.0f; anim movement %s, anim "
+            "controller %s, pawn controller %s, move tick %d",
+            length(moveVelocity), length(sourceMoveVelocity), length(animVelocity),
+            ResolveWeak(weakMove) ? "set" : "null", ResolveWeak(weakController) ? "set" : "null",
+            IsLive(controller) ? Name(controller).c_str() : "none", moveTicks);
+    }
+    Log("anim mirror +%.1fs: bone error mean %.1f max %.1f deg; speed %.0f (clone %.0f) aware %u (clone %u); "
+        "lod %d/%d; active players %d",
+        now - g_mirror.started, mean, worst, speed, cloneSpeed, aware, cloneAware, sourceLod, cloneLod, active);
 }
 
 } // namespace coop::research

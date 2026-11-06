@@ -43,9 +43,12 @@ COMMANDS = (
     "time-probe",
     "anim-mirror-on",
     "anim-mirror-bare",
+    "anim-mirror-nodes",
+    "anim-mirror-pawn",
     "anim-mirror-off",
 )
 ARG_COMMANDS = ("mission-act", "stream-focus", "move-by", "level-probe", "spawn-actor")
+OPTIONAL_ARG_COMMANDS = ("anim-mirror-pawn",)
 ARG_LIMIT = 240
 
 
@@ -57,7 +60,7 @@ def read_ini(path: Path) -> configparser.ConfigParser:
 
 
 def validate_arg(command: str, arg: str) -> None:
-    if arg and command not in ARG_COMMANDS:
+    if arg and command not in ARG_COMMANDS + OPTIONAL_ARG_COMMANDS:
         raise ValueError(f"{command} does not take an argument")
     if command in ARG_COMMANDS and not arg:
         raise ValueError(f"{command} needs an argument")

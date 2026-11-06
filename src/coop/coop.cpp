@@ -2438,13 +2438,22 @@ void UpdateDebugTools(double now) {
     else if (command == DebugCommand::streamProbe) success = ProbePartnerStreaming();
     else if (command == DebugCommand::timeProbe) success = ProbeMenuTime();
     else if (command == DebugCommand::animMirrorOn || command == DebugCommand::animMirrorBare ||
+             command == DebugCommand::animMirrorNodes || command == DebugCommand::animMirrorPawn ||
              command == DebugCommand::animMirrorOff) {
         std::string summary;
+        auto mode = command == DebugCommand::animMirrorPawn  ? research::AnimMirrorMode::pawn
+                  : command == DebugCommand::animMirrorNodes ? research::AnimMirrorMode::nodes
+                  : command == DebugCommand::animMirrorOn    ? research::AnimMirrorMode::variables
+                                                             : research::AnimMirrorMode::bare;
         if (command == DebugCommand::animMirrorOff) success = research::AnimMirrorStop(summary);
         else if (!IsLive(g_pawn)) {
             summary = "anim-mirror needs a gameplay pawn";
             success = false;
-        } else success = research::AnimMirrorStart(g_pawn, command == DebugCommand::animMirrorOn, summary);
+        } else {
+            wchar_t arg[128]{};
+            GetPrivateProfileStringW(L"Debug", L"Arg", L"", arg, 128, path.c_str());
+            success = research::AnimMirrorStart(g_pawn, mode, Narrow(std::wstring(arg)), summary);
+        }
         Log("research: %s: %s", text.c_str(), summary.c_str());
         if (!success) DebugError(summary.c_str());
     }

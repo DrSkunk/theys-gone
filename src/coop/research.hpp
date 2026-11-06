@@ -140,9 +140,18 @@ bool ApplyObjectiveProgress(const std::string& jobName, const std::string& ident
 // Bool/Byte/Int/Float/Object parameters can be named. Logs the return value and the immediate state diff.
 bool MissionAct(const std::string& spec, bool allowed, std::string& summary);
 // Anim mirror lab: clone the nearest live AI pawn's body mesh 3 m away with the same anim class but no pawn,
-// copy the source anim instance's own variables into it every frame (copy=false: never, as a control) and log
-// the component-space bone error twice a second. Answers whether animation inputs can replace bone streaming.
-bool AnimMirrorStart(ue::UObject* localPawn, bool copy, std::string& summary);
+// copy the source anim instance's state into it every frame and log the component-space bone error twice a
+// second. Answers whether animation inputs can replace bone streaming.
+enum class AnimMirrorMode {
+    bare,      // copy nothing (control)
+    variables, // the anim instance's own reflected variables
+    nodes,     // variables plus anim-graph node state (state machine states, asset player times and assets)
+    pawn,      // a real pawn of the source's class without AI, fed only the source's position, velocity and
+               // movement mode, as a native client's simulated proxy is; its own anim instance does the rest
+};
+// options (pawn mode, comma-separated): keep-controller leaves the AI controller possessing the clone with its
+// brain stopped; move-tick keeps the clone's movement component ticking.
+bool AnimMirrorStart(ue::UObject* localPawn, AnimMirrorMode mode, const std::string& options, std::string& summary);
 bool AnimMirrorStop(std::string& summary);
 bool AnimMirroring();
 void AnimMirrorTick(); // game thread, every frame
