@@ -43,7 +43,12 @@ threads); see [prerequisites](docs/DEVELOPMENT.md#prerequisites). Run
 
 - **Evidence over claims.** Record each live test, its scope and log evidence
   in the research log; update the roadmap when status changes. One-PC paired
-  tests and unit tests do not establish two-PC gameplay.
+  tests and unit tests do not establish two-PC gameplay. Separate observed,
+  derived and unknown, mark each area's
+  [QA level](docs/DEVELOPMENT.md#qa-levels-and-evidence), and stop to correct
+  any claim the evidence contradicts.
+- **Scripts before playtests.** Prefer a repeatable lab scenario with a
+  PASS/FAIL result; a SKIP or a check that never ran is not a pass.
 - **Build-specific offsets.** Addresses and offsets target build 19221447
   only. Derive them with reflection or `tools/re/`; never guess.
 - **Protocol changes.** Changing a packet layout or meaning bumps
