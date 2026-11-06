@@ -73,9 +73,9 @@ is the current status, test scope and priorities.
    you already have an ASI loader there, and don't overwrite other mods.
 4. Copy `TheysGone.asi` and `TheysGone.ini` from the zip into that same
    folder. Both files must stay side by side.
-5. Copy the zip's `BendGame/Content/Paks/pakchunk99-TheysGone_Brand_P.pak`
+5. **Optional:** copy the zip's `BendGame/Content/Paks/pakchunk99-TheysGone_Brand_P.pak`
    into the matching folder under your game installation. This replaces the
-   title and main-menu logos with Theys Gone branding.
+   title and main-menu logos with Theys Gone branding; the mod works without it.
 6. **Linux / Steam Deck only:** Wine must load the proxy `version.dll`. In
    Steam, open the game's *Properties → Launch Options* and set:
 
