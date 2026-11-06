@@ -164,8 +164,8 @@ This is the host's choice; the joining player follows it automatically:
 > [!WARNING]
 > If the sandbox cannot start, the joining player leaves the session at once
 > and sees *Join blocked: the save sandbox failed*; their real saves are not
-> used for co-op. This check is new and has not yet been confirmed in a live
-> run, so keep backing up saves and check `TheysGone.log` for
+> used for co-op. This has passed one lab test on a single PC; keep backing up
+> saves and check `TheysGone.log` for
 > `save guard: guest save sandbox active until restart` after joining.
 
 With the sandbox active, guest progress is disposable, including after the
@@ -285,8 +285,8 @@ must enable it each session. The CO-OP status text shows the friendly-fire
 state, save-transfer status and errors. Motorcycles and the host's enemies are
 always synced.
 
-This page replaced the former F8 overlay and has not been tested in the game
-yet.
+This page replaced the former F8 overlay. One lab test on a single PC covered
+it in the pause menu; the title-menu page and gamepad use are untested.
 
 ### Passenger riding
 

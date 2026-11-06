@@ -455,7 +455,7 @@ and `TeleportKey` (F7) teleports next to the partner. In a session the pause
 menu's CO-OP page also offers TELEPORT TO PARTNER; it closes the menu and runs
 once gameplay resumes.
 
-This page has not yet been tested in the game.
+A one-PC lab run covered this page in the pause menu; the title menu is untested.
 
 The native weapon/crafting wheel keeps its selection UI, but only its
 `WeaponWheel_DID` slowdown request is removed while a partner is connected.

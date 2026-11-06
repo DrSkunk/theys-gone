@@ -25,6 +25,7 @@ Sections are not in chronological order. Index by date:
 | 2026-10-30 | Protocol-v9 proxy second attempt; Host mission on the guest; Host mission weather; Region transition; Companion materials; Companion vehicles |
 | 2026-10-31 | Weapon-wheel and pause timing; Shared menu pause; Co-op review scenarios |
 | 2026-11-01 | Native host load and fast travel; Death, sleep and travel follow-up |
+| 2026-11-06 | Join block, no-INI v12 join and native PLAYER SETTINGS |
 
 ## Weapon-wheel and pause timing investigation (2026-10-31)
 
@@ -3092,3 +3093,45 @@ the guest's disconnected sleep. Restored base ASI, INI and `Saved` tree;
 executable and file manifests verified; all four clones destroyed. Not tested:
 guest death, natural guest-owned enemy combat, mission-time sleep/death, and
 separate-PC behavior.
+
+## Join block, no-INI v12 join and native PLAYER SETTINGS (2026-11-06, one PC paired, UDP)
+
+- **Build:** mod commit `86564ad` (protocol v12; ASI SHA-256 `970f85d7…`), game build 19221447.
+- **Setup:** two reflink lab clones on the host PC, guest under the sandbox
+  Steam account. Each clone's old `TheysGone.ini` was deleted; the lab wrote
+  only `Transport=udp`, `PeerHost`, `Port`, `PeerPort`, `PlayerName` and
+  `DebugTools=1`. Scenario B added `DebugFailSaveGuard=1` on the guest.
+- **Steps:** B: host into gameplay, guest started and auto-joined. A: same
+  without the switch, then 150 s of play. In A the host then opened pause →
+  CO-OP → PLAYER SETTINGS, cycled JACKET, pressed FRIENDLY FIRE three times,
+  went BACK and chose TELEPORT TO PARTNER, then closed the pause menu.
+- **Result:** PASS for every check below.
+- **Observed:**
+  - B: 3 ms after `peer Host … connected` the guest logged `save guard:
+    sandbox unavailable; leaving the session so your real saves are not
+    written`, then `session event: Join blocked: save sandbox failed`. It never
+    requested the host's save, so its title menu had no Continue. The host
+    logged `Guest disconnected`. The HUD notice failed at the title screen
+    (`native ui: cannot display session notification; HUD unavailable`).
+  - A: both logged `starting (protocol v12)` and `objective sync: enabled when
+    hosting` with no such INI key. The guest enabled the sandbox right after
+    the host's first packet, adopted snapshot `57b07cba` (11 files, 7,713,260
+    bytes), reloaded and logged `verified loaded host progress fa97ef49`;
+    story signatures then matched. All guest writes went to the sandbox.
+  - PLAYER SETTINGS rendered in the pause menu with values in the labels.
+    JACKET cycled to CRIMSON: the host's jacket turned red, the INI gained
+    `JacketColor=1`, and the guest logged `appearance: deacon_up_standard
+    palette=Crimson` for the partner at the same second. FRIENDLY FIRE went
+    OFF → PRESS AGAIN TO ENABLE → ON - LETHAL (status: `Partner has not
+    enabled friendly fire`) → OFF. TELEPORT TO PARTNER closed the CO-OP page
+    and logged `teleported to partner Guest` after the pause menu closed.
+- **Derived:** the join block and host-decided options work on one PC over
+  UDP, and a player needs no INI beyond the LAN pairing keys. The native page
+  replaces the F8 overlay for these rows. At the title screen the block is
+  visible only in the CO-OP lobby log and status, not as a HUD notice.
+- **Unknown:** the title-menu PLAYER SETTINGS page, the "sandbox stays active"
+  notice on leaving, F9 / View+X, the guest-side page, gamepad navigation, the
+  Steam transport and two-PC behavior.
+- **Cleanup:** both clones destroyed; base saves hashed before, after and at
+  the end, unchanged. Logs and screenshots archived outside the repo
+  (`<archive>/v12-native-20261106T180216/`).

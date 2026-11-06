@@ -29,9 +29,8 @@ QA levels are defined in
 
 Important limits for players:
 
-- A guest whose save sandbox cannot start now leaves the session, but this is
-  not yet confirmed in a live run and the sandbox only covers the game
-  executable's own file calls. Back up saves. After a successful join, the
+- A guest whose save sandbox cannot start leaves the session (one-PC lab run),
+  but the sandbox only covers the game executable's own file calls. Back up saves. After a successful join, the
   sandbox remains active after disconnect until the game restarts. A cached
   transfer snapshot may also lag a recent host save.
 - Missions, inventory, pickups and doors are not shared live.
@@ -43,8 +42,9 @@ Important limits for players:
   cannot be represented completely. Melee damage is estimated and ranged
   attacks on the guest are unverified.
 - Player settings moved from the removed F8 overlay to the native CO-OP →
-  **PLAYER SETTINGS** page. The page, its HUD notices and its friendly-fire
-  toggle have unit tests only and have not been tested in the game yet.
+  **PLAYER SETTINGS** page. In a one-PC lab run the pause-menu page, color
+  sync, friendly-fire toggle and TELEPORT TO PARTNER worked; the title-menu
+  page and gamepad navigation are untested.
 - Teleporting beside a partner near furniture can place a player inside
   geometry. Guest sleep and tutorial pauses can also behave differently from
   their host-side equivalents.
@@ -66,10 +66,10 @@ with the host's missions.
    *Done when:* with the guard forced to fail, the guest cannot load the host's
    save or enter shared gameplay and sees a clear warning; the rule has a unit
    test, and a lab run records both the forced-failure and normal paths.
-   *Status:* implemented and unit-tested: the guest leaves the session when the
-   sandbox cannot start (`UpdateGuestSaveProtection`, `GuestMustLeaveUnprotected`),
-   is told the sandbox persists after leaving, and `DebugFailSaveGuard=1` forces
-   the failure. Remaining: the lab run for both paths.
+   *Status:* both paths passed a one-PC lab run on 2026-11-06 (research log).
+   Remaining: at the title screen the block shows only in the CO-OP lobby log
+   and status, because the HUD notice is unavailable there; show it in the
+   title menu itself.
 2. **Score lab runs automatically.** Add a lab scenario runner that drives
    both instances, asserts the mode first (both peers connected, `HostSave`
    sandbox active), checks shared state and prints `RESULT: PASS`, `FAIL` or

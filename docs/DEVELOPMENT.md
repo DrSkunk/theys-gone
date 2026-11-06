@@ -514,7 +514,7 @@ enables on the second (`ON - LETHAL`) and disables on one press; any other
 action disarms it. `View::notice` appends friendly-fire state, save-transfer
 status and settings errors to the status text; new errors are also sent as a
 HUD notice. The rows and labels (`BuildRows`, `PageTitle`) are covered by
-`make test`; the page has not been tested in the game yet.
+`make test`; a one-PC lab run covered the pause-menu page, not the title menu.
 
 The event log records hosting, connecting, connected and disconnected/left
 events. Lobby pages show recent events. The title log and transient gameplay
@@ -596,7 +596,7 @@ immediately (`UpdateGuestSaveProtection` in `coop.cpp`, rule
 unavailable; leaving the session`, and shows *Join blocked*. On leaving a
 session with the sandbox active, the guest is told it lasts until restart.
 To test the failure path, set `DebugFailSaveGuard=1` with `DebugTools=1`; the
-sandbox then refuses to start. Not yet confirmed in a live run.
+sandbox then refuses to start. Passed a one-PC lab run on 2026-11-06.
 
 - Writes are copy-on-write: modifying an existing save first copies the
   original into the sandbox.
