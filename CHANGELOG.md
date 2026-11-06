@@ -1,5 +1,44 @@
 # Changelog
 
+## [0.7.0](https://github.com/DrSkunk/theys-gone/compare/v0.6.0...v0.7.0) (2026-11-06)
+
+
+### ⚠ BREAKING CHANGES
+
+* F8 and View/Back + Y no longer open a settings overlay; use CO-OP > PLAYER SETTINGS.
+* protocol v12 cannot connect to v11 releases.
+
+### Features
+
+* host decides session options; ship without an INI (protocol v12) ([dddd44a](https://github.com/DrSkunk/theys-gone/commit/dddd44a90cf3fb06f9c1350ad5b029ef9ac05585))
+* move player settings into the native CO-OP menu ([accc66e](https://github.com/DrSkunk/theys-gone/commit/accc66e78015184b19138123b568ea5968cfd67e))
+* **save:** block a guest whose save sandbox cannot start ([3b9cacd](https://github.com/DrSkunk/theys-gone/commit/3b9cacd70067e46186dfd225f6271caf6ff3aba2))
+* **tools:** add two-PC test tooling ([0516a09](https://github.com/DrSkunk/theys-gone/commit/0516a09ae10c75627e761918c5df73631626c29d))
+
+
+### Bug Fixes
+
+* **ui:** close the pause menu for teleport and name START GAME ([441863b](https://github.com/DrSkunk/theys-gone/commit/441863be105592a1be50be823b9e7e05cd93a579))
+* **ui:** redraw the title highlight and show the leave notice ([c332293](https://github.com/DrSkunk/theys-gone/commit/c33229328d5cd70f0e6391b23f06ec3a80f30069))
+
+
+### Documentation
+
+* add start points, done criteria and a test ladder ([5451e0b](https://github.com/DrSkunk/theys-gone/commit/5451e0bdbc3ea52cdfc6d441e0e16e369b50549e))
+* adopt coop-anything's verify-then-claim QA method ([8f84bbe](https://github.com/DrSkunk/theys-gone/commit/8f84bbe25c6e81996ab5d0f078842f45c040a634))
+* allow dedicated test PCs through twopc prep and restore ([ed1c0c8](https://github.com/DrSkunk/theys-gone/commit/ed1c0c803377262bd9b8a1ad97b35ded316c9355))
+* consolidate co-op status and roadmap ([#24](https://github.com/DrSkunk/theys-gone/issues/24)) ([93f0b7a](https://github.com/DrSkunk/theys-gone/commit/93f0b7ae4085ec8fb5625cbad5f06647bec0f1cc))
+* correct the story catch-up QA level to two-PC ([86564ad](https://github.com/DrSkunk/theys-gone/commit/86564ad2fc9f9be75fa355f32851c16804fef674))
+* document the two-PC tooling and anonymize the Steam run ([bec1295](https://github.com/DrSkunk/theys-gone/commit/bec12950480f5cb4debd3105b002ada51016b798))
+* focus on joining the host's save and remove stale content ([cc0400b](https://github.com/DrSkunk/theys-gone/commit/cc0400b887dc05bc7f03c76c00d97cdc20500818))
+* mark the branding pak install step optional ([aab1a20](https://github.com/DrSkunk/theys-gone/commit/aab1a205c0fa4e7c9c05db0b5e0e513d49245c04))
+* match the README's sample UDP log line ([f92dd4f](https://github.com/DrSkunk/theys-gone/commit/f92dd4fb1e24aae9afbee2a3d6ec8da345b9c71f))
+* record sleep, teleport and tutorial-pause lab findings ([280c3e7](https://github.com/DrSkunk/theys-gone/commit/280c3e778a0238e1382374713ce0f9f5fcbd1992))
+* record the 2026-11-06 lab run of the join block and native settings ([b5a4f4e](https://github.com/DrSkunk/theys-gone/commit/b5a4f4e608f6d7908827e57745a185de5dfc358f))
+* record the title-menu settings, F9 and leave-notice lab runs ([54d1fe9](https://github.com/DrSkunk/theys-gone/commit/54d1fe9b85d58de367145e6bc3a7ddc6fa4e9446))
+* record the two-PC Steam run and reprioritize the roadmap ([f9be096](https://github.com/DrSkunk/theys-gone/commit/f9be09699d7525ac24e886bd371b6d7edae6491b))
+* state the co-op focus in AGENTS.md ([1d6addf](https://github.com/DrSkunk/theys-gone/commit/1d6addfc16aac61b0d7ce90370afb4807171322f))
+
 ## [0.6.0](https://github.com/DrSkunk/theys-gone/compare/v0.5.1...v0.6.0) (2026-10-31)
 
 
