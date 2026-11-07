@@ -299,6 +299,7 @@ struct EnemySource;
 struct EnemyReplica;
 bool PawnEnemiesActive();
 constexpr double kStandInAckInterval = 1.0, kStandInAckTimeout = 2.5;
+constexpr double kCorpseSettle = 3.0, kCorpsePoseInterval = 1.0;
 void SendStandIn(EnemySource& e, const FVector& origin, uint32_t timeMs, double now);
 void ReceiveEnemyMotion(const char* data, int len, double now);
 void ReceiveEnemyEvent(const char* data, int len, double now);
@@ -3286,6 +3287,7 @@ struct EnemySource {
     standin::Reader standIn; // [Research] PawnEnemies: movement, state and one-shots for the peer's stand-in
     bool wasAlive = true;
     double standInAck = -10; // last time the peer said it shows this enemy as a stand-in
+    double diedAt = -1, lastCorpsePose = -10;
 };
 struct EnemyReplica {
     UObject* actor = nullptr;
@@ -4123,6 +4125,12 @@ void SendEnemy(EnemySource& e, const FVector& origin, uint32_t timeMs, double no
         SendStandIn(e, origin, timeMs, now);
         return;
     }
+    // A corpse the peer took over from a stand-in settles within a few seconds; after that it needs only an
+    // occasional pose (one corpse at full rate cost about 12 kB/s in the two-PC run).
+    if (PawnEnemiesActive() && !e.friendly && !e.wasAlive && e.diedAt >= 0 && now - e.diedAt > kCorpseSettle) {
+        if (now - e.lastCorpsePose < kCorpsePoseInterval) return;
+        e.lastCorpsePose = now;
+    }
     double start = Now();
     bool read = e.reader.Read(mesh, e.table, static_cast<size_t>(e.subset.back()) + 1, e.all);
     g_enemyStats.readTime += Now() - start;
@@ -4685,7 +4693,10 @@ void SendStandIn(EnemySource& e, const FVector& origin, uint32_t timeMs, double 
         if (!path.empty()) SendEnemyEvent(e.entity, kEnemyEventOneShot, path, atPartner);
         ++g_standInStats.oneShots;
     }
-    if (e.wasAlive && !living) SendEnemyEvent(e.entity, kEnemyEventDied, "", false);
+    if (e.wasAlive && !living) {
+        SendEnemyEvent(e.entity, kEnemyEventDied, "", false);
+        e.diedAt = now;
+    }
     e.wasAlive = living;
 }
 

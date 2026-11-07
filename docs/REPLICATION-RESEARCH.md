@@ -3795,3 +3795,48 @@ separate-PC behavior.
 - **Cleanup:** both lab clones destroyed after each run; base game copy
   never written. Archives: `<archive>/pawn-20261107-1755/` and
   `<archive>/pawn-20261107-1800/`.
+
+## Pawn stand-ins over Steam: first two-PC run (2026-11-07, two PCs, Steam)
+
+- **Question:** do pawn stand-ins work between two PCs over the Steam
+  transport, with real timing and the poses paused?
+- **Build:** commit `29e7a5e` (protocol v13; ASI `75cbc641…`), game build
+  19221447. After `twopc.sh prep` both PCs got an INI with only
+  `DebugTools=1` and `[Research] PawnEnemies=1`.
+- **Setup:** a KDE Plasma desktop PC hosting, a Steam Deck in game mode
+  joining with JOIN A FRIEND; host save transferred to the guest's sandbox
+  (7.5 MB). Both `begin` and `god-on`; host `spawn-pack` (8 swarmers), the
+  "Fight or flight" tutorial dismissed on the host; screenshots from both;
+  three guest `hit-enemy`; host `kill-owned-enemy`.
+- **Result:** PASS for the stand-ins over Steam, the pose pause, hits and
+  the death hand-over; FAIL for holding one-shot animations (below).
+- **Observed:**
+  - The Deck spawned 8 `SwarmerPawn_C` stand-ins within 62 ms; the host
+    paused poses for all 8 within 50 ms.
+  - Host enemy traffic for 2 min 40 s with 8 enemies: 0 pose packets and
+    16.2–17.1 kB/s (120 `DMMO` per second). After the kill the corpse's
+    poses resumed at 30 packets per second, 29.5 kB/s in total.
+  - Guest screenshots showed the stand-ins around the guest and moving and
+    attacking during the fight.
+  - One-shots: the host sent 129, the Deck played 78 and found 51 not
+    loaded.
+  - The root-set check refused: bit 30 was set on 2945 of 2945 native
+    classes and on 142 of 3907 actors, so no sequence was held.
+  - All 3 guest hits reached the host's swarmer (160.0 to 103.8); the host
+    kill showed on the Deck as `stand-in 3 died; showing the owner's
+    corpse`.
+  - The host's screen captured black after its pause menu opened; the game
+    kept running.
+- **Derived:** the stand-in design holds up over Steam between separate
+  PCs. Bit 30 matches the root set (every native class has it, and only a
+  few game-rooted actors), so the check needs to allow rooted actors.
+  Corpses should not keep full-rate poses.
+- **Fixes after the run:** the check now accepts at most 10% of actors with
+  the bit; a corpse whose stand-in was taken over gets 1 pose per second
+  after 3 s.
+- **Unknown:** whether holding the sequences closes the one-shot gap; how
+  the stand-ins look in motion on the Deck (screenshots only); more than
+  eight enemies.
+- **Cleanup:** the Deck quit through the menu and `restore` matched all 57
+  save files, the ASI and the INI. The host's game was still running at
+  the time of writing and is restored separately.
