@@ -3838,5 +3838,6 @@ separate-PC behavior.
   the stand-ins look in motion on the Deck (screenshots only); more than
   eight enemies.
 - **Cleanup:** the Deck quit through the menu and `restore` matched all 57
-  save files, the ASI and the INI. The host's game was still running at
-  the time of writing and is restored separately.
+  save files, the ASI and the INI. The host PC was rebooted with its game
+  still running (its screen captured black); `restore` then matched all 85
+  save files, the ASI and the INI.
