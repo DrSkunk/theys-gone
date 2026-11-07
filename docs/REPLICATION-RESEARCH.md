@@ -3433,3 +3433,67 @@ separate-PC behavior.
 - **Cleanup:** lab clone destroyed after each run; base game copy never
   written. Archives: `<archive>/anim-mirror-20261107-0926/` through
   `<archive>/anim-mirror-20261107-0955/`.
+
+## Pawn mirror: what the stand-in's anim notifies do, and muting them (2026-11-07, one PC, one game)
+
+- **Question:** the replayed montages fire gameplay notifies on the stand-in
+  (previous entry). What does each one do on the guest, and can the
+  stand-in mute them without losing the animation?
+- **Build:** worktree `anim-mirror-probe`, game build 19221447. The mirror
+  records the Blueprint events called while each source or stand-in notify
+  runs (nested ProcessEvent calls; Blueprint calls into native functions do
+  not pass through ProcessEvent and stay invisible). It also counts
+  `Received_NotifyTick` and skeleton `AnimNotify_*` events. New options:
+  `mute-notifies` swallows all of the stand-in's notify events;
+  `mute-gameplay` swallows only `MeleeArmed`, `CounterIcon`,
+  `CanCounterMyAttack`, `CanCounterMyAttack_State`,
+  `CanProvokeCounterMyAttack_State`, `AttemptGrapple` and `DamageModifier`.
+- **Setup:** stand-still scenario, `god-off`, stand-in on the source
+  (`no-offset`), options `move-request,state,play-oneshot,heal`. Trace run with
+  the claw fix; one `mute-notifies` run; three `mute-gameplay` runs with
+  `keep-claws` (weapon collision on).
+- **Result:** PASS in the lab for `mute-gameplay`: with claw collision on and
+  the stand-in overlapping the player, it dealt no damage in three runs, and
+  the replay still matched.
+- **Observed:**
+  - Traced calls: the stand-in's `MeleeArmed` calls its own claws'
+    `OnWeaponArmed` and `OnWeaponDisarmed`, like the source's. Its
+    `OnGroundIdle`/`OnGroundMove` notifies call only its own
+    `BendClimbingSurfaceCharacterMovementComponent`. `CounterIcon`,
+    `CanCounterMyAttack*` and `AttemptGrapple` made no visible Blueprint
+    calls on either pawn.
+  - The source's `GrappleStarted` (a state-machine notify the stand-in does
+    not fire) calls `OnHCMSettingChanged` on hundreds of world actors, such as
+    pickups, spawn locations and the bike.
+  - Reflection of the compiled notify Blueprints (their local call results)
+    shows what the invisible ones do. `AttemptGrapple`: `GetController`, cast
+    to `Bend_AIController`, `GetAttackManager`, `GetFireFocusConst`, then
+    `AttemptDirectGrapple` or `ForceDirectGrapple`. `CounterIcon`:
+    `GetOwner`, `CounterIcon_01`, `CounterIconVariable`, so a counter-icon
+    widget. `BloodStainFX`: `GetSocketLocation` only. `CanCounterMyAttack`:
+    `GetOwner` cast to `Bend_Pawn`. `MeleeArmed` also carries the hit
+    settings (`Damage Percent`, `Killing Blow`, `DisableVictimsDamageReaction`).
+  - `mute-notifies`: 615 stand-in notify events swallowed in 16 s; 21 of 22
+    one-shot samples still matched; no stand-in damage.
+  - `mute-gameplay` with `keep-claws`: stand-in hits 0, 0 and 0 against 9,
+    3 and 1 source hits; one-shot samples matched 43 of 43, 22 of 27 and
+    17 of 17. Without muting, the same setup gave 6 stand-in hits per run.
+  - The game exited once, at `spawn-single` after a completed
+    `mute-gameplay` run with the mirror already stopped. It left no crash dump
+    and no log line, and it did not recur in the next two cleanup and spawn
+    steps.
+- **Derived:** muting `MeleeArmed` keeps the stand-in's claws disarmed, so
+  it is a second guard next to weapon collision. `AttemptGrapple` needs an AI
+  controller and cannot grapple on a controllerless stand-in. The counter
+  notifies are what should depend on the target: on a guest, a counter
+  prompt is right for an enemy attacking the guest and wrong for one
+  attacking the host. A replicated attack event would need the target to
+  decide. Cosmetic notifies (blood, face) and the stand-in's own movement
+  notifies can stay.
+- **Unknown:** whether the stand-in's `CounterIcon` actually draws a prompt
+  on a guest screen (on one PC the source draws the same prompt); what the
+  native parts of the counter notifies change; the one unexplained exit;
+  other enemy types; two-PC timing.
+- **Cleanup:** lab clone destroyed after each run; base game copy never
+  written. Archives: `<archive>/anim-mirror-20261107-1009/` through
+  `<archive>/anim-mirror-20261107-1020/`.

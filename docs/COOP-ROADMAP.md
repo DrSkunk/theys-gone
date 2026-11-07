@@ -144,8 +144,13 @@ with the host's missions.
     dealt no damage (0 in 3 runs). The replayed montages still fire gameplay
     notifies such as `AttemptGrapple` and `CounterIcon` on the stand-in
     ([research log](REPLICATION-RESEARCH.md#pawn-mirror-stand-in-damage-with-god-mode-off-2026-11-07-one-pc-one-game)).
-    *Start:* decide which stand-in notifies to suppress; then looping
-    one-shots, hit reactions and death. *Done when:* a lab run
+    Muting the stand-in's gameplay notifies (`MeleeArmed`, counter windows and
+    icon, `AttemptGrapple`) kept it harmless even with claw collision on, and
+    the replay still matched
+    ([research log](REPLICATION-RESEARCH.md#pawn-mirror-what-the-stand-ins-anim-notifies-do-and-muting-them-2026-11-07-one-pc-one-game)).
+    Counter prompts should follow the attack's target, so an attack event
+    needs to carry it.
+    *Start:* looping one-shots, hit reactions and death. *Done when:* a lab run
     shows the pawn clone in the source's action (idle, move, attack, grapple,
     hit, death) for most samples and the stand-in never damages the player,
     before any wire format is designed.

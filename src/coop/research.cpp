@@ -3377,6 +3377,13 @@ struct AnimMirror {
     struct DamageTally { int hits = 0; float total = 0; };
     std::map<std::string, DamageTally> damage; // "source", "clone", "player", "other"
     std::map<std::string, int> sourceNotifies, cloneNotifies;
+    // Notify trace: the notify events in progress, and per "owner notify" the blueprint calls made inside them.
+    struct NotifyFrame { UObject* obj; UObject* fn; std::string label; };
+    std::vector<NotifyFrame> notifyStack;
+    std::map<std::string, std::map<std::string, int>> notifyCalls;
+    bool muteNotifies = false; // mute-notifies: the clone's notify events are swallowed
+    bool muteGameplay = false; // mute-gameplay: only its gameplay notifies (damage, counter, grapple)
+    int mutedNotifies = 0;
     bool keepAi = false; // pawn mode with ai: the clone keeps its AI and is not fed (control)
     // Pawn mode with move-request (implied by intent): copy the movement component's AI move request.
     bool moveRequest = false;
@@ -3814,12 +3821,30 @@ void SetPlayerHealth(float value) {
 }
 } // namespace
 
-void AnimMirrorEvent(UObject* obj, UObject* fn, void* parms) {
-    if (!g_mirror.active || !IsLive(fn) || !parms) return;
+// Which mirror mesh a notify event belongs to: "source", "clone" or null. Blueprint notifies arrive as
+// Received_Notify/NotifyBegin/NotifyTick/NotifyEnd on the notify object with the mesh as first parameter;
+// skeleton notifies as AnimNotify_* events on the anim instance.
+const char* NotifyOwner(UObject* obj, UObject* fn, void* parms, std::string& label) {
+    static int names[4] = {FindNameIndex("Received_Notify"), FindNameIndex("Received_NotifyBegin"),
+                           FindNameIndex("Received_NotifyTick"), FindNameIndex("Received_NotifyEnd")};
+    for (int name : names) {
+        if (name <= 0 || fn->name.index != name || !parms) continue;
+        auto mesh = *static_cast<UObject**>(parms);
+        const char* owner = mesh == g_mirror.mesh ? "source" : mesh == g_mirror.component ? "clone" : nullptr;
+        if (owner) label = Name(obj->cls);
+        return owner;
+    }
+    if (obj != g_mirror.source && obj != g_mirror.clone) return nullptr;
+    std::string function = Name(fn);
+    if (!function.starts_with("AnimNotify_")) return nullptr;
+    label = function;
+    return obj == g_mirror.source ? "source" : "clone";
+}
+
+bool AnimMirrorEvent(UObject* obj, UObject* fn, void* parms) {
+    if (!g_mirror.active || !IsLive(fn) || !IsLive(obj)) return false;
     static int anyDamage = FindNameIndex("ReceiveAnyDamage");
-    static int notifyBegin = FindNameIndex("Received_NotifyBegin");
-    static int notify = FindNameIndex("Received_Notify");
-    if (fn->name.index == anyDamage && obj == g_mirror.player) {
+    if (fn->name.index == anyDamage && obj == g_mirror.player && parms) {
         float amount = 0, health = 0;
         UObject *instigator = nullptr, *causer = nullptr;
         ReadEventParam(fn, parms, "Damage", amount);
@@ -3835,14 +3860,45 @@ void AnimMirrorEvent(UObject* obj, UObject* fn, void* parms) {
         Log("anim mirror damage: %.1f from %s (causer %s, instigator %s); player health %.1f", amount, party,
             IsLive(causer) ? Name(causer).c_str() : "null", IsLive(instigator) ? Name(instigator).c_str() : "null",
             health);
-        return;
     }
-    if ((fn->name.index == notifyBegin || fn->name.index == notify) && IsLive(obj)) {
-        auto mesh = *static_cast<UObject**>(parms);
-        if (mesh != g_mirror.mesh && mesh != g_mirror.component) return;
-        auto& counts = mesh == g_mirror.mesh ? g_mirror.sourceNotifies : g_mirror.cloneNotifies;
-        if (++counts[Name(obj->cls)] == 1)
-            Log("anim mirror: %s notify %s", mesh == g_mirror.mesh ? "source" : "clone", Name(obj->cls).c_str());
+    // Inside a notify: record the blueprint calls it makes (native calls are not visible here).
+    if (!g_mirror.notifyStack.empty()) {
+        auto& calls = g_mirror.notifyCalls[g_mirror.notifyStack.back().label];
+        std::string call = Name(obj->cls) + "." + Name(fn);
+        if (calls.size() < 48 || calls.contains(call)) ++calls[call];
+    }
+    std::string label;
+    const char* owner = NotifyOwner(obj, fn, parms, label);
+    if (!owner) return false;
+    bool clone = owner[0] == 'c';
+    auto& counts = clone ? g_mirror.cloneNotifies : g_mirror.sourceNotifies;
+    if (++counts[label] == 1) Log("anim mirror: %s notify %s", owner, label.c_str());
+    // Gameplay notifies, from their compiled blueprints' locals (reflection, build 19221447): MeleeArmed arms the
+    // claws (damage), CounterIcon shows a counter widget, the CanCounter/CanProvokeCounter ones open counter
+    // windows on the pawn, AttemptGrapple starts a grapple through the AI controller, DamageModifier changes
+    // damage. Cosmetic and self-contained notifies (blood, face, the clone's own movement) stay.
+    static const char* gameplay[] = {"AnimNotify_MeleeArmed_C", "AnimNotify_CounterIcon_C",
+                                     "AnimNotify_CanCounterMyAttack_C", "AnimNotify_CanCounterMyAttack_State_C",
+                                     "AnimNotify_CanProvokeCounterMyAttack_State_C", "AnimNotify_AttemptGrapple_C",
+                                     "AnimNotifyState_DamageModifier_C"};
+    bool mute = clone && g_mirror.muteNotifies;
+    for (const char* name : gameplay) mute = mute || (clone && g_mirror.muteGameplay && label == name);
+    if (mute) {
+        ++g_mirror.mutedNotifies;
+        return true;
+    }
+    g_mirror.notifyStack.push_back({obj, fn, std::string(owner) + " " + label});
+    return false;
+}
+
+void AnimMirrorEventDone(UObject* obj, UObject* fn) {
+    if (!g_mirror.active || g_mirror.notifyStack.empty()) return;
+    // Search down the stack so a frame whose completion was missed cannot keep recording forever.
+    auto& stack = g_mirror.notifyStack;
+    for (size_t i = stack.size(); i-- > 0;) {
+        if (stack[i].obj != obj || stack[i].fn != fn) continue;
+        stack.resize(i);
+        return;
     }
 }
 
@@ -3875,6 +3931,8 @@ bool AnimMirrorStart(UObject* localPawn, AnimMirrorMode mode, const std::string&
     m.player = localPawn;
     m.heal = HasOption(options, "heal");
     m.keepClaws = HasOption(options, "keep-claws");
+    m.muteNotifies = HasOption(options, "mute-notifies");
+    m.muteGameplay = HasOption(options, "mute-gameplay");
     if (HasOption(options, "no-offset")) m.offset = 0;
     GetProp(localPawn, "Health", m.playerHealth);
     m.copyVars = copyVars;
@@ -4049,9 +4107,12 @@ bool AnimMirrorStop(std::string& summary) {
                 text += (text.empty() ? "" : ", ") + name + "=" + std::to_string(count);
             return text.empty() ? std::string("none") : text;
         };
-        Log("anim mirror: player damage: %s; %d heals", hits.empty() ? "none" : hits.c_str(), g_mirror.heals);
+        Log("anim mirror: player damage: %s; %d heals; %d clone notify events muted", hits.empty() ? "none" : hits.c_str(),
+            g_mirror.heals, g_mirror.mutedNotifies);
         Log("anim mirror: source notifies: %s", list(g_mirror.sourceNotifies).c_str());
         Log("anim mirror: clone notifies: %s", list(g_mirror.cloneNotifies).c_str());
+        for (const auto& [notify, calls] : g_mirror.notifyCalls)
+            Log("anim mirror: %s calls: %s", notify.c_str(), list(calls).c_str());
     }
     if (!g_mirror.divergent.empty()) {
         std::vector<std::pair<int, std::string>> ranked;
