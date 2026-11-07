@@ -273,15 +273,15 @@ Steamworks SDK code is bundled or linked:
   If the original owner leaves, the session ends instead of adopting Steam's
   replacement owner. In LAN mode, the player who chose Host is the host.
 
-### 4.2 State packet (protocol v12)
+### 4.2 State packet (protocol v13)
 
 [`protocol.hpp`](../src/coop/protocol.hpp) defines a fixed 145-byte
 little-endian packet, sent at 30 Hz:
 
 | Field | Type | Notes |
 |---|---|---|
-| magic, version | u32, u16 | `"DGCO"`, 12 |
-| flags | u16 | HasPawn, InVehicle, HasBike, Passenger, FriendlyFire, AcceptPassengers, Alive, SyncBikes, WorldState, SyncEnemies, Separated (host only: free roam split enemy ownership by region), MenuPause (sender's native pause/map/inventory menu is open), HostSave, ObjectiveSync, FreeRoam (host only: the session options; the guest follows them and ignores its own values) |
+| magic, version | u32, u16 | `"DGCO"`, 13 |
+| flags | u16 | HasPawn, InVehicle, HasBike, Passenger, FriendlyFire, AcceptPassengers, Alive, SyncBikes, WorldState, SyncEnemies, Separated (host only: free roam split enemy ownership by region), MenuPause (sender's native pause/map/inventory menu is open), HostSave, ObjectiveSync, FreeRoam (host only: the session options; the guest follows them and ignores its own values), PawnEnemies (sender runs `[Research] PawnEnemies`; enemies use pawn stand-ins only when both set it) |
 | seq, timeMs | u32 each | wrapping sequence; sender's frame clock |
 | pos[3], yaw, pitch, vel[3] | f32 | finite, within ±1e8 |
 | name | char[16] | |

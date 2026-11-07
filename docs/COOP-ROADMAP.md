@@ -3,7 +3,7 @@
 The goal is for a second player to join the host's save and help with the
 host's missions. Story progress stays on the host's save; this is not a fully
 shared campaign or a thin client. This is the current status for the repository's
-protocol v12 code. The [research log](REPLICATION-RESEARCH.md) contains the
+protocol v13 code. The [research log](REPLICATION-RESEARCH.md) contains the
 evidence; its older plans are not the current roadmap.
 
 **Evidence matters:** two games on one PC are a paired lab test, not a

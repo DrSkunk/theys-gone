@@ -218,7 +218,7 @@ never read from disk.
 | `DebugTools`, `DebugFailSaveGuard` | `0` | See [debug tools](#debug-tools) |
 | `Discovery`, `MissionDiscovery`, `MenuDiscovery` | `0` | Read-only reverse-engineering logs |
 
-"Host decides" options travel in the host's state packets (protocol v12
+"Host decides" options travel in the host's state packets (protocol v13
 flags `kHostSave`, `kObjectiveSync`, `kFreeRoam`); a guest ignores its own
 values for them. `[Research]` keys are listed under the native-replication
 experiments below.

@@ -326,7 +326,7 @@ names, account IDs, IP addresses and local paths before sharing it. A healthy
 start looks like this:
 
 ```text
-Theys Gone … starting (protocol v12)
+Theys Gone … starting (protocol v13)
 ProcessEvent hook installed
 GNames via pointer at rva 0x…, … names
 network: UDP port 27777 open
