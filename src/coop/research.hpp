@@ -155,5 +155,7 @@ bool AnimMirrorStart(ue::UObject* localPawn, AnimMirrorMode mode, const std::str
 bool AnimMirrorStop(std::string& summary);
 bool AnimMirroring();
 void AnimMirrorTick(); // game thread, every frame
+// Game thread, from ProcessEvent: the player's damage events and the mirror meshes' anim notifies.
+void AnimMirrorEvent(ue::UObject* obj, ue::UObject* fn, void* parms);
 
 } // namespace coop::research

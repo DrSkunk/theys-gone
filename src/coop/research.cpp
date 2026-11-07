@@ -3365,6 +3365,18 @@ struct AnimMirror {
     int oneShots = 0, oneShotsPlayed = 0;
     int oneShotSamples = 0, oneShotMatches = 0; // samples with the source in a replayed one-shot
     int clawsDisabled = -1;         // clone weapons with collision turned off; -1 until looked up
+    // Damage check: the player's ReceiveAnyDamage events, attributed to the source, the clone or neither, and
+    // both meshes' anim notifies (MeleeArmed opens a native swing). With heal, the player's health is held at
+    // a buffer, so a long run measures hits instead of ending in death.
+    UObject* player = nullptr;
+    bool heal = false;
+    bool keepClaws = false; // keep-claws: leave the clone's weapon collision on (control for the claw fix)
+    float offset = 300.f;   // clone distance beside the source (cm); no-offset puts it on the source, claws included
+    float playerHealth = 0; // at start
+    int heals = 0;
+    struct DamageTally { int hits = 0; float total = 0; };
+    std::map<std::string, DamageTally> damage; // "source", "clone", "player", "other"
+    std::map<std::string, int> sourceNotifies, cloneNotifies;
     bool keepAi = false; // pawn mode with ai: the clone keeps its AI and is not fed (control)
     // Pawn mode with move-request (implied by intent): copy the movement component's AI move request.
     bool moveRequest = false;
@@ -3727,13 +3739,13 @@ void FollowOneShots() {
     Log("anim mirror one-shot: %s in state %d -> %s", Name(asset).c_str(), state, IsLive(montage) ? "playing" : "failed");
 }
 
-// Pawn mode: the clone follows the source 3 m to the side with the source's velocity and movement mode, and its
+// Pawn mode: the clone follows the source 3 m to the side (offset) with the source's velocity and movement mode, and its
 // own movement tick stays off so the copied values are what its anim instance reads.
 void FeedPawnClone() {
     Call where(g_mirror.pawn, "K2_GetActorLocation"), facing(g_mirror.pawn, "K2_GetActorRotation");
     if (!where.invoke() || !facing.invoke()) return;
     auto at = where.get<FVector>("ReturnValue");
-    at.y += 300.f;
+    at.y += g_mirror.offset;
     // Not a teleport: a teleport every frame keeps the anim graph in its post-teleport reset (it gates
     // locomotion on bHasTouchedGroundAfterSpawningOrTeleporting), which a native proxy's smooth moves never do.
     Call(g_mirror.actor, "K2_SetActorLocationAndRotation").set("NewLocation", at)
@@ -3779,6 +3791,61 @@ void PlaceMirror() {
 
 } // namespace
 
+namespace {
+// Which mirror pawn an actor belongs to: itself, its owner or instigator chain, or a controller's pawn.
+const char* MirrorParty(UObject* actor) {
+    for (int depth = 0; depth < 4 && IsLive(actor); ++depth) {
+        if (actor == g_mirror.pawn) return "source";
+        if (actor == g_mirror.actor) return "clone";
+        if (actor == g_mirror.player) return "player";
+        UObject* next = nullptr;
+        if (!GetProp(actor, "Pawn", next) || !IsLive(next)) next = nullptr; // controllers
+        if (!next && (!GetProp(actor, "Owner", next) || !IsLive(next))) next = nullptr;
+        if (!next && (!GetProp(actor, "Instigator", next) || !IsLive(next))) next = nullptr;
+        actor = next;
+    }
+    return nullptr;
+}
+
+void SetPlayerHealth(float value) {
+    auto prop = FindChild(g_mirror.player->cls, "Health");
+    int offset = prop ? PropertyOffset(prop) : -1;
+    if (offset > 0) std::memcpy(reinterpret_cast<uint8_t*>(g_mirror.player) + offset, &value, sizeof value);
+}
+} // namespace
+
+void AnimMirrorEvent(UObject* obj, UObject* fn, void* parms) {
+    if (!g_mirror.active || !IsLive(fn) || !parms) return;
+    static int anyDamage = FindNameIndex("ReceiveAnyDamage");
+    static int notifyBegin = FindNameIndex("Received_NotifyBegin");
+    static int notify = FindNameIndex("Received_Notify");
+    if (fn->name.index == anyDamage && obj == g_mirror.player) {
+        float amount = 0, health = 0;
+        UObject *instigator = nullptr, *causer = nullptr;
+        ReadEventParam(fn, parms, "Damage", amount);
+        ReadEventParam(fn, parms, "InstigatedBy", instigator);
+        ReadEventParam(fn, parms, "DamageCauser", causer);
+        GetProp(g_mirror.player, "Health", health);
+        const char* party = MirrorParty(causer);
+        if (!party) party = MirrorParty(instigator);
+        if (!party) party = "other";
+        auto& tally = g_mirror.damage[party];
+        ++tally.hits;
+        tally.total += amount;
+        Log("anim mirror damage: %.1f from %s (causer %s, instigator %s); player health %.1f", amount, party,
+            IsLive(causer) ? Name(causer).c_str() : "null", IsLive(instigator) ? Name(instigator).c_str() : "null",
+            health);
+        return;
+    }
+    if ((fn->name.index == notifyBegin || fn->name.index == notify) && IsLive(obj)) {
+        auto mesh = *static_cast<UObject**>(parms);
+        if (mesh != g_mirror.mesh && mesh != g_mirror.component) return;
+        auto& counts = mesh == g_mirror.mesh ? g_mirror.sourceNotifies : g_mirror.cloneNotifies;
+        if (++counts[Name(obj->cls)] == 1)
+            Log("anim mirror: %s notify %s", mesh == g_mirror.mesh ? "source" : "clone", Name(obj->cls).c_str());
+    }
+}
+
 bool AnimMirroring() { return g_mirror.active; }
 
 bool AnimMirrorStart(UObject* localPawn, AnimMirrorMode mode, const std::string& options, std::string& summary) {
@@ -3805,6 +3872,11 @@ bool AnimMirrorStart(UObject* localPawn, AnimMirrorMode mode, const std::string&
     }
     AnimMirror m;
     m.mode = mode;
+    m.player = localPawn;
+    m.heal = HasOption(options, "heal");
+    m.keepClaws = HasOption(options, "keep-claws");
+    if (HasOption(options, "no-offset")) m.offset = 0;
+    GetProp(localPawn, "Health", m.playerHealth);
     m.copyVars = copyVars;
     m.moveRequest = HasOption(options, "move-request") || HasOption(options, "intent");
     m.pawn = best;
@@ -3966,6 +4038,21 @@ bool AnimMirrorStop(std::string& summary) {
     if (g_mirror.playOneShot)
         Log("anim mirror: %d one-shots seen, %d played on the clone; %d of %d one-shot samples matched",
             g_mirror.oneShots, g_mirror.oneShotsPlayed, g_mirror.oneShotMatches, g_mirror.oneShotSamples);
+    {
+        std::string hits;
+        for (const auto& [party, tally] : g_mirror.damage)
+            hits += (hits.empty() ? "" : ", ") + party + " " + std::to_string(tally.hits) + " hits/" +
+                    std::to_string(static_cast<int>(tally.total));
+        auto list = [](const std::map<std::string, int>& counts) {
+            std::string text;
+            for (const auto& [name, count] : counts)
+                text += (text.empty() ? "" : ", ") + name + "=" + std::to_string(count);
+            return text.empty() ? std::string("none") : text;
+        };
+        Log("anim mirror: player damage: %s; %d heals", hits.empty() ? "none" : hits.c_str(), g_mirror.heals);
+        Log("anim mirror: source notifies: %s", list(g_mirror.sourceNotifies).c_str());
+        Log("anim mirror: clone notifies: %s", list(g_mirror.cloneNotifies).c_str());
+    }
     if (!g_mirror.divergent.empty()) {
         std::vector<std::pair<int, std::string>> ranked;
         for (const auto& [name, count] : g_mirror.divergent) ranked.push_back({count, name});
@@ -3995,7 +4082,7 @@ void AnimMirrorTick() {
     if (g_mirror.mode == AnimMirrorMode::pawn && g_mirror.keepAi) {
         ++g_mirror.copies;
     } else if (g_mirror.mode == AnimMirrorMode::pawn) {
-        if (g_mirror.clawsDisabled <= 0 && Seconds() - g_mirror.started < 1.0) {
+        if (!g_mirror.keepClaws && g_mirror.clawsDisabled <= 0 && Seconds() - g_mirror.started < 1.0) {
             int disabled = DisableCloneWeapons(g_mirror.actor);
             if (disabled != g_mirror.clawsDisabled) Log("anim mirror: clone weapons with collision off: %d", disabled);
             g_mirror.clawsDisabled = disabled;
@@ -4010,6 +4097,15 @@ void AnimMirrorTick() {
         PlaceMirror();
     }
     if (first) Log("anim mirror: first tick, clone placed");
+    // One swarmer grapple hit (88) outright killed a 78-health player in the lab, so restoring at half health is
+    // too late: the player is held at kHealBuffer instead, and every hit still reports its full damage.
+    constexpr float kHealBuffer = 1000.f;
+    float health = 0;
+    if (g_mirror.heal && IsLive(g_mirror.player) && GetProp(g_mirror.player, "Health", health) &&
+        health < kHealBuffer) {
+        if (g_mirror.heals++ == 0) Log("anim mirror: holding player health at %.0f (was %.1f)", kHealBuffer, health);
+        SetPlayerHealth(kHealBuffer);
+    }
     if (g_mirror.mode == AnimMirrorMode::variables || g_mirror.mode == AnimMirrorMode::nodes) {
         CopyFields(g_mirror.fields);
         if (g_mirror.mode == AnimMirrorMode::nodes) {

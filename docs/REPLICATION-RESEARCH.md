@@ -3378,3 +3378,58 @@ separate-PC behavior.
   written. Archives: `<archive>/attack-trace-20261106-*/` and
   `<archive>/anim-mirror-20261106-2244/` through
   `<archive>/anim-mirror-20261106-2316/`.
+
+## Pawn mirror: stand-in damage with god mode off (2026-11-07, one PC, one game)
+
+- **Question:** does the guest-side stand-in, replaying attacks as slot
+  montages, damage the player? Does turning off its weapons' collision stop
+  that?
+- **Build:** worktree `anim-mirror-probe`, game build 19221447. The mirror now
+  logs every `ReceiveAnyDamage` on the player with its `DamageCauser` and
+  instigator, attributed to the source, the stand-in or neither through the
+  owner, instigator and controller chain, and counts both meshes' anim
+  notifies. New `anim-mirror-pawn` options: `heal` (hold the player's health
+  at 1000), `keep-claws` (leave the stand-in's weapon collision on) and
+  `no-offset` (put the stand-in on the source instead of 3 m beside it).
+- **Setup:** the stand-still scenario with `god-off`: per run, a fresh
+  `spawn-single`, `anim-mirror-pawn` with `move-request,state,play-oneshot,heal`
+  plus the options below, two `probe-enemy` provocations and 40 s.
+- **Result:** PASS in the lab for the claw fix: with collision off, the
+  stand-in swung and dealt no damage; with it on and overlapping the player,
+  it did.
+- **Observed:**
+
+  | Stand-in | Weapon collision | Runs | Stand-in `MeleeArmed` | Stand-in hits | Source hits |
+  |---|---|---|---|---|---|
+  | 3 m beside the source | off | 1 | 5 | 0 | 5 (355) |
+  | 3 m beside the source | on | 2 | 13, 2 | 0, 0 | 11 (542), 3 (250) |
+  | on the source | on | 2 | 11, 13 | **6 (301), 6 (293)** | 8 (406), 10 (476) |
+  | on the source | off | 2 | 5, 5 | **0, 0** | 6 (398), 5 (355) |
+
+  - Every stand-in hit named one of the stand-in's own `Bend_WpnSwarmerClaw_C`
+    weapons as the causer, with no instigator (the stand-in has no
+    controller). Source hits named the source's claws and
+    `SwarmerController_C`.
+  - Holding health does not prevent death: an uncountered grapple ends in
+    `swm_f_grapple_1_killdcn_v2_swm` and a 145 hit with the source pawn as the
+    causer, and the player died in most runs. Every damage event logged the
+    player's health as 135.0, although the probe held it at 1000.
+  - The replayed montages fire the animations' gameplay notifies on the
+    stand-in: `MeleeArmed`, `CanCounterMyAttack`, `CanCounterMyAttack_State`,
+    `CounterIcon`, `AttemptGrapple`, `SetReactionState` and `BloodStainFX`.
+    `CanBeThrown`, `SetMovementMode` and `SuppressAnchorDriven` fired on the
+    source only.
+  - One-shot matching held at 19 of 21 to 48 of 48 samples per run.
+- **Derived:** the stand-in's claws are real weapons that hit whatever they
+  touch. Three metres to the side they missed. Turning off their collision at
+  spawn stopped every hit in the overlapping runs, so it is required. The
+  notifies are a second channel: they run gameplay logic on the guest (a
+  counter prompt, a grapple attempt), not just visuals.
+- **Unknown:** what the stand-in's `AttemptGrapple`, `CounterIcon` and
+  counter-window notifies do on a real guest (no grapple of the player by the
+  stand-in was seen, but the source always grappled first); whether
+  `BloodStainFX` and other cosmetic notifies should stay; why the logged health
+  read 135.0; other enemy types; two-PC timing.
+- **Cleanup:** lab clone destroyed after each run; base game copy never
+  written. Archives: `<archive>/anim-mirror-20261107-0926/` through
+  `<archive>/anim-mirror-20261107-0955/`.

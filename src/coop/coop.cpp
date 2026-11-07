@@ -6437,6 +6437,8 @@ void HookedProcessEvent(UObject* obj, UObject* fn, void* parms) {
         research::TraceEvent(obj, fn, parms);
     if (g_ready && research::MissionWatching() && GetCurrentThreadId() == g_gameThread && !g_inTick)
         research::MissionWatchEvent(obj, fn, parms);
+    if (g_ready && research::AnimMirroring() && GetCurrentThreadId() == g_gameThread && !g_inTick)
+        research::AnimMirrorEvent(obj, fn, parms);
     bool ownUi = g_ready && !g_inTick && GetCurrentThreadId() == g_gameThread && IsLive(obj) && IsLive(fn);
     if (ownUi) {
         g_inTick = true;

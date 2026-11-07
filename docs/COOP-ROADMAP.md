@@ -139,8 +139,13 @@ with the host's missions.
     Attacks and grapples play when each new animation is replayed on the
     clone as a `FullBody` slot montage (51 of 60 one-shot samples matched;
     [research log](REPLICATION-RESEARCH.md#pawn-mirror-attacks-and-grapples-as-replayed-slot-montages-2026-11-06-one-pc-one-game)).
-    *Start:* measure whether the stand-in deals damage with god mode off;
-    then looping one-shots, hit reactions and death. *Done when:* a lab run
+    With god mode off, the stand-in's own claws hit the player when they
+    overlapped it (12 hits in 2 runs). With their collision turned off it
+    dealt no damage (0 in 3 runs). The replayed montages still fire gameplay
+    notifies such as `AttemptGrapple` and `CounterIcon` on the stand-in
+    ([research log](REPLICATION-RESEARCH.md#pawn-mirror-stand-in-damage-with-god-mode-off-2026-11-07-one-pc-one-game)).
+    *Start:* decide which stand-in notifies to suppress; then looping
+    one-shots, hit reactions and death. *Done when:* a lab run
     shows the pawn clone in the source's action (idle, move, attack, grapple,
     hit, death) for most samples and the stand-in never damages the player,
     before any wire format is designed.
