@@ -750,8 +750,10 @@ void TestEnemyHit() {
     badEvent.path[100] = 'x'; // bytes after the terminator
     assert(!coop::DecodeEnemyEvent(reinterpret_cast<const char*>(&badEvent), sizeof badEvent, eventOut));
     badEvent = event;
-    badEvent.kind = 4;
+    badEvent.kind = 5;
     assert(!coop::DecodeEnemyEvent(reinterpret_cast<const char*>(&badEvent), sizeof badEvent, eventOut));
+    assert(coop::EncodeEnemyEvent(9, 3, 4, coop::kEnemyEventStandIn, "", false, event));
+    assert(!coop::EncodeEnemyEvent(9, 3, 4, coop::kEnemyEventStandIn, anim, false, event)); // no path
 
     float start[3]{0, 0, 160}, forward[3]{1, 0, 0}, feet[3]{1000, 20, 0};
     assert(std::fabs(coop::AimDistanceToBody(start, forward, feet) - 1000) < 0.01f);

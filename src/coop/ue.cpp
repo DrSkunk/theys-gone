@@ -183,6 +183,42 @@ bool IsLive(const UObject* obj) {
     return (*reinterpret_cast<int32_t*>(item + 8) & (ItemFlagPendingKill | ItemFlagUnreachable)) == 0;
 }
 
+namespace {
+volatile long* ItemFlags(const UObject* obj) {
+    auto items = *reinterpret_cast<uint8_t**>(g.objectArray + 0x10);
+    return reinterpret_cast<volatile long*>(items + static_cast<size_t>(obj->internalIndex) * 0x10 + 8);
+}
+} // namespace
+
+bool KeepLoaded(UObject* obj, std::string& diag) {
+    // The root-set bit is taken from UE 4.11's EInternalObjectFlags and checked once on this build: native
+    // classes are rooted, actors never are.
+    static int verified = 0; // 0 unknown, 1 confirmed, -1 refuted
+    if (!verified) {
+        auto classClass = FindClass("Class"), actorClass = FindClass("Actor");
+        int classes = 0, rootedClasses = 0, actors = 0, rootedActors = 0;
+        for (int32_t i = 0; i < ObjectCount(); ++i) {
+            auto o = ObjectAt(i);
+            if (!IsLive(o)) continue;
+            bool rooted = (*ItemFlags(o) & ItemFlagRootSet) != 0;
+            if (o->cls == classClass) {
+                ++classes;
+                rootedClasses += rooted;
+            } else if (actorClass && !IsDefaultOrArchetype(o) && IsA(o, actorClass)) {
+                ++actors;
+                rootedActors += rooted;
+            }
+        }
+        verified = classes > 100 && rootedClasses * 10 >= classes * 9 && actors > 0 && rootedActors == 0 ? 1 : -1;
+        diag = "root-set bit check: " + std::to_string(rootedClasses) + " of " + std::to_string(classes) +
+               " native classes and " + std::to_string(rootedActors) + " of " + std::to_string(actors) +
+               " actors have it; " + (verified > 0 ? "using it" : "not using it");
+    }
+    if (verified < 0 || !IsLive(obj)) return false;
+    _InterlockedOr(ItemFlags(obj), ItemFlagRootSet);
+    return true;
+}
+
 std::shared_ptr<UObject> RetainObject(UObject* obj) {
     constexpr LONG rootSet = 1L << 30;
     static std::unordered_map<UObject*, std::weak_ptr<UObject>> retained;

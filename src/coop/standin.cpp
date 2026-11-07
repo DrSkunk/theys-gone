@@ -264,7 +264,6 @@ void Feed(StandIn& s, const EnemyMotionPacket& m, const FVector& at, double now)
                 Call(weapon, "SetActorEnableCollision").setBool("bNewActorEnableCollision", false).invoke();
         }
     }
-    if (!(m.flags & kMotionAlive) && !s.dead) Kill(s);
 }
 
 bool PlayOneShot(StandIn& s, UObject* sequence, bool atLocalPlayer) {

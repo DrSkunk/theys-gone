@@ -298,6 +298,8 @@ enum EnemyEventKind : uint8_t {
     kEnemyEventClass = 1,   // path: the pawn's Blueprint class ("/Game/....SwarmerPawn_C")
     kEnemyEventOneShot = 2, // path: the AnimSequence the pawn started in an attack or grapple
     kEnemyEventDied = 3,    // no path
+    kEnemyEventStandIn = 4, // receiver to owner, about once a second: it shows this entity as a stand-in, so the
+                            // owner stops sending its bone poses while it lives; no path
 };
 constexpr uint8_t kEnemyEventAtReceiver = 1; // a one-shot aimed at the receiving player (counter prompts are theirs)
 
@@ -315,11 +317,11 @@ inline bool DecodeEnemyEvent(const char* data, int len, EnemyEventPacket& out) {
     if (len != static_cast<int>(sizeof(EnemyEventPacket))) return false;
     std::memcpy(&out, data, sizeof out);
     if (out.magic != kEnemyEventMagic || out.version != kEnemyEventVersion || !out.session || !out.entity ||
-        !out.sequence || out.kind < kEnemyEventClass || out.kind > kEnemyEventDied)
+        !out.sequence || out.kind < kEnemyEventClass || out.kind > kEnemyEventStandIn)
         return false;
     if (out.flags & ~kEnemyEventAtReceiver) return false;
     if (out.flags && out.kind != kEnemyEventOneShot) return false;
-    bool named = out.kind != kEnemyEventDied;
+    bool named = out.kind == kEnemyEventClass || out.kind == kEnemyEventOneShot;
     if (!ValidObjectPath(out.path, kEnemyPathLength, !named)) return false;
     if (!named && out.path[0]) return false;
     // Unused path bytes stay zero, so a packet has one encoding.

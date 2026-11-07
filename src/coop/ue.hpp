@@ -51,6 +51,7 @@ constexpr int32_t RF_ClassDefaultObject = 0x10;
 constexpr int32_t RF_ArchetypeObject = 0x20;
 constexpr int32_t ItemFlagUnreachable = 1 << 28;
 constexpr int32_t ItemFlagPendingKill = 1 << 29;
+constexpr int32_t ItemFlagRootSet = 1 << 30; // verified at run time by KeepLoaded
 
 using ProcessEventFn = void (*)(UObject*, UObject*, void*);
 
@@ -69,6 +70,8 @@ bool DetectPropertyOffsetField(std::string& diag);
 int32_t ObjectCount();
 UObject* ObjectAt(int32_t i);
 bool IsLive(const UObject* obj);
+// Adds an asset to the root set so garbage collection keeps it (diagnostics in diag on the first call).
+bool KeepLoaded(UObject* obj, std::string& diag);
 // Game-thread ownership for objects held only by native plugin state, invisible to UE's collector.
 std::shared_ptr<UObject> RetainObject(UObject* obj);
 // Resolves a TWeakObjectPtr (ObjectIndex, SerialNumber) to a live object or nullptr.

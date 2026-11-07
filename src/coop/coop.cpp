@@ -298,6 +298,7 @@ void ReceiveEnemyMaterials(const char* data, int len, double now);
 struct EnemySource;
 struct EnemyReplica;
 bool PawnEnemiesActive();
+constexpr double kStandInAckInterval = 1.0, kStandInAckTimeout = 2.5;
 void SendStandIn(EnemySource& e, const FVector& origin, uint32_t timeMs, double now);
 void ReceiveEnemyMotion(const char* data, int len, double now);
 void ReceiveEnemyEvent(const char* data, int len, double now);
@@ -3284,6 +3285,7 @@ struct EnemySource {
     bool friendly = false; // a story companion (BendBuddyController): streamed for display only
     standin::Reader standIn; // [Research] PawnEnemies: movement, state and one-shots for the peer's stand-in
     bool wasAlive = true;
+    double standInAck = -10; // last time the peer said it shows this enemy as a stand-in
 };
 struct EnemyReplica {
     UObject* actor = nullptr;
@@ -3313,8 +3315,9 @@ struct EnemyReplica {
     std::string pawnClass;
     EnemyMotionBuffer motions;
     standin::StandIn standIn;
-    double lastStandInAttempt = -10;
+    double lastStandInAttempt = -10, lastStandInAck = -10;
     bool standInLogged = false;
+    bool standInDone = false; // it died: the poseable replica shows the owner's corpse from here on
 };
 std::vector<EnemySource> g_enemySources;
 std::unordered_map<uint32_t, EnemyReplica> g_enemyReplicas;
@@ -4115,6 +4118,11 @@ void SendEnemy(EnemySource& e, const FVector& origin, uint32_t timeMs, double no
         }
         e.lastInfo = now;
     }
+    // A living enemy the peer shows as a stand-in needs no bone poses; its corpse does.
+    if (PawnEnemiesActive() && !e.friendly && e.wasAlive && now - e.standInAck < kStandInAckTimeout) {
+        SendStandIn(e, origin, timeMs, now);
+        return;
+    }
     double start = Now();
     bool read = e.reader.Read(mesh, e.table, static_cast<size_t>(e.subset.back()) + 1, e.all);
     g_enemyStats.readTime += Now() - start;
@@ -4625,7 +4633,7 @@ constexpr float kProxyMaxStrike = 400.f; // larger drops are engine resets, not 
 bool PawnEnemiesActive() { return g_cfg.pawnEnemies && (g_peer.flags & kPawnEnemies); }
 
 struct StandInStats {
-    uint64_t motions = 0, events = 0, oneShots = 0, played = 0, spawned = 0, failed = 0;
+    uint64_t motions = 0, events = 0, oneShots = 0, played = 0, missing = 0, spawned = 0, failed = 0;
 } g_standInStats;
 uint32_t g_standInSequence = 0;
 EnemyHitDedupe g_standInDedupe;
@@ -4698,6 +4706,14 @@ void ReceiveEnemyEvent(const char* data, int len, double now) {
         return;
     }
     if (!AcceptEnemies(now) || !PawnEnemiesActive() || !g_standInDedupe.Accept(event.session, event.sequence)) return;
+    if (event.kind == kEnemyEventStandIn) {
+        for (auto& e : g_enemySources)
+            if (e.entity == event.entity) {
+                if (now - e.standInAck >= kStandInAckTimeout) Log("enemies: peer shows %u as a stand-in; poses paused", e.entity);
+                e.standInAck = now;
+            }
+        return;
+    }
     auto found = g_enemyReplicas.find(event.entity);
     if (event.kind == kEnemyEventClass) {
         if (auto replica = ReplicaFor(event.entity); replica && replica->pawnClass != event.path) {
@@ -4709,27 +4725,44 @@ void ReceiveEnemyEvent(const char* data, int len, double now) {
     if (found == g_enemyReplicas.end() || !IsLive(found->second.standIn.pawn)) return;
     auto& s = found->second.standIn;
     if (event.kind == kEnemyEventDied) {
-        standin::Kill(s);
-        Log("enemies: stand-in %u died", event.entity);
+        // Killing the stand-in would run the game's kill reward for the local player (a "+1 SWARMER EAR" in
+        // the lab); the poseable replica shows the owner's corpse instead.
+        standin::Destroy(s);
+        found->second.standInDone = true;
+        Log("enemies: stand-in %u died; showing the owner's corpse", event.entity);
         return;
     }
     static UObject* sequenceClass = FindClass("AnimSequence");
     auto sequence = FindObject(event.path, sequenceClass);
     if (!sequence) {
         RequestAssetLoad(event.path);
+        ++g_standInStats.missing;
         return;
+    }
+    // Nothing on this machine references the owner's attack animations, so they would be collected again.
+    static std::unordered_set<UObject*> held;
+    if (held.insert(sequence).second) {
+        std::string diag;
+        bool kept = KeepLoaded(sequence, diag);
+        if (!diag.empty()) Log("enemies: %s", diag.c_str());
+        if (!kept) held.erase(sequence);
     }
     if (standin::PlayOneShot(s, sequence, (event.flags & kEnemyEventAtReceiver) != 0)) ++g_standInStats.played;
 }
 
 // Guest side: spawns and feeds the stand-in. False while there is none, so the poseable replica is used.
 bool UpdateStandIn(UObject* pawn, uint32_t entity, EnemyReplica& r, const FVector& origin, double senderMs, double now) {
-    if (!PawnEnemiesActive() || r.friendly || r.pawnClass.empty() || r.paths.empty()) {
+    if (!PawnEnemiesActive() || r.friendly || r.pawnClass.empty() || r.paths.empty() || r.standInDone) {
         if (IsLive(r.standIn.pawn)) standin::Destroy(r.standIn);
         return false;
     }
     EnemyMotionPacket m;
     if (!r.motions.Sample(senderMs, m)) return false;
+    if (!(m.flags & kMotionAlive)) { // a lost died event
+        standin::Destroy(r.standIn);
+        r.standInDone = true;
+        return false;
+    }
     FVector at{m.pos[0] - origin.x, m.pos[1] - origin.y, m.pos[2] - origin.z};
     if (!IsLive(r.standIn.pawn)) {
         if (now - r.lastStandInAttempt < 1.0) return false;
@@ -4754,6 +4787,10 @@ bool UpdateStandIn(UObject* pawn, uint32_t entity, EnemyReplica& r, const FVecto
         Log("enemies: stand-in %u is a %s", entity, Name(cls).c_str());
     }
     standin::Feed(r.standIn, m, at, now);
+    if (now - r.lastStandInAck >= kStandInAckInterval) {
+        r.lastStandInAck = now;
+        SendEnemyEvent(entity, kEnemyEventStandIn, "", false);
+    }
     r.at = at;
     r.alive = (m.flags & kMotionAlive) && m.health > 0;
     return true;
@@ -6552,9 +6589,10 @@ void Tick(bool hudFrame) {
         if (PawnEnemiesActive()) {
             int live = 0;
             for (const auto& [entity, replica] : g_enemyReplicas) live += IsLive(replica.standIn.pawn) ? 1 : 0;
-            Log("perf: stand-ins live=%d motions=%.1f/s events=%llu one-shots sent=%llu played=%llu spawned=%llu failed=%llu",
+            Log("perf: stand-ins live=%d motions=%.1f/s events=%llu one-shots sent=%llu played=%llu missing=%llu spawned=%llu failed=%llu",
                 live, g_standInStats.motions / seconds, static_cast<unsigned long long>(g_standInStats.events),
                 static_cast<unsigned long long>(g_standInStats.oneShots), static_cast<unsigned long long>(g_standInStats.played),
+                static_cast<unsigned long long>(g_standInStats.missing),
                 static_cast<unsigned long long>(g_standInStats.spawned), static_cast<unsigned long long>(g_standInStats.failed));
             g_standInStats = {};
         }
