@@ -148,8 +148,10 @@ with the host's missions.
     icon, `AttemptGrapple`) kept it harmless even with claw collision on, and
     the replay still matched
     ([research log](REPLICATION-RESEARCH.md#pawn-mirror-what-the-stand-ins-anim-notifies-do-and-muting-them-2026-11-07-one-pc-one-game)).
-    Counter prompts should follow the attack's target, so an attack event
-    needs to carry it.
+    Counter prompts follow the attack's target: gated on it, they passed for
+    attacks on the local player and were muted otherwise, so an attack event
+    carries the target. How a guest's counter reaches the host's enemy is
+    still open.
     *Start:* looping one-shots, hit reactions and death. *Done when:* a lab run
     shows the pawn clone in the source's action (idle, move, attack, grapple,
     hit, death) for most samples and the stand-in never damages the player,

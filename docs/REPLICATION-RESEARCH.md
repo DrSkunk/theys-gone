@@ -3478,6 +3478,13 @@ separate-PC behavior.
   - `mute-gameplay` with `keep-claws`: stand-in hits 0, 0 and 0 against 9,
     3 and 1 source hits; one-shot samples matched 43 of 43, 22 of 27 and
     17 of 17. Without muting, the same setup gave 6 stand-in hits per run.
+  - `counter-for-target` (with `mute-gameplay` and `keep-claws`) latches the
+    source AI's `GetCurrentTargetPawn` per replayed one-shot, as an attack
+    event would carry it, and passes the counter notifies only when that is
+    the local player. Attacks on the player: 166 counter events passed, 0
+    muted. With `pretend-other-target`: 0 passed, 120 muted. Stand-in hits 0
+    in both, against 6 and 3 source hits; one-shot samples matched 36 of 38
+    and 25 of 28.
   - The game exited once, at `spawn-single` after a completed
     `mute-gameplay` run with the mirror already stopped. It left no crash dump
     and no log line, and it did not recur in the next two cleanup and spawn
@@ -3487,8 +3494,10 @@ separate-PC behavior.
   controller and cannot grapple on a controllerless stand-in. The counter
   notifies are what should depend on the target: on a guest, a counter
   prompt is right for an enemy attacking the guest and wrong for one
-  attacking the host. A replicated attack event would need the target to
-  decide. Cosmetic notifies (blood, face) and the stand-in's own movement
+  attacking the host. A replicated attack event therefore carries the
+  target, and the stand-in gates the counter notifies on it; the gate
+  switches correctly in the lab. A guest who counters a stand-in still has to
+  reach the host's real enemy, which is not designed yet. Cosmetic notifies (blood, face) and the stand-in's own movement
   notifies can stay.
 - **Unknown:** whether the stand-in's `CounterIcon` actually draws a prompt
   on a guest screen (on one PC the source draws the same prompt); what the
@@ -3496,4 +3505,4 @@ separate-PC behavior.
   other enemy types; two-PC timing.
 - **Cleanup:** lab clone destroyed after each run; base game copy never
   written. Archives: `<archive>/anim-mirror-20261107-1009/` through
-  `<archive>/anim-mirror-20261107-1020/`.
+  `<archive>/anim-mirror-20261107-1028/`.

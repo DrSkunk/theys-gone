@@ -3383,6 +3383,11 @@ struct AnimMirror {
     std::map<std::string, std::map<std::string, int>> notifyCalls;
     bool muteNotifies = false; // mute-notifies: the clone's notify events are swallowed
     bool muteGameplay = false; // mute-gameplay: only its gameplay notifies (damage, counter, grapple)
+    // counter-for-target (with mute-gameplay): counter notifies pass when the attack targets the local player.
+    // pretend-other-target treats every attack as aimed at someone else, to exercise the muting branch.
+    bool counterForTarget = false, pretendOtherTarget = false;
+    bool oneShotForPlayer = false; // the latest replayed one-shot's target is the local player
+    int countersPassed = 0, countersMuted = 0;
     int mutedNotifies = 0;
     bool keepAi = false; // pawn mode with ai: the clone keeps its AI and is not fed (control)
     // Pawn mode with move-request (implied by intent): copy the movement component's AI move request.
@@ -3743,7 +3748,17 @@ void FollowOneShots() {
     UObject* montage = play.invoke() ? play.get<UObject*>("ReturnValue") : nullptr;
     if (IsLive(montage)) ++g_mirror.oneShotsPlayed;
     g_mirror.lastMontage = montage;
-    Log("anim mirror one-shot: %s in state %d -> %s", Name(asset).c_str(), state, IsLive(montage) ? "playing" : "failed");
+    // The attack's target, latched per replayed one-shot as an attack event would carry it: the source AI's
+    // current target pawn, compared with the local player (the guest on a real stand-in).
+    UObject* controller = nullptr;
+    UObject* target = nullptr;
+    if (GetProp(g_mirror.pawn, "Controller", controller) && IsLive(controller)) {
+        Call current(controller, "GetCurrentTargetPawn");
+        if (current.invoke()) target = current.get<UObject*>("ReturnValue");
+    }
+    g_mirror.oneShotForPlayer = target == g_mirror.player && !g_mirror.pretendOtherTarget;
+    Log("anim mirror one-shot: %s in state %d -> %s; target %s", Name(asset).c_str(), state,
+        IsLive(montage) ? "playing" : "failed", g_mirror.oneShotForPlayer ? "local player" : "other");
 }
 
 // Pawn mode: the clone follows the source 3 m to the side (offset) with the source's velocity and movement mode, and its
@@ -3883,6 +3898,14 @@ bool AnimMirrorEvent(UObject* obj, UObject* fn, void* parms) {
                                      "AnimNotifyState_DamageModifier_C"};
     bool mute = clone && g_mirror.muteNotifies;
     for (const char* name : gameplay) mute = mute || (clone && g_mirror.muteGameplay && label == name);
+    // counter-for-target: the counter notifies (gameplay[1..4]) pass only for an attack on the local player,
+    // whom the prompt and window are for; damage and grapple notifies stay muted.
+    bool counter = false;
+    for (int i = 1; i <= 4; ++i) counter = counter || label == gameplay[i];
+    if (clone && counter && g_mirror.counterForTarget) {
+        mute = !g_mirror.oneShotForPlayer;
+        ++(mute ? g_mirror.countersMuted : g_mirror.countersPassed);
+    }
     if (mute) {
         ++g_mirror.mutedNotifies;
         return true;
@@ -3933,6 +3956,8 @@ bool AnimMirrorStart(UObject* localPawn, AnimMirrorMode mode, const std::string&
     m.keepClaws = HasOption(options, "keep-claws");
     m.muteNotifies = HasOption(options, "mute-notifies");
     m.muteGameplay = HasOption(options, "mute-gameplay");
+    m.counterForTarget = HasOption(options, "counter-for-target");
+    m.pretendOtherTarget = HasOption(options, "pretend-other-target");
     if (HasOption(options, "no-offset")) m.offset = 0;
     GetProp(localPawn, "Health", m.playerHealth);
     m.copyVars = copyVars;
@@ -4107,8 +4132,9 @@ bool AnimMirrorStop(std::string& summary) {
                 text += (text.empty() ? "" : ", ") + name + "=" + std::to_string(count);
             return text.empty() ? std::string("none") : text;
         };
-        Log("anim mirror: player damage: %s; %d heals; %d clone notify events muted", hits.empty() ? "none" : hits.c_str(),
-            g_mirror.heals, g_mirror.mutedNotifies);
+        Log("anim mirror: player damage: %s; %d heals; %d clone notify events muted; counter events %d passed, %d muted",
+            hits.empty() ? "none" : hits.c_str(), g_mirror.heals, g_mirror.mutedNotifies, g_mirror.countersPassed,
+            g_mirror.countersMuted);
         Log("anim mirror: source notifies: %s", list(g_mirror.sourceNotifies).c_str());
         Log("anim mirror: clone notifies: %s", list(g_mirror.cloneNotifies).c_str());
         for (const auto& [notify, calls] : g_mirror.notifyCalls)
