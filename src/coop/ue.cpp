@@ -251,6 +251,7 @@ bool IsDefaultOrArchetype(const UObject* obj) {
 
 int32_t SplitNameNumber(const std::string& text, int32_t& number) {
     number = 0;
+    if (text.empty() || text.back() < '0' || text.back() > '9') return FindNameIndex(text.c_str()); // hot path
     auto split = SplitFNameNumber(text);
     if (split.number) {
         int32_t base = FindNameIndex(split.base.c_str());
@@ -296,11 +297,12 @@ UObject* FindClass(const char* name) {
     auto& entry = cache[name];
     if (auto object = entry.Get()) return object;
     if (!entry.object && GetTickCount64() < entry.retryAt) return nullptr;
-    int32_t idx = FindNameIndex(name);
+    int32_t number = 0;
+    int32_t idx = SplitNameNumber(name, number);
     if (idx < 0) { entry.Set(nullptr); return nullptr; }
     for (int32_t i = 0, n = ObjectCount(); i < n; ++i) {
         auto o = ObjectAt(i);
-        if (!o || o->name.index != idx || o->name.number != 0 || !o->cls) continue;
+        if (!o || o->name.index != idx || o->name.number != number || !o->cls) continue;
         std::string meta = Name(o->cls);
         if (meta.size() >= 5 && meta.compare(meta.size() - 5, 5, "Class") == 0 && IsLive(o)) {
             entry.Set(o);
@@ -317,12 +319,14 @@ UObject* FindDefaultObject(const char* className) {
 }
 
 UObject* FindChild(const UObject* s, const char* name) {
-    int32_t idx = FindNameIndex(name);
+    // The FName number counts too: "Finished_0" is "Finished" number 1, and "Finished" must not match it.
+    int32_t number = 0;
+    int32_t idx = SplitNameNumber(name ? name : "", number);
     if (idx < 0) return nullptr;
     for (; s; s = Super(s)) {
         auto f = *reinterpret_cast<UObject* const*>(reinterpret_cast<const uint8_t*>(s) + off::StructChildren);
         for (; f; f = *reinterpret_cast<UObject* const*>(reinterpret_cast<const uint8_t*>(f) + off::FieldNext))
-            if (f->name.index == idx) return f;
+            if (f->name.index == idx && f->name.number == number) return f;
     }
     return nullptr;
 }

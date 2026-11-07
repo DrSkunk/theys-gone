@@ -3726,11 +3726,12 @@ separate-PC behavior.
   side effect found (below).
 - **Observed:**
   - The guest spawned the stand-in (`stand-in 1 is a SwarmerPawn_C`) and
-    played 41 of the host's 59 one-shots. The rest were attack sequences
-    not loaded on the guest (`swm_atk_left_165`, `swm_atk_right_165`,
-    `swm_atk_right_110`, `swm_atk_left_110`): each was requested again
-    about every 10 s, so the load either does not finish or the asset is
-    collected before the next use.
+    played 41 of the host's 59 one-shots. The rest (`swm_atk_left_165`,
+    `swm_atk_right_165`, `swm_atk_right_110`, `swm_atk_left_110`) were
+    reported as not loaded and requested again about every 10 s.
+    *Correction:* they were loaded; the guest's lookup could not match
+    names ending in digits (see "the missing sequences were a name lookup
+    bug" below).
   - Host: 15.0 `DMMO` per second for one enemy; total enemy traffic stayed
     16–18 kB/s because the poses are still sent.
   - Screenshots at the same moment: on the host the swarmer grapples the
@@ -3748,8 +3749,9 @@ separate-PC behavior.
   spawning by class, movement, attacks and grapples, hits and death.
   `ForceKill` with no killer still runs the game's kill reward for the local
   player, so a guest-side death needs another path or the reward
-  suppressed. One-shot sequences need to be loaded and held on the guest
-  before they are needed.
+  suppressed. (This entry also concluded that one-shot sequences needed to
+  be loaded and held on the guest; that was the lookup bug, corrected
+  below.)
 - **Unknown:** the bandwidth with poses turned off; more than one enemy;
   other enemy types; the corpse and ragdoll on the guest; whether the
   stand-in ever damaged the guest (both were in god mode); two-PC timing.
@@ -3790,8 +3792,8 @@ separate-PC behavior.
 - **Derived:** puppets cut enemy traffic by about 6× for eight swarmers,
   with the corpse still exact from poses. A guest-side death without
   `ForceKill` avoids the game's kill reward.
-- **Unknown:** one-shot holding (no attacks); the root-set bit check; more
-  than eight enemies; two-PC timing.
+- **Unknown:** more than eight enemies; two-PC timing. (One-shot holding
+  and its root-set check were later removed as unnecessary.)
 - **Cleanup:** both lab clones destroyed after each run; base game copy
   never written. Archives: `<archive>/pawn-20261107-1755/` and
   `<archive>/pawn-20261107-1800/`.
@@ -3809,7 +3811,8 @@ separate-PC behavior.
   "Fight or flight" tutorial dismissed on the host; screenshots from both;
   three guest `hit-enemy`; host `kill-owned-enemy`.
 - **Result:** PASS for the stand-ins over Steam, the pose pause, hits and
-  the death hand-over; FAIL for holding one-shot animations (below).
+  the death hand-over; FAIL for one-shot animations (below; the cause was
+  a lookup bug, fixed afterwards).
 - **Observed:**
   - The Deck spawned 8 `SwarmerPawn_C` stand-ins within 62 ms; the host
     paused poses for all 8 within 50 ms.
@@ -3818,8 +3821,10 @@ separate-PC behavior.
     poses resumed at 30 packets per second, 29.5 kB/s in total.
   - Guest screenshots showed the stand-ins around the guest and moving and
     attacking during the fight.
-  - One-shots: the host sent 129, the Deck played 78 and found 51 not
-    loaded.
+  - One-shots: the host sent 129, the Deck played 78 and reported 51 as
+    not loaded. *Correction:* all 51 were names ending in digits, which the
+    lookup could not match; they were loaded (see "the missing sequences
+    were a name lookup bug").
   - The root-set check refused: bit 30 was set on 2945 of 2945 native
     classes and on 142 of 3907 actors, so no sequence was held.
   - All 3 guest hits reached the host's swarmer (160.0 to 103.8); the host
@@ -3828,12 +3833,11 @@ separate-PC behavior.
   - The host's screen captured black after its pause menu opened; the game
     kept running.
 - **Derived:** the stand-in design holds up over Steam between separate
-  PCs. Bit 30 matches the root set (every native class has it, and only a
-  few game-rooted actors), so the check needs to allow rooted actors.
-  Corpses should not keep full-rate poses.
-- **Fixes after the run:** the check now accepts at most 10% of actors with
-  the bit; a corpse whose stand-in was taken over gets 1 pose per second
-  after 3 s.
+  PCs. Corpses should not keep full-rate poses.
+- **Fixes after the run:** a corpse whose stand-in was taken over gets 1
+  pose per second after 3 s. (A root-set check for holding sequences was
+  adjusted here and later removed with the holding, once the lookup bug was
+  found.)
 - **Unknown:** whether holding the sequences closes the one-shot gap; how
   the stand-ins look in motion on the Deck (screenshots only); more than
   eight enemies.
@@ -3842,7 +3846,7 @@ separate-PC behavior.
   still running (its screen captured black); `restore` then matched all 85
   save files, the ASI and the INI.
 
-## Pawn stand-ins: the owner's attack sequences do not load on the receiver (2026-11-07, one PC, two games)
+## Pawn stand-ins: loader experiments for sequences reported as not loaded (2026-11-07, one PC, two games)
 
 - **Question:** why a third of the one-shots the host sends are not loaded
   on the guest, and whether holding them fixes it.
@@ -3912,7 +3916,15 @@ separate-PC behavior.
   the previous entry measured a lookup that could not succeed. The root-set
   holding and the latent loader were removed again. Any other lookup of a
   name ending in digits through `FindObject` was affected the same way.
-- **Unknown:** which earlier lookups besides one-shots hit the same bug.
+- **Audit of earlier findings:** `FindClass` had the same bug, and
+  `FindChild` (properties and functions) ignored the FName number entirely,
+  so `"Foo"` could match a field `Foo_0`; both now match the number too. No
+  hard-coded asset path, hook name or name literal in the code ends in an
+  FName number. Of the 18 distinct asset paths the mod requested across all
+  lab archives and the 2026-11-07 two-PC logs, the 12 ending in a number
+  are exactly the swarmer sequences above; the companion meshes and
+  materials (Boozer) do not, so the companion, vehicle and avatar entries
+  stand. The entries corrected are this day's stand-in runs.
 - **Cleanup:** lab clones destroyed. Archives: `<archive>/refs-20261107-1943/`,
   `<archive>/refs-20261107-1947/`, `<archive>/pawn-20261107-1950/`,
   `<archive>/pawn-20261107-1956/`.
