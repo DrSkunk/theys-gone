@@ -3841,3 +3841,43 @@ separate-PC behavior.
   save files, the ASI and the INI. The host PC was rebooted with its game
   still running (its screen captured black); `restore` then matched all 85
   save files, the ASI and the INI.
+
+## Pawn stand-ins: the owner's attack sequences do not load on the receiver (2026-11-07, one PC, two games)
+
+- **Question:** why a third of the one-shots the host sends are not loaded
+  on the guest, and whether holding them fixes it.
+- **Build:** worktree `anim-mirror-probe` after `b182bcf`, protocol v13.
+  Requested sequences are checked every frame and added to the root set as
+  soon as they appear; the root-set check now allows 10% of actors.
+- **Setup:** paired lab pack runs as before (`spawn-pack`, the tutorial
+  dismissed with one `E` hold), four runs, each changing one thing.
+- **Result:** FAIL. The missing sequences never load, so holding cannot
+  help.
+- **Observed:**
+  - The root-set check passed (2945 of 2945 classes, 142 of 4401 actors)
+    and was used.
+  - Run 1, streaming-manager loads (`RequestAsyncLoadBPCallback`): 26 of 74
+    one-shots missing; the same sequences were requested again every
+    10–20 s.
+  - Run 2, the same with a per-frame check: none of 10 requested sequences
+    appeared within 30 s.
+  - Run 3, `KismetSystemLibrary.LoadAsset` (latent, `Linkage -1`): all 21
+    loads started, none of the sequences appeared within 30 s, and none
+    existed under another outer either (lookup by short name). 25 of 70
+    missing.
+  - Run 4, the stand-in's AI controller kept with its brain stopped: 24 of
+    68 still missing.
+  - The missing ones are always the same group: `swm_atk_*_110/165/230`,
+    `swm_atk_run_520` and `swm_f_grapple_jump_125/250`. Others (such as
+    the grapple loops and kills) played.
+  - Corpse poses with the 1 Hz rule: 6.0–12.8 pose packets per second for
+    the first seconds after a death, then 2.0.
+- **Derived:** those sequences cannot be loaded by object path on this
+  build through either loader; on the host they are presumably loaded
+  through the attack data its AI uses. The receiver either needs that data
+  loaded another way, or the owner sends those attacks differently (for
+  example, briefly sending poses while such a one-shot plays).
+- **Unknown:** how the host loads them (which asset references them); a
+  synchronous load path.
+- **Cleanup:** lab clones destroyed after each run. Archives:
+  `<archive>/pawn-20261107-1847/` through `<archive>/pawn-20261107-1920/`.

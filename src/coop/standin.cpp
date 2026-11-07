@@ -202,6 +202,7 @@ bool Spawn(UObject* context, UObject* pawnClass, UObject* bodyMesh, const FVecto
         UObject* brain = nullptr;
         struct { const wchar_t* data = nullptr; int32_t num = 0, max = 0; } reason;
         if (GetProp(controller, "BrainComponent", brain) && IsLive(brain)) Call(brain, "StopLogic").set("Reason", reason).invoke();
+        // Keeping the stopped controller did not make the missing attack sequences load (lab, 2026-11-07).
         Call(controller, "UnPossess").invoke();
         Call(controller, "K2_DestroyActor").invoke();
     }

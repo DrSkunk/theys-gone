@@ -304,6 +304,7 @@ void SendStandIn(EnemySource& e, const FVector& origin, uint32_t timeMs, double 
 void ReceiveEnemyMotion(const char* data, int len, double now);
 void ReceiveEnemyEvent(const char* data, int len, double now);
 bool UpdateStandIn(UObject* pawn, uint32_t entity, EnemyReplica& r, const FVector& origin, double senderMs, double now);
+void HoldLoadedSequences(double now);
 void SendCompanionMaterials(const EnemySource& e);
 void ApplyReplicaMaterials(EnemyReplica& r);
 bool LookAtCompanion();
@@ -4277,6 +4278,31 @@ void RequestAssetLoad(const std::string& path) {
     Log("assets: requested %s (%s)", path.c_str(), ok && load.get<bool>("ReturnValue") ? "loading" : "not started");
 }
 
+// The engine's own latent async load (KismetSystemLibrary.LoadAsset, FStreamableManager). The streaming
+// manager's request above reported "loading" for the owner's attack sequences but never delivered them (lab,
+// 2026-11-07: none of 10 appeared within 30 s). Linkage -1: no Blueprint output pin to resume.
+void RequestAssetLoadLatent(const std::string& path, UObject* context) {
+    static std::unordered_map<std::string, double> requested;
+    static int32_t uuid = 0x54470000; // "TG": clear of Blueprint-generated latent ids
+    double now = Now();
+    if (path.empty() || !IsLive(context)) return;
+    if (auto found = requested.find(path); found != requested.end() && now - found->second < 10) return;
+    requested[path] = now;
+    auto library = FindDefaultObject("KismetSystemLibrary");
+    if (!library) return;
+    std::wstring wide(path.begin(), path.end());
+    struct StringRaw { const wchar_t* data; int32_t num, max; };
+    struct AssetPtr { uint64_t weak = 0; int32_t tag = 0, pad = 0; StringRaw name; } asset{};
+    asset.name = {wide.c_str(), static_cast<int32_t>(wide.size() + 1), static_cast<int32_t>(wide.size() + 1)};
+    struct ScriptDelegate { uint64_t object = 0; FName function{}; } none{};
+    struct LatentActionInfo { int32_t linkage, uuid; FName executionFunction; UObject* callbackTarget; };
+    static_assert(sizeof(LatentActionInfo) == 24, "FLatentActionInfo layout (reflection, build 19221447)");
+    LatentActionInfo latent{-1, ++uuid, FName{0, 0}, context};
+    Call load(library, "LoadAsset");
+    bool ok = load.set("WorldContextObject", context).set("Asset", asset).set("OnLoaded", none).set("LatentInfo", latent).invoke();
+    Log("assets: latent load of %s %s", path.c_str(), ok ? "started" : "failed");
+}
+
 // Host: each streamed mesh of a companion with the asset material of every slot.
 void SendCompanionMaterials(const EnemySource& e) {
     Call parts(e.pawn, "GetComponentsByClass");
@@ -4414,6 +4440,7 @@ void UpdateEnemyReplicas(UObject* pawn, double now) {
         return;
     }
     UpdateVehicleReplicas(pawn, now);
+    HoldLoadedSequences(now);
     FVector origin = WorldOrigin(pawn);
     double senderMs = g_motion.SenderMs();
     for (auto it = g_enemyReplicas.begin(); it != g_enemyReplicas.end();) {
@@ -4646,6 +4673,39 @@ struct StandInStats {
 uint32_t g_standInSequence = 0;
 EnemyHitDedupe g_standInDedupe;
 
+// Nothing on this machine references the owner's attack animations, so a loaded one is collected again before
+// its next use (lab, 2026-11-07: the same sequences requested again every 10-20 s). Each is added to the root
+// set once found, and requested ones are checked every frame until they appear.
+std::unordered_map<std::string, double> g_pendingSequences; // path -> first request
+void HoldSequence(UObject* sequence) {
+    static std::unordered_set<UObject*> held;
+    if (!held.insert(sequence).second) return;
+    std::string diag;
+    bool kept = KeepLoaded(sequence, diag);
+    if (!diag.empty()) Log("enemies: %s", diag.c_str());
+    if (!kept) held.erase(sequence);
+}
+void HoldLoadedSequences(double now) {
+    static UObject* sequenceClass = FindClass("AnimSequence");
+    for (auto it = g_pendingSequences.begin(); it != g_pendingSequences.end();) {
+        if (auto sequence = FindObject(it->first.c_str(), sequenceClass)) {
+            HoldSequence(sequence);
+            Log("enemies: %s loaded after %.2f s; held", Name(sequence).c_str(), now - it->second);
+            it = g_pendingSequences.erase(it);
+        } else if (now - it->second > 30) {
+            // Diagnostic: the same asset under another outer (a load under a different package name).
+            auto dot = it->first.rfind('.');
+            auto shortName = dot == std::string::npos ? it->first : it->first.substr(dot + 1);
+            auto other = FindObject(shortName.c_str(), sequenceClass);
+            Log("enemies: %s did not load within 30 s; by short name: %s", it->first.c_str(),
+                other ? FullName(other).c_str() : "none");
+            it = g_pendingSequences.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
 // Events travel twice over UDP, like hits; the receiver applies each sequence number once.
 void SendEnemyEvent(uint32_t entity, EnemyEventKind kind, const std::string& path, bool atReceiver) {
     EnemyEventPacket packet;
@@ -4746,18 +4806,12 @@ void ReceiveEnemyEvent(const char* data, int len, double now) {
     static UObject* sequenceClass = FindClass("AnimSequence");
     auto sequence = FindObject(event.path, sequenceClass);
     if (!sequence) {
-        RequestAssetLoad(event.path);
+        RequestAssetLoadLatent(event.path, g_pawn);
+        g_pendingSequences.emplace(event.path, now); // held as soon as it has loaded (HoldLoadedSequences)
         ++g_standInStats.missing;
         return;
     }
-    // Nothing on this machine references the owner's attack animations, so they would be collected again.
-    static std::unordered_set<UObject*> held;
-    if (held.insert(sequence).second) {
-        std::string diag;
-        bool kept = KeepLoaded(sequence, diag);
-        if (!diag.empty()) Log("enemies: %s", diag.c_str());
-        if (!kept) held.erase(sequence);
-    }
+    HoldSequence(sequence);
     if (standin::PlayOneShot(s, sequence, (event.flags & kEnemyEventAtReceiver) != 0)) ++g_standInStats.played;
 }
 
