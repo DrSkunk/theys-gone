@@ -4142,10 +4142,11 @@ void SendEnemy(EnemySource& e, const FVector& origin, uint32_t timeMs, double no
         if (++e.updates % static_cast<uint32_t>(StandInSendEvery(e.distanceSq)) == 0) SendStandIn(e, origin, timeMs, now);
         return;
     }
-    if (standIn && !PoseFallbackAllowed(e.rank)) return; // a distant corpse
     // A corpse the peer took over from a stand-in settles within a few seconds; after that it needs only an
-    // occasional pose (one corpse at full rate cost about 12 kB/s in the two-PC run).
-    if (PawnEnemiesActive() && !e.friendly && !e.wasAlive && e.diedAt >= 0 && now - e.diedAt > kCorpseSettle) {
+    // occasional pose (one corpse at full rate cost about 12 kB/s in the two-PC run). A corpse beyond the
+    // nearest kEnemyMaxStreamed gets that rate from its death on, so it does not vanish on the receiver.
+    bool settled = !e.wasAlive && e.diedAt >= 0 && now - e.diedAt > kCorpseSettle;
+    if (standIn && (settled || !PoseFallbackAllowed(e.rank))) {
         if (now - e.lastCorpsePose < kCorpsePoseInterval) return;
         e.lastCorpsePose = now;
     }

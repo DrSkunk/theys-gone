@@ -3955,6 +3955,12 @@ separate-PC behavior.
 - **Derived:** 16 stand-ins cost about 1.7 kB/s each; 64 would be about
   110 kB/s. Testing past 16 needs a natural swarm or horde, not the debug
   spawner.
+- **Follow-up:** as first written, a corpse ranked beyond the nearest 16
+  got no poses at all and would have vanished on the guest; it now gets one
+  pose a second from its death. A regression run with one pack
+  (`pawn-20261107-2031`) played 96 of 96 one-shots, at 13.9 kB/s for 8
+  stand-ins with the 5 s info interval. The far-corpse path itself needs
+  more than 16 enemies and is untested.
 - **Unknown:** more than 16 enemies; a horde's frame time on the guest;
   the Steam send budget at 64 stand-ins; two-PC timing at 16.
 - **Cleanup:** lab clones destroyed. Archive:
