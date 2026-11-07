@@ -2457,6 +2457,18 @@ void UpdateDebugTools(double now) {
     else if (command == DebugCommand::streamProbe) success = ProbePartnerStreaming();
     else if (command == DebugCommand::timeProbe) success = ProbeMenuTime();
     else if (command == DebugCommand::crowdProbe) success = CrowdProbe();
+    else if (command == DebugCommand::spawnTypes || command == DebugCommand::spawnHorde) {
+        std::string summary;
+        if (command == DebugCommand::spawnTypes) success = research::SpawnTypes(summary);
+        else if (!IsLive(g_pawn)) summary = "spawn-horde needs a gameplay pawn", success = false;
+        else {
+            wchar_t arg[128]{};
+            GetPrivateProfileStringW(L"Debug", L"Arg", L"", arg, 128, path.c_str());
+            success = research::SpawnHorde(g_pawn, Narrow(std::wstring(arg)), summary);
+        }
+        Log("research: %s: %s", text.c_str(), summary.c_str());
+        if (!success) DebugError(summary.c_str());
+    }
     else if (command == DebugCommand::assetRefs) {
         wchar_t arg[128]{};
         GetPrivateProfileStringW(L"Debug", L"Arg", L"", arg, 128, path.c_str());

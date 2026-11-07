@@ -4015,3 +4015,40 @@ separate-PC behavior.
   swarm or horde.
 - **Cleanup:** lab clones destroyed. Archives: `<archive>/crowd-20261107-2053/`
   through `<archive>/crowd-20261107-2111/`, `<archive>/pawn-20261107-2113/`.
+
+## Spawning natural enemies next to the player (2026-11-07, one PC, one game)
+
+- **Question:** can a debug command put natural (ambient) enemies, or a
+  horde, next to the player, to test the enemy scan and more than 16 enemies?
+- **Build:** worktree `anim-mirror-probe` after `ead6352`. New debug
+  commands: `spawn-types` lists every live `BendAmbientSpawnType` (1056
+  bytes; pawn class at +272) by owner and pawn class; `spawn-horde --arg
+  "MODE PAWN COUNT"` copies one whose pawn class is exactly `PAWN_C`
+  (preferring the world's own) into the world's `BendAmbientGenerator`:
+  `arcade` (`SpawnForArcadeMode`, 20 m ahead), `horde` (the same, into a
+  live crowd group), `scream` (`ScreamerSpawn`) or `escalate`
+  (`SpawnForCombatEscalation` within 40 m, no spawn type).
+- **Setup:** one lab instance, `[Research] PawnEnemies=1`, god mode on,
+  `crowd-probe` 10 s after each spawn.
+- **Result:** PASS for natural enemies with AI controllers; FAIL for horde
+  members.
+- **Observed:**
+  - 573 spawn types: the arcade data (`ArcadeEnemyData.SpawnTypes`, with
+    `HordeSwarmerPawn_C` first), the world's
+    `AmbientSpawnGenerator_C_0.PooledSpawnTypes`, spawn areas and locations.
+  - `arcade SwarmerPawn 10` with the world's pooled type: 2 new swarmers
+    52–62 m away, selected by the scan. `escalate` three times: pool
+    swarmers and 3 wolves activated, up to 8 enemies selected at once.
+  - `arcade HordeSwarmerPawn 20` (arcade data), `scream` (both types) and
+    `horde` (into `HordeC252_HordeGroup` of the world horde level
+    `07-14_HordeC252_LittleBearLake`): nothing appeared within 10 s. No
+    crash.
+- **Derived:** the debug spawner's 16-enemy limit can be passed with
+  `arcade`/`escalate` spawns, which come out of the game's own pools with
+  their controllers. The base save sits beside a real horde (Little Bear
+  Lake, its group about 144 m from the start), whose members stay parked
+  until something wakes the horde.
+- **Unknown:** how to wake a horde or spawn horde members; whether active
+  horde members are pawns without controllers.
+- **Cleanup:** lab clones destroyed. Archives: `<archive>/crowd-20261107-2138/`
+  through `<archive>/crowd-20261107-2149/`.

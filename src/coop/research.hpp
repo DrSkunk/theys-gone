@@ -155,6 +155,9 @@ bool AnimMirrorStart(ue::UObject* localPawn, AnimMirrorMode mode, const std::str
 bool AnimMirrorStop(std::string& summary);
 // asset-refs: where a named asset lives and which live objects reference it.
 bool AssetReferences(const std::string& name, std::string& summary);
+// spawn-types / spawn-horde: the ambient spawner's live spawn types, and spawning from one next to the player.
+bool SpawnTypes(std::string& summary);
+bool SpawnHorde(ue::UObject* localPawn, const std::string& arg, std::string& summary);
 bool AnimMirroring();
 void AnimMirrorTick(); // game thread, every frame
 // Game thread, from ProcessEvent: the player's damage events and the mirror meshes' anim notifies. Returns true

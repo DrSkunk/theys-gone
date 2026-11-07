@@ -48,8 +48,10 @@ COMMANDS = (
     "anim-mirror-off",
     "asset-refs",
     "crowd-probe",
+    "spawn-types",
+    "spawn-horde",
 )
-ARG_COMMANDS = ("mission-act", "stream-focus", "move-by", "level-probe", "spawn-actor", "asset-refs")
+ARG_COMMANDS = ("mission-act", "stream-focus", "move-by", "level-probe", "spawn-actor", "asset-refs", "spawn-horde")
 OPTIONAL_ARG_COMMANDS = ("anim-mirror-pawn",)
 ARG_LIMIT = 240
 

@@ -17,6 +17,7 @@
 #include <map>
 #include <string>
 #include <unordered_map>
+#include <sstream>
 #include <unordered_set>
 #include <vector>
 
@@ -4617,6 +4618,177 @@ bool AssetReferences(const std::string& name, std::string& summary) {
     summary = std::to_string(targets.size()) + " objects named " + name + ", " + std::to_string(hits) +
               " referencing objects among " + std::to_string(scanned) + " scanned (first 60 shown)";
     return true;
+}
+
+
+namespace {
+constexpr size_t kSpawnTypeSize = 1056; // BendAmbientSpawnType (reflection, build 19221447)
+constexpr int kSpawnTypePawnClass = 272; // m_PawnClass, an AssetClassProperty (TAssetPtr: weak 8, tag 4+4, FString 16)
+constexpr int kSpawnTypeFaction = 0, kSpawnTypeCanJoinCrowd = 1016, kSpawnTypeMaxSpawns = 984;
+
+std::string AssetPtrPath(const uint8_t* at) {
+    struct { const wchar_t* data; int32_t num, max; } text{};
+    std::memcpy(&text, at + 16, sizeof text);
+    if (!text.data || text.num <= 1 || text.num > 512 || !ReadableMemory(text.data, static_cast<size_t>(text.num) * 2)) return {};
+    std::string out;
+    for (int i = 0; i + 1 < text.num; ++i) out.push_back(text.data[i] < 128 ? static_cast<char>(text.data[i]) : '?');
+    return out;
+}
+
+struct SpawnTypeRef { UObject* owner; std::string field; const uint8_t* data; };
+
+// Live BendAmbientSpawnType values: struct fields and array elements of every live object.
+std::vector<SpawnTypeRef> FindSpawnTypes(size_t limit) {
+    std::vector<SpawnTypeRef> found;
+    auto scriptStruct = FindClass("ScriptStruct");
+    auto spawnType = FindObject("BendAmbientSpawnType", scriptStruct);
+    if (!spawnType) return found;
+    struct Field { int offset; bool array; std::string name; };
+    std::unordered_map<UObject*, std::vector<Field>> layouts;
+    for (int32_t i = 0; i < ObjectCount() && found.size() < limit; ++i) {
+        auto o = ObjectAt(i);
+        if (!o || !IsLive(o) || !IsLive(o->cls) || o->cls == scriptStruct) continue;
+        auto [it, fresh] = layouts.try_emplace(o->cls);
+        if (fresh) {
+            for (auto c = o->cls; IsLive(c); c = Super(c)) {
+                int budget = 0;
+                for (auto f = Children(c); f && budget < 4096; f = Next(f), ++budget) {
+                    if (!IsLive(f) || IsFunction(f) || PropertyOffset(f) < 0) continue;
+                    auto kind = Name(f->cls);
+                    if (kind == "StructProperty" && PropertySubclassObject(f, "ScriptStruct") == spawnType)
+                        it->second.push_back({PropertyOffset(f), false, Name(f)});
+                    else if (kind == "ArrayProperty")
+                        if (auto inner = ArrayInner(f); inner && Name(inner->cls) == "StructProperty" &&
+                            PropertySubclassObject(inner, "ScriptStruct") == spawnType)
+                            it->second.push_back({PropertyOffset(f), true, Name(f)});
+                }
+            }
+        }
+        auto base = reinterpret_cast<const uint8_t*>(o);
+        for (const auto& f : it->second) {
+            if (!f.array) {
+                found.push_back({o, f.name, base + f.offset});
+                continue;
+            }
+            struct { const uint8_t* data; int32_t count, capacity; } raw{};
+            std::memcpy(&raw, base + f.offset, sizeof raw);
+            if (!raw.data || raw.count <= 0 || raw.count > 4096 ||
+                !ReadableMemory(raw.data, static_cast<size_t>(raw.count) * kSpawnTypeSize)) continue;
+            for (int32_t k = 0; k < raw.count && found.size() < limit; ++k)
+                found.push_back({o, f.name + "[" + std::to_string(k) + "]", raw.data + static_cast<size_t>(k) * kSpawnTypeSize});
+        }
+    }
+    return found;
+}
+} // namespace
+
+// spawn-types: the live spawn types the ambient spawner can use, by pawn class.
+bool SpawnTypes(std::string& summary) {
+    auto types = FindSpawnTypes(4000);
+    std::map<std::string, int> byClass;
+    int logged = 0;
+    for (const auto& t : types) {
+        auto path = AssetPtrPath(t.data + kSpawnTypePawnClass);
+        auto shortName = path.substr(path.rfind('.') == std::string::npos ? 0 : path.rfind('.') + 1);
+        if (++byClass[shortName] <= 2 && logged++ < 60) {
+            int32_t max = 0;
+            std::memcpy(&max, t.data + kSpawnTypeMaxSpawns, 4);
+            Log("spawn-types: %s.%s: pawn %s, faction %u, can join crowd %u, max %d", FullName(t.owner).c_str(),
+                t.field.c_str(), path.empty() ? "none" : path.c_str(), t.data[kSpawnTypeFaction],
+                t.data[kSpawnTypeCanJoinCrowd], max);
+        }
+    }
+    std::string list;
+    for (const auto& [cls, n] : byClass) list += (list.empty() ? "" : ", ") + (cls.empty() ? std::string("none") : cls) + "=" + std::to_string(n);
+    Log("spawn-types: %d spawn types by pawn class: %s", static_cast<int>(types.size()), list.c_str());
+    summary = std::to_string(types.size()) + " spawn types";
+    return !types.empty();
+}
+
+// spawn-horde [MODE [PAWN [COUNT]]]: spawn enemies next to the player through the world's BendAmbientGenerator,
+// with a copy of a live spawn type whose pawn class is PAWN_C (default HordeSwarmerPawn), COUNT (default 20).
+// MODE: arcade (SpawnForArcadeMode, 20 m ahead), scream (ScreamerSpawn, what a screamer's call uses) or
+// escalate (SpawnForCombatEscalation within 40 m; no spawn type).
+bool SpawnHorde(UObject* localPawn, const std::string& arg, std::string& summary) {
+    std::string mode = "arcade", want = "HordeSwarmerPawn";
+    int count = 20;
+    {
+        std::istringstream words(arg);
+        std::string m, w;
+        int c = 0;
+        if (words >> m) mode = m;
+        if (words >> w) want = w;
+        if (words >> c) count = std::max(1, std::min(100, c));
+    }
+    if (mode != "arcade" && mode != "horde" && mode != "scream" && mode != "escalate") {
+        summary = "mode must be arcade, horde, scream or escalate";
+        return false;
+    }
+    // horde: arcade spawning into a live crowd group, as the horde members that a group drives.
+    UObject* group = nullptr;
+    if (mode == "horde") {
+        for (const char* name : {"BendCrowdGroupHorde", "BendCrowdGroup"}) {
+            auto groupClass = FindClass(name);
+            for (int32_t i = 0; groupClass && i < ObjectCount() && !group; ++i) {
+                auto o = ObjectAt(i);
+                if (o && IsLive(o) && !IsDefaultOrArchetype(o) && IsA(o, groupClass) && Name(o->cls).find("Global") == std::string::npos)
+                    group = o;
+            }
+            if (group) break;
+        }
+        if (!group) { summary = "no live crowd group"; return false; }
+    }
+    auto types = FindSpawnTypes(4000);
+    // The exact pawn class ("SwarmerPawn" must not pick HordeSwarmerPawn); a world-placed spawn type (not a
+    // class default or arcade data) is preferred, since its assets are what this world loaded.
+    const SpawnTypeRef* pick = nullptr;
+    for (const auto& t : types) {
+        auto path = AssetPtrPath(t.data + kSpawnTypePawnClass);
+        if (!path.ends_with("." + want + "_C")) continue;
+        bool world = !IsDefaultOrArchetype(t.owner) && FullName(t.owner).find("PersistentLevel") != std::string::npos;
+        if (!pick || world) pick = &t;
+        if (world) break;
+    }
+    if (!pick && mode != "escalate") { summary = "no live spawn type with a pawn class containing " + want; return false; }
+    auto generatorClass = FindClass("BendAmbientGenerator");
+    UObject* generator = nullptr;
+    for (int32_t i = 0; generatorClass && i < ObjectCount() && !generator; ++i) {
+        auto o = ObjectAt(i);
+        if (o && IsLive(o) && !IsDefaultOrArchetype(o) && IsA(o, generatorClass)) generator = o;
+    }
+    if (!generator) { summary = "no live BendAmbientGenerator"; return false; }
+    Call where(localPawn, "K2_GetActorLocation"), facing(localPawn, "K2_GetActorRotation");
+    if (!where.invoke() || !facing.invoke()) { summary = "no player transform"; return false; }
+    auto at = where.get<FVector>("ReturnValue");
+    float yaw = facing.get<FRotator>("ReturnValue").yaw * 3.14159265f / 180.f;
+    at.x += std::cos(yaw) * 2000.f;
+    at.y += std::sin(yaw) * 2000.f;
+    if (mode == "escalate") {
+        Call escalate(generator, "SpawnForCombatEscalation");
+        bool ok = escalate.set("CenterLocation", where.get<FVector>("ReturnValue")).set("Radius", 4000.f).invoke();
+        summary = std::string("SpawnForCombatEscalation ") + (ok ? "called" : "failed") + ", returned " +
+                  (ok && escalate.get<bool>("ReturnValue") ? "true" : "false");
+        return ok;
+    }
+    struct Raw { uint8_t bytes[kSpawnTypeSize]; } type{};
+    std::memcpy(type.bytes, pick->data, kSpawnTypeSize); // the native thunk copy-constructs it; this buffer is never destroyed
+    if (mode == "scream") {
+        Call scream(generator, "ScreamerSpawn");
+        bool ok = scream.set("SpawnType", type).set("spawnCount", static_cast<int32_t>(count)).invoke();
+        summary = std::string("ScreamerSpawn ") + (ok ? "called" : "failed") + " with " + std::to_string(count) + " of " +
+                  AssetPtrPath(pick->data + kSpawnTypePawnClass) + " from " + FullName(pick->owner) + "." + pick->field;
+        return ok;
+    }
+    Call spawn(generator, "SpawnForArcadeMode");
+    spawn.set("SpawnType", type).set("Location", at).set("Rotation", FRotator{0, 0, 0}).set("Count", static_cast<int32_t>(count))
+        .set("DistanceToDespawn", 30000.f).set("spawnerID", static_cast<uint8_t>(0)).setBool("bForceChasePlayer", true)
+        .setBool("bCanDespawnByInactivity", false).set("Group", group);
+    bool ok = spawn.invoke();
+    if (group) Log("spawn-horde: into crowd group %s", FullName(group).c_str());
+    summary = std::string(ok ? "requested " : "failed to request ") + std::to_string(count) + " from " + FullName(pick->owner) + "." +
+              pick->field + " (" + AssetPtrPath(pick->data + kSpawnTypePawnClass) + "), returned " +
+              (ok && spawn.get<bool>("ReturnValue") ? "true" : "false");
+    return ok;
 }
 
 } // namespace coop::research
