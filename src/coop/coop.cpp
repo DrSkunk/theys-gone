@@ -3296,6 +3296,9 @@ struct EnemySource {
     bool wasAlive = true;
     double standInAck = -10; // last time the peer said it shows this enemy as a stand-in
     double diedAt = -1, lastCorpsePose = -10;
+    size_t rank = 0;      // position in the distance-sorted selection
+    float distanceSq = 0; // to the nearest player; negative for an enemy kept in a fight
+    uint32_t updates = 0;
 };
 struct EnemyReplica {
     UObject* actor = nullptr;
@@ -3363,7 +3366,7 @@ struct EnemyStats {
     uint64_t sent = 0, bytes = 0, infos = 0, reads = 0, applied = 0, rejected = 0;
     double readTime = 0;
 } g_enemyStats;
-constexpr size_t kEnemyMaxReplicas = 32;
+constexpr size_t kEnemyMaxReplicas = kEnemyMaxStandIns + 8; // stand-ins plus companions
 
 bool EnemyReplicationActive(double now) {
     return g_settings.enemies && now - g_lastRecv < kPeerTimeout;
@@ -4030,7 +4033,8 @@ void FinishEnemyScan(UObject* pawn) {
     }
     if (IsHost()) SelectVehicles(pawn, at);
     std::sort(found.begin(), found.end(), [](const Candidate& a, const Candidate& b) { return a.distance < b.distance; });
-    if (found.size() > kEnemyMaxStreamed) found.resize(kEnemyMaxStreamed);
+    size_t cap = EnemyStreamCap(PawnEnemiesActive());
+    if (found.size() > cap) found.resize(cap);
     std::vector<EnemySource> next;
     for (const auto& candidate : found) {
         auto existing = std::find_if(g_enemySources.begin(), g_enemySources.end(),
@@ -4054,6 +4058,8 @@ void FinishEnemyScan(UObject* pawn) {
         if (candidate.friendly && !source.friendly) Log("enemies: streaming companion %s", Name(candidate.pawn).c_str());
         source.friendly = candidate.friendly;
         source.paths = std::move(paths);
+        source.rank = next.size();
+        source.distanceSq = candidate.distance;
         next.push_back(std::move(source));
     }
     if (next.size() != g_enemySources.size())
@@ -4119,7 +4125,9 @@ void SendEnemy(EnemySource& e, const FVector& origin, uint32_t timeMs, double no
         e.lastMaterials = now;
         SendCompanionMaterials(e);
     }
-    if (now - e.lastInfo >= kEnemyInfoInterval) {
+    bool standIn = PawnEnemiesActive() && !e.friendly;
+    bool acknowledged = standIn && e.wasAlive && now - e.standInAck < kStandInAckTimeout;
+    if (now - e.lastInfo >= (acknowledged ? kStandInInfoInterval : kEnemyInfoInterval)) {
         EnemyInfoPacket info;
         if (EncodeEnemyInfo(g_session, e.entity, e.paths, info, e.friendly ? kEnemyInfoFriendly : 0)) {
             g_net->SendRaw(&info, sizeof info);
@@ -4128,11 +4136,13 @@ void SendEnemy(EnemySource& e, const FVector& origin, uint32_t timeMs, double no
         }
         e.lastInfo = now;
     }
-    // A living enemy the peer shows as a stand-in needs no bone poses; its corpse does.
-    if (PawnEnemiesActive() && !e.friendly && e.wasAlive && now - e.standInAck < kStandInAckTimeout) {
-        SendStandIn(e, origin, timeMs, now);
+    // A living enemy the peer shows as a stand-in needs no bone poses; its corpse does. Beyond the nearest
+    // kEnemyMaxStreamed, enemies get motion only; distant ones a third of the updates.
+    if (standIn && e.wasAlive && (acknowledged || !PoseFallbackAllowed(e.rank))) {
+        if (++e.updates % static_cast<uint32_t>(StandInSendEvery(e.distanceSq)) == 0) SendStandIn(e, origin, timeMs, now);
         return;
     }
+    if (standIn && !PoseFallbackAllowed(e.rank)) return; // a distant corpse
     // A corpse the peer took over from a stand-in settles within a few seconds; after that it needs only an
     // occasional pose (one corpse at full rate cost about 12 kB/s in the two-PC run).
     if (PawnEnemiesActive() && !e.friendly && !e.wasAlive && e.diedAt >= 0 && now - e.diedAt > kCorpseSettle) {

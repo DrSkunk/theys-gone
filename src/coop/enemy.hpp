@@ -31,6 +31,24 @@ constexpr double kEnemySendInterval = 1.0 / 15;
 constexpr double kEnemyInfoInterval = 1.0;
 constexpr double kEnemyTimeout = 1.5;
 
+// With pawn stand-ins an enemy costs one 112-byte motion update instead of up to three pose packets, so more
+// are streamed; bone poses stay limited to the nearest kEnemyMaxStreamed (the fallback when the receiver
+// shows no stand-in, and corpses).
+constexpr size_t kEnemyMaxStandIns = 64;
+constexpr float kStandInNearRadius = 3000.f; // 30 m: full rate inside, a third of it beyond
+constexpr double kStandInInfoInterval = 5.0;  // EnemyInfo for an acknowledged stand-in
+
+inline size_t EnemyStreamCap(bool standIns) { return standIns ? kEnemyMaxStandIns : kEnemyMaxStreamed; }
+
+// Every how many enemy updates a stand-in's motion is sent, by squared distance to the nearest player (a
+// negative distance marks an enemy kept in a fight, always near).
+inline int StandInSendEvery(float distanceSq) {
+    return distanceSq <= kStandInNearRadius * kStandInNearRadius ? 1 : 3;
+}
+
+// Whether an enemy, by its rank in the distance-sorted selection, may fall back to bone poses.
+inline bool PoseFallbackAllowed(size_t rank) { return rank < kEnemyMaxStreamed; }
+
 constexpr double kHandoffCalm = 6.0;   // an enemy that ignores its player this long goes back to normal rules
 constexpr double kHandoffMax = 180.0;  // upper bound on keeping an enemy past an ownership change
 constexpr double kHandoffAbsence = 30.0; // longest stand-in rebuild that still counts as the same fight

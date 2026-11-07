@@ -728,6 +728,12 @@ void TestEnemyHit() {
     badMotion.reserved[1] = 1;
     assert(!coop::DecodeEnemyMotion(reinterpret_cast<const char*>(&badMotion), sizeof badMotion, motionOut));
 
+    // Stand-ins lift the cap; poses stay limited to the nearest 16; distant stand-ins update at a third.
+    assert(coop::EnemyStreamCap(false) == coop::kEnemyMaxStreamed && coop::EnemyStreamCap(true) == coop::kEnemyMaxStandIns);
+    assert(coop::PoseFallbackAllowed(coop::kEnemyMaxStreamed - 1) && !coop::PoseFallbackAllowed(coop::kEnemyMaxStreamed));
+    assert(coop::StandInSendEvery(-1.f) == 1 && coop::StandInSendEvery(2999.f * 2999.f) == 1);
+    assert(coop::StandInSendEvery(3001.f * 3001.f) == 3);
+
     coop::EnemyMotionBuffer motions;
     coop::EnemyMotionPacket sampled{};
     assert(!motions.Sample(0, sampled));

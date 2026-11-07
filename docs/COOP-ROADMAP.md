@@ -102,7 +102,11 @@ with the host's missions.
    That gap was an object lookup that could not match names ending in
    digits; fixed, the paired lab played 96 of 96 and 55 of 55
    ([research log](REPLICATION-RESEARCH.md#pawn-stand-ins-the-missing-sequences-were-a-name-lookup-bug-2026-11-07-one-pc-one-and-two-games)).
-   Next: lift the 16-enemy cap for stand-ins and repeat on two PCs.
+   With stand-ins the scan now keeps up to 64 enemies (poses only for the
+   nearest 16); 16 stand-ins cost 28 kB/s in the lab
+   ([research log](REPLICATION-RESEARCH.md#pawn-stand-ins-lifting-the-16-enemy-cap-2026-11-07-one-pc-two-games)).
+   Next: a natural swarm or horde (the debug spawner stops at 16), the scan
+   gap above, and a two-PC repeat.
    *Start:* `FinishEnemyScan` and `SharedEnemy` in `coop.cpp`,
    `src/coop/enemy.hpp` (`kEnemyMaxStreamed`, packets), `BendCrowdGroupHorde`
    and `HordeSwarmerPawn_C` in the reflection dump.

@@ -3928,3 +3928,34 @@ separate-PC behavior.
 - **Cleanup:** lab clones destroyed. Archives: `<archive>/refs-20261107-1943/`,
   `<archive>/refs-20261107-1947/`, `<archive>/pawn-20261107-1950/`,
   `<archive>/pawn-20261107-1956/`.
+
+## Pawn stand-ins: lifting the 16-enemy cap (2026-11-07, one PC, two games)
+
+- **Question:** can more than 16 enemies be streamed once they are pawn
+  stand-ins, and what does 16 cost?
+- **Build:** worktree `anim-mirror-probe` after `85a3d06`, protocol v13.
+  With `PawnEnemies` active the scan keeps up to 64 enemies
+  (`kEnemyMaxStandIns`); only the nearest 16 may fall back to bone poses;
+  stand-ins beyond 30 m get a third of the motion updates; an acknowledged
+  stand-in's `DMEN` info goes every 5 s instead of every second; the
+  receiver keeps up to 72 replicas.
+- **Setup:** paired lab, three `spawn-pack` on the host, the tutorial
+  dismissed, then the usual hits and kill.
+- **Result:** PASS for 16; more than 16 could not be tested here.
+- **Observed:**
+  - The third `spawn-pack` was refused: "Test spawn limit is 16 owned
+    enemies". The host streamed 16.
+  - Host enemy traffic with 16 stand-ins: 0 pose packets and 27.7–28.1
+    kB/s; 18.4 then 2.0 pose packets per second for the corpse.
+  - One-shots: 39 sent, 39 played.
+  - Tick peaks: guest 140–150 ms and host 40–44 ms in the last windows. The
+    `PawnEnemies=0` baseline with 8 enemies (`pawn-20261107-1800`) had
+    guest peaks of 115–122 ms and host 30–33 ms, so the guest's peaks are
+    mostly the one-PC lab (two games on one GPU), not the stand-ins.
+- **Derived:** 16 stand-ins cost about 1.7 kB/s each; 64 would be about
+  110 kB/s. Testing past 16 needs a natural swarm or horde, not the debug
+  spawner.
+- **Unknown:** more than 16 enemies; a horde's frame time on the guest;
+  the Steam send budget at 64 stand-ins; two-PC timing at 16.
+- **Cleanup:** lab clones destroyed. Archive:
+  `<archive>/pawn-20261107-2021/`.
