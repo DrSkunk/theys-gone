@@ -61,8 +61,8 @@ class ProtocolTest(unittest.TestCase):
         self.assertIsNone(fake_peer.decode(old))
         host = data[:6] + struct.pack('<H', fake_peer.HOST_SAVE | fake_peer.OBJECTIVE_SYNC) + data[8:]
         self.assertTrue(fake_peer.decode(host)['flags'] & fake_peer.HOST_SAVE)
-        unknown = data[:6] + struct.pack('<H', 1 << 15) + data[8:]
-        self.assertIsNone(fake_peer.decode(unknown))
+        pawns = data[:6] + struct.pack('<H', fake_peer.PAWN_ENEMIES) + data[8:]
+        self.assertTrue(fake_peer.decode(pawns)['flags'] & fake_peer.PAWN_ENEMIES)
 
     def test_round_trip(self):
         data = fake_peer.encode(7, 1234, (1.0, -2.0, 3.5), 90.0, -5.0, (10.0, 0.0, -1.0), 'Boozer')
@@ -119,12 +119,10 @@ class ProtocolTest(unittest.TestCase):
         _, _, vel = fake_peer.circle_state((0, 0, 0), 3.0, 400.0, 300.0)
         self.assertAlmostEqual(math.hypot(vel[0], vel[1]), 300.0, places=3)
 
-    def test_rejects_nonfinite_and_unknown_flags(self):
+    def test_rejects_nonfinite(self):
         for bad in (float('nan'), float('inf'), 1e9):
             data = fake_peer.encode(1, 0, (bad, 0, 0), 0, 0, (0, 0, 0), 'x')
             self.assertIsNone(fake_peer.decode(data))
-        data = fake_peer.encode(1, 0, (0, 0, 0), 0, 0, (0, 0, 0), 'x', flags=0x8000)
-        self.assertIsNone(fake_peer.decode(data))
 
     def test_sequence_wrap(self):
         data = fake_peer.encode(0x100000000, 0, (0, 0, 0), 0, 0, (0, 0, 0), 'x')

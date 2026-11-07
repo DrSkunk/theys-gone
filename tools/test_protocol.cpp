@@ -679,6 +679,80 @@ void TestEnemyHit() {
     for (uint32_t i = 100; i < 200; ++i) assert(dedupe.Accept(2, i));
     assert(dedupe.Accept(2, 5)); // outside the 64-entry window
 
+    // Pawn stand-ins: motion updates and events.
+    coop::EnemyMotionPacket motion{};
+    motion.magic = coop::kEnemyMotionMagic;
+    motion.version = coop::kEnemyMotionVersion;
+    motion.flags = coop::kMotionAlive | coop::kMotionRequested;
+    motion.movementMode = 1;
+    motion.session = 7;
+    motion.entity = 3;
+    motion.pos[0] = 12345;
+    motion.health = 200;
+    motion.state = 6;
+    coop::EnemyMotionPacket motionOut{};
+    auto motionData = reinterpret_cast<const char*>(&motion);
+    assert(coop::DecodeEnemyMotion(motionData, sizeof motion, motionOut) && motionOut.state == 6 && motionOut.pos[0] == 12345);
+    assert(!coop::DecodeEnemyMotion(motionData, sizeof motion - 1, motionOut));
+    auto badMotion = motion;
+    badMotion.health = std::numeric_limits<float>::quiet_NaN();
+    assert(!coop::DecodeEnemyMotion(reinterpret_cast<const char*>(&badMotion), sizeof badMotion, motionOut));
+    badMotion = motion;
+    badMotion.deltaToDesiredRotation[2] = std::numeric_limits<float>::infinity(); // the last float field
+    assert(!coop::DecodeEnemyMotion(reinterpret_cast<const char*>(&badMotion), sizeof badMotion, motionOut));
+    badMotion = motion;
+    badMotion.state = 64;
+    assert(!coop::DecodeEnemyMotion(reinterpret_cast<const char*>(&badMotion), sizeof badMotion, motionOut));
+    badMotion = motion;
+    badMotion.flags = 8;
+    assert(!coop::DecodeEnemyMotion(reinterpret_cast<const char*>(&badMotion), sizeof badMotion, motionOut));
+    badMotion = motion;
+    badMotion.movementMode = 7;
+    assert(!coop::DecodeEnemyMotion(reinterpret_cast<const char*>(&badMotion), sizeof badMotion, motionOut));
+    badMotion = motion;
+    badMotion.reserved[1] = 1;
+    assert(!coop::DecodeEnemyMotion(reinterpret_cast<const char*>(&badMotion), sizeof badMotion, motionOut));
+
+    coop::EnemyMotionBuffer motions;
+    coop::EnemyMotionPacket sampled{};
+    assert(!motions.Sample(0, sampled));
+    auto a = motion, b = motion, c = motion;
+    a.timeMs = 1000, a.pos[0] = 0, a.yaw = 170, a.state = 0;
+    b.timeMs = 1100, b.pos[0] = 100, b.yaw = -170, b.state = 5;
+    c.timeMs = 1050; // older than b once b has arrived: dropped
+    assert(motions.Push(a, 1.0) && motions.Push(b, 1.1) && !motions.Push(c, 1.2) && !motions.Push(b, 1.2));
+    assert(motions.Sample(1050, sampled) && Near(sampled.pos[0], 50, 0.01f) && sampled.state == 5);
+    assert(Near(std::remainder(sampled.yaw, 360.f), 180, 0.01f)); // across the wrap, not through 0
+    assert(motions.Sample(900, sampled) && sampled.pos[0] == 0);   // before the oldest: oldest
+    assert(motions.Sample(5000, sampled) && sampled.pos[0] == 100); // past the newest: held
+    for (uint32_t i = 0; i < 20; ++i) {
+        auto later = motion;
+        later.timeMs = 2000 + i * 100;
+        assert(motions.Push(later, 2.0));
+    }
+    assert(motions.Sample(0, sampled) && sampled.timeMs == 2000 + 12 * 100); // 8 kept
+
+    coop::EnemyEventPacket event{}, eventOut{};
+    const std::string anim = "/Game/Characters/Swarmer/swm_atk_left_230.swm_atk_left_230";
+    assert(coop::EncodeEnemyEvent(7, 3, 1, coop::kEnemyEventOneShot, anim, true, event));
+    assert(coop::DecodeEnemyEvent(reinterpret_cast<const char*>(&event), sizeof event, eventOut));
+    assert(eventOut.flags == coop::kEnemyEventAtReceiver && anim == eventOut.path);
+    assert(coop::EncodeEnemyEvent(7, 3, 2, coop::kEnemyEventDied, "", true, event) && event.flags == 0);
+    assert(!coop::EncodeEnemyEvent(7, 3, 2, coop::kEnemyEventDied, anim, false, event));   // died has no path
+    assert(!coop::EncodeEnemyEvent(7, 3, 2, coop::kEnemyEventClass, "", false, event));    // class needs one
+    assert(!coop::EncodeEnemyEvent(7, 3, 0, coop::kEnemyEventClass, anim, false, event));  // sequence 0
+    assert(!coop::EncodeEnemyEvent(7, 3, 2, coop::kEnemyEventClass, "NoSlash.X", false, event));
+    assert(coop::EncodeEnemyEvent(7, 3, 2, coop::kEnemyEventClass, "/Game/A.B_C", false, event));
+    auto badEvent = event;
+    badEvent.flags = coop::kEnemyEventAtReceiver; // only one-shots have a target
+    assert(!coop::DecodeEnemyEvent(reinterpret_cast<const char*>(&badEvent), sizeof badEvent, eventOut));
+    badEvent = event;
+    badEvent.path[100] = 'x'; // bytes after the terminator
+    assert(!coop::DecodeEnemyEvent(reinterpret_cast<const char*>(&badEvent), sizeof badEvent, eventOut));
+    badEvent = event;
+    badEvent.kind = 4;
+    assert(!coop::DecodeEnemyEvent(reinterpret_cast<const char*>(&badEvent), sizeof badEvent, eventOut));
+
     float start[3]{0, 0, 160}, forward[3]{1, 0, 0}, feet[3]{1000, 20, 0};
     assert(std::fabs(coop::AimDistanceToBody(start, forward, feet) - 1000) < 0.01f);
     float wide[3]{1000, 80, 0}, behind[3]{-1000, 0, 0}, low[3]{1000, 0, 400};
@@ -1494,8 +1568,8 @@ int main() {
     assert(coop::DecodeState(data, sizeof packet, decoded) && (decoded.flags & coop::kMenuPause));
     packet.flags |= coop::kHostSave | coop::kObjectiveSync | coop::kFreeRoam;
     assert(coop::DecodeState(data, sizeof packet, decoded) && (decoded.flags & coop::kHostSave));
-    packet.flags = static_cast<uint16_t>(packet.flags | (1u << 15));
-    assert(!coop::DecodeState(data, sizeof packet, decoded));
+    packet.flags |= coop::kPawnEnemies;
+    assert(coop::DecodeState(data, sizeof packet, decoded) && (decoded.flags & coop::kPawnEnemies));
     // The guest follows the host's session options; objective sync only rides on a shared host save.
     using coop::HostOptionFlags, coop::HostOptions;
     assert(HostOptionFlags({true, true, false}) == (coop::kHostSave | coop::kObjectiveSync));
@@ -1524,8 +1598,8 @@ int main() {
     packet.version++;
     assert(!coop::DecodeState(data, sizeof packet, decoded));
     packet.version = coop::kProtocolVersion;
-    packet.flags = 0x8000;
-    assert(!coop::DecodeState(data, sizeof packet, decoded));
+    packet.flags = coop::kPawnEnemies; // bit 15, the last free bit, since v13
+    assert(coop::DecodeState(data, sizeof packet, decoded));
     packet.flags = coop::kHasPawn;
     packet.pos[0] = std::numeric_limits<float>::quiet_NaN();
     assert(!coop::DecodeState(data, sizeof packet, decoded));

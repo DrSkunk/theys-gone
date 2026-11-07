@@ -31,6 +31,7 @@
 #include "gear.hpp"
 #include "pose.hpp"
 #include "skeleton.hpp"
+#include "standin.hpp"
 #include "ue.hpp"
 
 #include <windows.h>
@@ -296,6 +297,11 @@ void ReceiveEnemyInfo(const char* data, int len, double now);
 void ReceiveEnemyMaterials(const char* data, int len, double now);
 struct EnemySource;
 struct EnemyReplica;
+bool PawnEnemiesActive();
+void SendStandIn(EnemySource& e, const FVector& origin, uint32_t timeMs, double now);
+void ReceiveEnemyMotion(const char* data, int len, double now);
+void ReceiveEnemyEvent(const char* data, int len, double now);
+bool UpdateStandIn(UObject* pawn, uint32_t entity, EnemyReplica& r, const FVector& origin, double senderMs, double now);
 void SendCompanionMaterials(const EnemySource& e);
 void ApplyReplicaMaterials(EnemyReplica& r);
 bool LookAtCompanion();
@@ -1285,6 +1291,7 @@ void SendLocalState(UObject* pawn, double now) {
     if (g_settings.friendlyFire) p.flags |= kFriendlyFire;
     if (g_settings.motorcycles) p.flags |= kSyncBikes;
     if (g_settings.enemies) p.flags |= kSyncEnemies;
+    if (g_cfg.pawnEnemies) p.flags |= kPawnEnemies;
     if (IsHost() && g_separated) p.flags |= kSeparated;
     if (IsHost()) p.flags |= HostOptionFlags(LocalOptions());
     if (g_menuPause.localMenu) p.flags |= kMenuPause;
@@ -1435,6 +1442,14 @@ void ReceivePose(const char* data, int len, double now) {
     }
     if (magic == kPartnerStrikeMagic) {
         ReceivePartnerStrike(data, len);
+        return;
+    }
+    if (magic == kEnemyMotionMagic) {
+        ReceiveEnemyMotion(data, len, now);
+        return;
+    }
+    if (magic == kEnemyEventMagic) {
+        ReceiveEnemyEvent(data, len, now);
         return;
     }
     PosePacket packet;
@@ -3267,6 +3282,8 @@ struct EnemySource {
     double onGuest = -1e9; // last time it targeted the partner or the local proxy for them
     double lastMaterials = -10;
     bool friendly = false; // a story companion (BendBuddyController): streamed for display only
+    standin::Reader standIn; // [Research] PawnEnemies: movement, state and one-shots for the peer's stand-in
+    bool wasAlive = true;
 };
 struct EnemyReplica {
     UObject* actor = nullptr;
@@ -3292,6 +3309,12 @@ struct EnemyReplica {
     std::unordered_map<std::string, std::vector<Slot>> materials; // mesh path -> slots
     bool materialsPending = false; // some slots still to apply (loading, or a new list arrived)
     FVector at{}; // feet, in local engine coordinates
+    // [Research] PawnEnemies: a pawn of the owner's class replaces the poseable mesh once the class is loaded.
+    std::string pawnClass;
+    EnemyMotionBuffer motions;
+    standin::StandIn standIn;
+    double lastStandInAttempt = -10;
+    bool standInLogged = false;
 };
 std::vector<EnemySource> g_enemySources;
 std::unordered_map<uint32_t, EnemyReplica> g_enemyReplicas;
@@ -4126,6 +4149,7 @@ void SendEnemy(EnemySource& e, const FVector& origin, uint32_t timeMs, double no
         g_enemyStats.bytes += size;
     }, &e.tracker);
     e.names.pop_back();
+    if (PawnEnemiesActive() && !e.friendly) SendStandIn(e, origin, timeMs, now);
 }
 
 void SendEnemies(UObject* pawn, double now) {
@@ -4153,6 +4177,7 @@ void SendEnemies(UObject* pawn, double now) {
 }
 
 void DestroyReplica(EnemyReplica& r) {
+    standin::Destroy(r.standIn);
     if (IsLive(r.actor)) Call(r.actor, "K2_DestroyActor").invoke();
     r.actor = r.pose = nullptr;
     r.parts.clear();
@@ -4377,10 +4402,21 @@ void UpdateEnemyReplicas(UObject* pawn, double now) {
     double senderMs = g_motion.SenderMs();
     for (auto it = g_enemyReplicas.begin(); it != g_enemyReplicas.end();) {
         auto& r = it->second;
-        if (now - std::max(r.poses.LastArrival(), r.lastInfo) > kEnemyTimeout) {
-            if (IsLive(r.actor)) Log("enemies: replica %u expired", it->first);
+        if (now - std::max({r.poses.LastArrival(), r.lastInfo, r.motions.LastArrival()}) > kEnemyTimeout) {
+            if (IsLive(r.actor) || IsLive(r.standIn.pawn)) Log("enemies: replica %u expired", it->first);
             DestroyReplica(r);
             it = g_enemyReplicas.erase(it);
+            continue;
+        }
+        if (UpdateStandIn(pawn, it->first, r, origin, senderMs, now)) {
+            // The stand-in replaces the poseable mesh.
+            if (IsLive(r.actor)) {
+                Call(r.actor, "K2_DestroyActor").invoke();
+                r.actor = r.pose = nullptr;
+                r.parts.clear();
+                r.writer.Reset();
+            }
+            ++it;
             continue;
         }
         PoseFrame frame;
@@ -4473,7 +4509,7 @@ void QueueEnemyHit(bool melee, UObject* weapon) {
         float s0[3]{start.x, start.y, start.z};
         float d[3]{std::cos(pitch) * std::cos(yaw), std::cos(pitch) * std::sin(yaw), std::sin(pitch)};
         for (const auto& [entity, replica] : g_enemyReplicas) {
-            if (!replica.alive || replica.friendly || !IsLive(replica.actor)) continue;
+            if (!replica.alive || replica.friendly || (!IsLive(replica.actor) && !IsLive(replica.standIn.pawn))) continue;
             float feet[3]{replica.at.x, replica.at.y, replica.at.z};
             float t = AimDistanceToBody(s0, d, feet);
             if (t < 0 || t >= bestDistance) continue;
@@ -4509,7 +4545,7 @@ bool DebugHitEnemy() {
     if (!me.invoke()) return false;
     auto at = me.get<FVector>("ReturnValue");
     for (const auto& [entity, r] : g_enemyReplicas) {
-        if (!r.alive || !IsLive(r.actor)) continue;
+        if (!r.alive || (!IsLive(r.actor) && !IsLive(r.standIn.pawn))) continue;
         float dx = r.at.x - at.x, dy = r.at.y - at.y, d = dx * dx + dy * dy;
         if (d < bestDistance) { best = entity; bestDistance = d; }
     }
@@ -4583,6 +4619,145 @@ struct PartnerProxy {
     uint32_t stealthSkipped = 0; // awareness updates withheld in stealth missions since the last report
 } g_proxy;
 constexpr float kProxyMaxStrike = 400.f; // larger drops are engine resets, not hits
+
+// [Research] PawnEnemies: both machines opted in. The owner keeps sending poses as well, for a receiver
+// that cannot load the pawn class.
+bool PawnEnemiesActive() { return g_cfg.pawnEnemies && (g_peer.flags & kPawnEnemies); }
+
+struct StandInStats {
+    uint64_t motions = 0, events = 0, oneShots = 0, played = 0, spawned = 0, failed = 0;
+} g_standInStats;
+uint32_t g_standInSequence = 0;
+EnemyHitDedupe g_standInDedupe;
+
+// Events travel twice over UDP, like hits; the receiver applies each sequence number once.
+void SendEnemyEvent(uint32_t entity, EnemyEventKind kind, const std::string& path, bool atReceiver) {
+    EnemyEventPacket packet;
+    if (!EncodeEnemyEvent(g_session, entity, ++g_standInSequence, kind, path, atReceiver, packet)) return;
+    g_net->SendRaw(&packet, sizeof packet);
+    g_net->SendRaw(&packet, sizeof packet);
+    ++g_standInStats.events;
+}
+
+void SendStandIn(EnemySource& e, const FVector& origin, uint32_t timeMs, double now) {
+    EnemyMotionPacket m{};
+    UObject* oneShot = nullptr;
+    if (!standin::Read(e.standIn, e.pawn, m, oneShot)) return;
+    Call where(e.pawn, "K2_GetActorLocation"), facing(e.pawn, "K2_GetActorRotation");
+    if (!where.invoke() || !facing.invoke()) return;
+    auto at = where.get<FVector>("ReturnValue");
+    m.magic = kEnemyMotionMagic;
+    m.version = kEnemyMotionVersion;
+    m.session = g_session;
+    m.entity = e.entity;
+    m.timeMs = timeMs;
+    m.pos[0] = at.x + origin.x;
+    m.pos[1] = at.y + origin.y;
+    m.pos[2] = at.z + origin.z;
+    m.yaw = facing.get<FRotator>("ReturnValue").yaw;
+    float health = 0;
+    GetProp(e.pawn, "Health", health);
+    m.health = std::isfinite(health) ? std::clamp(health, 0.f, 100000.f) : 0.f;
+    Call alive(e.pawn, "IsAlive");
+    bool living = alive.invoke() && alive.get<bool>("ReturnValue");
+    if (living) m.flags |= kMotionAlive;
+    EnemyMotionPacket check;
+    if (!DecodeEnemyMotion(reinterpret_cast<const char*>(&m), sizeof m, check)) return;
+    g_net->SendRaw(&m, sizeof m);
+    ++g_standInStats.motions;
+    g_enemyStats.bytes += sizeof m;
+    if (now - e.lastInfo < 0.01) { // with each EnemyInfo, about once a second
+        auto path = AssetPath(e.pawn->cls);
+        if (!path.empty()) SendEnemyEvent(e.entity, kEnemyEventClass, path, false);
+    }
+    if (oneShot) {
+        auto path = AssetPath(oneShot);
+        // The counter prompt belongs to the player the attack is aimed at.
+        bool atPartner = IsLive(g_proxy.pawn) && standin::CurrentTarget(e.pawn) == g_proxy.pawn;
+        if (!path.empty()) SendEnemyEvent(e.entity, kEnemyEventOneShot, path, atPartner);
+        ++g_standInStats.oneShots;
+    }
+    if (e.wasAlive && !living) SendEnemyEvent(e.entity, kEnemyEventDied, "", false);
+    e.wasAlive = living;
+}
+
+void ReceiveEnemyMotion(const char* data, int len, double now) {
+    EnemyMotionPacket m;
+    if (!DecodeEnemyMotion(data, len, m) || m.session != g_peer.session || !g_peer.session) {
+        ++g_enemyStats.rejected;
+        return;
+    }
+    if (!AcceptEnemies(now) || !PawnEnemiesActive()) return;
+    if (auto replica = ReplicaFor(m.entity)) replica->motions.Push(m, now);
+}
+
+void ReceiveEnemyEvent(const char* data, int len, double now) {
+    EnemyEventPacket event;
+    if (!DecodeEnemyEvent(data, len, event) || event.session != g_peer.session || !g_peer.session) {
+        ++g_enemyStats.rejected;
+        return;
+    }
+    if (!AcceptEnemies(now) || !PawnEnemiesActive() || !g_standInDedupe.Accept(event.session, event.sequence)) return;
+    auto found = g_enemyReplicas.find(event.entity);
+    if (event.kind == kEnemyEventClass) {
+        if (auto replica = ReplicaFor(event.entity); replica && replica->pawnClass != event.path) {
+            replica->pawnClass = event.path;
+            replica->standInLogged = false;
+        }
+        return;
+    }
+    if (found == g_enemyReplicas.end() || !IsLive(found->second.standIn.pawn)) return;
+    auto& s = found->second.standIn;
+    if (event.kind == kEnemyEventDied) {
+        standin::Kill(s);
+        Log("enemies: stand-in %u died", event.entity);
+        return;
+    }
+    static UObject* sequenceClass = FindClass("AnimSequence");
+    auto sequence = FindObject(event.path, sequenceClass);
+    if (!sequence) {
+        RequestAssetLoad(event.path);
+        return;
+    }
+    if (standin::PlayOneShot(s, sequence, (event.flags & kEnemyEventAtReceiver) != 0)) ++g_standInStats.played;
+}
+
+// Guest side: spawns and feeds the stand-in. False while there is none, so the poseable replica is used.
+bool UpdateStandIn(UObject* pawn, uint32_t entity, EnemyReplica& r, const FVector& origin, double senderMs, double now) {
+    if (!PawnEnemiesActive() || r.friendly || r.pawnClass.empty() || r.paths.empty()) {
+        if (IsLive(r.standIn.pawn)) standin::Destroy(r.standIn);
+        return false;
+    }
+    EnemyMotionPacket m;
+    if (!r.motions.Sample(senderMs, m)) return false;
+    FVector at{m.pos[0] - origin.x, m.pos[1] - origin.y, m.pos[2] - origin.z};
+    if (!IsLive(r.standIn.pawn)) {
+        if (now - r.lastStandInAttempt < 1.0) return false;
+        r.lastStandInAttempt = now;
+        static UObject* meshClass = FindClass("SkeletalMesh");
+        auto cls = FindObject(r.pawnClass.c_str());
+        auto body = FindObject(r.paths[0].c_str(), meshClass);
+        if (!cls || !body) {
+            RequestAssetLoad(cls ? r.paths[0] : r.pawnClass);
+            if (!r.standInLogged) Log("enemies: stand-in %u waits for %s", entity, cls ? r.paths[0].c_str() : r.pawnClass.c_str());
+            r.standInLogged = true;
+            return false;
+        }
+        std::string error;
+        if (!standin::Spawn(pawn, cls, body, at, m.yaw, r.standIn, error)) {
+            ++g_standInStats.failed;
+            if (!r.standInLogged) Log("enemies: stand-in %u (%s) failed: %s", entity, Name(cls).c_str(), error.c_str());
+            r.standInLogged = true;
+            return false;
+        }
+        ++g_standInStats.spawned;
+        Log("enemies: stand-in %u is a %s", entity, Name(cls).c_str());
+    }
+    standin::Feed(r.standIn, m, at, now);
+    r.at = at;
+    r.alive = (m.flags & kMotionAlive) && m.health > 0;
+    return true;
+}
 
 bool WriteFloatProp(UObject* o, const char* name, float value) {
     auto property = IsLive(o) ? FindChild(o->cls, name) : nullptr;
@@ -6374,6 +6549,15 @@ void Tick(bool hudFrame) {
                 g_enemyStats.bytes / seconds / 1024, g_enemyStats.infos / seconds, g_enemyStats.applied / seconds,
                 static_cast<unsigned long long>(g_enemyStats.rejected),
                 g_enemyStats.reads ? g_enemyStats.readTime * 1000 / g_enemyStats.reads : 0, g_enemyScan.time * 1000 / seconds);
+        if (PawnEnemiesActive()) {
+            int live = 0;
+            for (const auto& [entity, replica] : g_enemyReplicas) live += IsLive(replica.standIn.pawn) ? 1 : 0;
+            Log("perf: stand-ins live=%d motions=%.1f/s events=%llu one-shots sent=%llu played=%llu spawned=%llu failed=%llu",
+                live, g_standInStats.motions / seconds, static_cast<unsigned long long>(g_standInStats.events),
+                static_cast<unsigned long long>(g_standInStats.oneShots), static_cast<unsigned long long>(g_standInStats.played),
+                static_cast<unsigned long long>(g_standInStats.spawned), static_cast<unsigned long long>(g_standInStats.failed));
+            g_standInStats = {};
+        }
         g_enemyStats = {};
         g_enemyScan.time = 0;
         g_poseStats = {};
@@ -6394,6 +6578,7 @@ void HookedProcessEvent(UObject* obj, UObject* fn, void* parms) {
         return;
     }
     if (research::DropProcessEvent(obj, fn)) return;
+    if (g_ready && fn && standin::Any() && standin::MuteNotify(obj, fn, parms)) return;
     if (!g_failed && !g_inTick && GetCurrentThreadId() == g_gameThread) {
         g_inTick = true;
         static int hudTick = 0;
@@ -6523,6 +6708,7 @@ Config LoadConfig(const std::wstring& ini) {
     c.menuDiscovery = GetPrivateProfileIntW(L"Coop", L"MenuDiscovery", 0, ini.c_str()) != 0;
     c.hostSave = GetPrivateProfileIntW(L"Coop", L"HostSave", 1, ini.c_str()) != 0;
     c.debugTools = GetPrivateProfileIntW(L"Coop", L"DebugTools", 0, ini.c_str()) != 0;
+    c.pawnEnemies = GetPrivateProfileIntW(L"Research", L"PawnEnemies", 0, ini.c_str()) != 0;
     c.debugFailSaveGuard =
         c.debugTools && GetPrivateProfileIntW(L"Coop", L"DebugFailSaveGuard", 0, ini.c_str()) != 0;
     c.partnerMarker = GetPrivateProfileIntW(L"Coop", L"PartnerMarker", 1, ini.c_str()) != 0;

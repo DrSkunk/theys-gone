@@ -22,6 +22,7 @@ struct Config {
     bool menuDiscovery = false;    // F6 dumps native menu classes and live widget references
     bool hostSave = true; // host shares its save; a guest plays it in a sandbox so its own saves stay untouched
     bool debugTools = false;
+    bool pawnEnemies = false; // [Research] PawnEnemies: show enemies as pawn stand-ins when the peer does too
     bool debugFailSaveGuard = false; // test only (needs DebugTools): the guest sandbox refuses to start
     std::string animIdle = "dcn_idle_normal";
     std::string animWalk = "dcn_walk";

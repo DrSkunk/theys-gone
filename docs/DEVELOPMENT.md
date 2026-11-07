@@ -320,6 +320,14 @@ The experimental `net-*` path reads these `[Research]` options from
 | `WalkTarget=remote` | host | `net-walk` drives the remote guest's pawn |
 | `WalkConsume=1` | any | `net-walk` consumes the movement input itself after each step |
 
+`[Research] PawnEnemies=1` (both sides, read at startup, needs protocol v13 on
+both) is not part of the `net-*` path. It shows the owner's enemies as pawn
+stand-ins: a pawn of the enemy's own class without AI or collision, fed the
+movement, AI move request and anim state (`DMMO`, 15 Hz) and the one-shot,
+class and death events (`DMEV`). The owner still sends bone poses as well, for
+a receiver that cannot load the class. The `perf: stand-ins` log line counts
+motions, events, one-shots played and stand-ins spawned.
+
 Commands go through a file mailbox. The helper atomically writes
 `TheysGone-debug.ini` (`[Debug] Command=…, Request=<new number>`) next to
 the ASI. The plugin polls it every 0.5 s on the game thread and writes

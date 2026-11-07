@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cctype>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <string>
@@ -193,6 +194,154 @@ inline bool EncodeEnemyInfo(uint32_t session, uint32_t entity, const std::vector
     }
     EnemyInfoPacket check;
     return DecodeEnemyInfo(reinterpret_cast<const char*>(&out), sizeof out, check);
+}
+
+// Pawn stand-ins (experimental, [Research] PawnEnemies=1 on both sides): instead of bone poses, the owner
+// sends what a native client would get for an AI pawn. Each update carries the movement and the AI's move
+// request, which drive the receiver's own copy of the pawn's anim graph, and the anim state. One-off
+// animations (attacks, grapples), the pawn's class and its death are events.
+constexpr uint32_t kEnemyMotionMagic = 0x4F4D4D44; // "DMMO"
+constexpr uint16_t kEnemyMotionVersion = 1;
+constexpr uint8_t kEnemyMaxAnimState = 63;
+
+enum EnemyMotionFlags : uint8_t {
+    kMotionAlive = 1 << 0,
+    kMotionGrounded = 1 << 1,  // bHasTouchedGroundAfterSpawningOrTeleporting
+    kMotionRequested = 1 << 2, // bHasRequestedVelocity
+};
+
+#pragma pack(push, 1)
+struct EnemyMotionPacket {
+    uint32_t magic;
+    uint16_t version;
+    uint8_t flags, movementMode;
+    uint32_t session, entity, timeMs;
+    float pos[3]; // absolute world coordinates of the actor
+    float yaw;
+    float velocity[3], acceleration[3], requestedVelocity[3];
+    float desiredSpeed, maxWalkSpeed;
+    float desiredRotation[3], deltaToDesiredRotation[3]; // pitch, yaw, roll
+    float health;
+    uint8_t state; // the Bend anim-state enum (0 ground movement, 5 melee attack, 6 grapple, 15 damage)
+    uint8_t reserved[3];
+};
+#pragma pack(pop)
+static_assert(sizeof(EnemyMotionPacket) == 112, "wire format");
+
+inline bool DecodeEnemyMotion(const char* data, int len, EnemyMotionPacket& out) {
+    if (len != static_cast<int>(sizeof(EnemyMotionPacket))) return false;
+    std::memcpy(&out, data, sizeof out);
+    if (out.magic != kEnemyMotionMagic || out.version != kEnemyMotionVersion || !out.session || !out.entity ||
+        (out.flags & ~(kMotionAlive | kMotionGrounded | kMotionRequested)) || out.movementMode > 6 ||
+        out.state > kEnemyMaxAnimState || out.reserved[0] || out.reserved[1] || out.reserved[2])
+        return false;
+    float values[(offsetof(EnemyMotionPacket, state) - offsetof(EnemyMotionPacket, pos)) / sizeof(float)];
+    std::memcpy(values, data + offsetof(EnemyMotionPacket, pos), sizeof values);
+    for (float f : values)
+        if (!std::isfinite(f) || std::fabs(f) > 1e8f) return false;
+    return out.health >= 0 && out.health <= 100000 && out.desiredSpeed >= 0 && out.maxWalkSpeed >= 0;
+}
+
+// The last few motion updates of one stand-in, sampled at a render time on the sender's clock: position and
+// yaw are interpolated between the two updates around it, everything else comes from the later one. No
+// extrapolation: past the newest update the newest is held.
+class EnemyMotionBuffer {
+public:
+    bool Push(const EnemyMotionPacket& p, double arrival) {
+        if (count_ && static_cast<int32_t>(p.timeMs - items_[(head_ + count_ - 1) % kSize].timeMs) <= 0) return false;
+        if (count_ == kSize) {
+            head_ = (head_ + 1) % kSize;
+            --count_;
+        }
+        items_[(head_ + count_++) % kSize] = p;
+        last_ = arrival;
+        return true;
+    }
+    bool Sample(double senderMs, EnemyMotionPacket& out) const {
+        if (!count_) return false;
+        const EnemyMotionPacket* before = &At(0);
+        if (senderMs <= static_cast<double>(before->timeMs) || count_ == 1) {
+            out = senderMs <= static_cast<double>(before->timeMs) ? *before : At(count_ - 1);
+            return true;
+        }
+        for (size_t i = 1; i < count_; ++i) {
+            const auto& after = At(i);
+            if (senderMs > static_cast<double>(after.timeMs)) {
+                before = &after;
+                continue;
+            }
+            double span = static_cast<double>(after.timeMs - before->timeMs);
+            float t = static_cast<float>((senderMs - static_cast<double>(before->timeMs)) / span);
+            out = after;
+            for (int k = 0; k < 3; ++k) out.pos[k] = before->pos[k] + (after.pos[k] - before->pos[k]) * t;
+            float turn = std::remainder(after.yaw - before->yaw, 360.f);
+            out.yaw = before->yaw + turn * t;
+            return true;
+        }
+        out = At(count_ - 1);
+        return true;
+    }
+    double LastArrival() const { return last_; }
+    void Reset() { head_ = count_ = 0; }
+private:
+    static constexpr size_t kSize = 8;
+    const EnemyMotionPacket& At(size_t i) const { return items_[(head_ + i) % kSize]; }
+    EnemyMotionPacket items_[kSize]{};
+    size_t head_ = 0, count_ = 0;
+    double last_ = -1e9;
+};
+
+constexpr uint32_t kEnemyEventMagic = 0x56454D44; // "DMEV"
+constexpr uint16_t kEnemyEventVersion = 1;
+
+enum EnemyEventKind : uint8_t {
+    kEnemyEventClass = 1,   // path: the pawn's Blueprint class ("/Game/....SwarmerPawn_C")
+    kEnemyEventOneShot = 2, // path: the AnimSequence the pawn started in an attack or grapple
+    kEnemyEventDied = 3,    // no path
+};
+constexpr uint8_t kEnemyEventAtReceiver = 1; // a one-shot aimed at the receiving player (counter prompts are theirs)
+
+#pragma pack(push, 1)
+struct EnemyEventPacket {
+    uint32_t magic;
+    uint16_t version;
+    uint8_t kind, flags;
+    uint32_t session, entity, sequence;
+    char path[kEnemyPathLength];
+};
+#pragma pack(pop)
+
+inline bool DecodeEnemyEvent(const char* data, int len, EnemyEventPacket& out) {
+    if (len != static_cast<int>(sizeof(EnemyEventPacket))) return false;
+    std::memcpy(&out, data, sizeof out);
+    if (out.magic != kEnemyEventMagic || out.version != kEnemyEventVersion || !out.session || !out.entity ||
+        !out.sequence || out.kind < kEnemyEventClass || out.kind > kEnemyEventDied)
+        return false;
+    if (out.flags & ~kEnemyEventAtReceiver) return false;
+    if (out.flags && out.kind != kEnemyEventOneShot) return false;
+    bool named = out.kind != kEnemyEventDied;
+    if (!ValidObjectPath(out.path, kEnemyPathLength, !named)) return false;
+    if (!named && out.path[0]) return false;
+    // Unused path bytes stay zero, so a packet has one encoding.
+    for (size_t i = strnlen(out.path, kEnemyPathLength); i < kEnemyPathLength; ++i)
+        if (out.path[i]) return false;
+    return true;
+}
+
+inline bool EncodeEnemyEvent(uint32_t session, uint32_t entity, uint32_t sequence, EnemyEventKind kind,
+                             const std::string& path, bool atReceiver, EnemyEventPacket& out) {
+    out = EnemyEventPacket{};
+    out.magic = kEnemyEventMagic;
+    out.version = kEnemyEventVersion;
+    out.kind = kind;
+    out.flags = atReceiver && kind == kEnemyEventOneShot ? kEnemyEventAtReceiver : 0;
+    out.session = session;
+    out.entity = entity;
+    out.sequence = sequence;
+    if (path.size() >= kEnemyPathLength) return false;
+    std::memcpy(out.path, path.data(), path.size());
+    EnemyEventPacket check;
+    return DecodeEnemyEvent(reinterpret_cast<const char*>(&out), sizeof out, check);
 }
 
 // Face rig, tongue, eyes, fingers and camera/reference helpers do not change an enemy's silhouette.

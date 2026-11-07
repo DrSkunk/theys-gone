@@ -167,8 +167,15 @@ with the host's missions.
     an "enemy died" event can call it on a guest. Grapple loops matched
     without replaying
     ([research log](REPLICATION-RESEARCH.md#pawn-mirror-hit-reactions-death-and-looping-one-shots-2026-11-07-one-pc-one-game)).
-    *Start:* a second enemy type (a human or a Ripper) and the hit-reaction
-    direction. *Done when:* a lab run
+    Behind `[Research] PawnEnemies=1` (protocol v13), the first paired run
+    showed a host swarmer as a stand-in on the guest: grapples in the same
+    spot, 41 of 59 one-shots played, guest hits and host death forwarded.
+    The guest's `ForceKill` also gave the guest the kill reward, and some
+    attack sequences never loaded on the guest
+    ([research log](REPLICATION-RESEARCH.md#pawn-stand-ins-over-the-wire-first-paired-run-2026-11-07-one-pc-two-games)).
+    *Start:* a guest-side death without the reward, holding one-shot
+    assets loaded, then dropping poses for enemies with a stand-in and
+    measuring several enemies. *Done when:* a lab run
     shows the pawn clone in the source's action (idle, move, attack, grapple,
     hit, death) for most samples and the stand-in never damages the player,
     before any wire format is designed.

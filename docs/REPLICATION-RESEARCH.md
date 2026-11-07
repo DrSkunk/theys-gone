@@ -3643,3 +3643,53 @@ separate-PC behavior.
 - **Cleanup:** lab clone destroyed after each run; base game copy never
   written. Archives: `<archive>/anim-mirror-20261107-1533/`, `-1538/` and
   `-1545/`.
+
+## Pawn stand-ins over the wire: first paired run (2026-11-07, one PC, two games)
+
+- **Question:** does the pawn mirror work between two games: a host enemy
+  shown on the guest as a pawn of its own class, fed from packets?
+- **Build:** worktree `anim-mirror-probe`, protocol v13, game build
+  19221447, `[Research] PawnEnemies=1` and `DebugTools=1` on both. New
+  datagrams: `DMMO` (112 bytes per enemy at 15 Hz: position, yaw,
+  velocity, acceleration, the AI move request, movement mode, anim state,
+  health, alive) and `DMEV` (class, one-shot with an "aimed at you" flag,
+  died; sent twice, deduplicated). New `src/coop/standin.cpp` reads the
+  owner's pawn and spawns and feeds the receiver's stand-in; gameplay
+  notifies on stand-ins are muted, counter notifies pass only for attacks
+  aimed at the local player. The host still sends bone poses too.
+- **Setup:** paired lab (`pair.sh`), host save shared; both `begin` and
+  `god-on`; host `spawn-single` and `probe-enemy`; four guest and host
+  screenshots 8 s apart; three guest `hit-enemy`; host `kill-owned-enemy`.
+- **Result:** PASS for spawn, attacks, hits and death in one run; one
+  side effect found (below).
+- **Observed:**
+  - The guest spawned the stand-in (`stand-in 1 is a SwarmerPawn_C`) and
+    played 41 of the host's 59 one-shots. The rest were attack sequences
+    not loaded on the guest (`swm_atk_left_165`, `swm_atk_right_165`,
+    `swm_atk_right_110`, `swm_atk_left_110`): each was requested again
+    about every 10 s, so the load either does not finish or the asset is
+    collected before the next use.
+  - Host: 15.0 `DMMO` per second for one enemy; total enemy traffic stayed
+    16–18 kB/s because the poses are still sent.
+  - Screenshots at the same moment: on the host the swarmer grapples the
+    host; on the guest the stand-in grapples the host's avatar in the same
+    spot.
+  - All 3 guest `hit-enemy` hits reached the host's swarmer (156.2 to
+    100.0).
+  - Host `kill-owned-enemy` at 17:45:33.12; the guest logged `stand-in 1
+    died` at 17:45:33.14, and the replica expired 12 s later after the
+    host's cleanup.
+  - **Side effect:** right after the stand-in's `ForceKill`, the guest's HUD
+    showed "+1 SWARMER EAR": the guest's game credited the kill and its loot
+    to the guest. The corpse was not in frame in the following screenshot.
+- **Derived:** the stand-in path works between two games for a swarmer:
+  spawning by class, movement, attacks and grapples, hits and death.
+  `ForceKill` with no killer still runs the game's kill reward for the local
+  player, so a guest-side death needs another path or the reward
+  suppressed. One-shot sequences need to be loaded and held on the guest
+  before they are needed.
+- **Unknown:** the bandwidth with poses turned off; more than one enemy;
+  other enemy types; the corpse and ragdoll on the guest; whether the
+  stand-in ever damaged the guest (both were in god mode); two-PC timing.
+- **Cleanup:** both lab clones destroyed; base game copy never written.
+  Archive: `<archive>/pawn-20261107-1741/`.

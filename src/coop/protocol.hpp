@@ -7,7 +7,7 @@
 namespace coop {
 
 constexpr uint32_t kMagic = 0x4F434744; // "DGCO"
-constexpr uint16_t kProtocolVersion = 12;
+constexpr uint16_t kProtocolVersion = 13;
 
 enum StateFlags : uint16_t {
     kHasPawn = 1 << 0,
@@ -26,6 +26,8 @@ enum StateFlags : uint16_t {
     kHostSave = 1 << 12,      // the guest plays the host's save in a sandbox
     kObjectiveSync = 1 << 13, // completed objectives are shared live
     kFreeRoam = 1 << 14,      // distant players simulate the enemies around them
+    // Both: this machine runs [Research] PawnEnemies (enemies as pawn stand-ins); used only when both set it.
+    kPawnEnemies = 1 << 15,
 };
 
 struct SessionOptions {
@@ -100,7 +102,7 @@ inline bool DecodeState(const char* data, int len, StatePacket& out) {
     if (out.magic != kMagic || out.version != kProtocolVersion ||
         (out.flags & ~(kHasPawn | kInVehicle | kHasBike | kPassenger | kFriendlyFire |
                        kAcceptPassengers | kAlive | kSyncBikes | kWorldState | kSyncEnemies | kSeparated | kMenuPause |
-                       kHostSave | kObjectiveSync | kFreeRoam))) return false;
+                       kHostSave | kObjectiveSync | kFreeRoam | kPawnEnemies))) return false;
     const float values[] = {out.pos[0], out.pos[1], out.pos[2], out.yaw, out.pitch,
                             out.vel[0], out.vel[1], out.vel[2], out.bikePos[0], out.bikePos[1], out.bikePos[2],
                             out.bikeRotation[0], out.bikeRotation[1], out.bikeRotation[2], out.damage, out.health,
