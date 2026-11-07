@@ -4003,7 +4003,10 @@ separate-PC behavior.
 - **Change:** `ParkedPawn` replaces the controller test: hidden pawns,
   controllers with `bPooledSpawn` and not `bPooledSpawnInUse`, and
   controller-less pawns that are not freakers are parked. `SharedEnemy`
-  accepts a controller-less `BendFreakerPawn` (a horde member).
+  accepts a controller-less `BendFreakerPawn` (a horde member). Both apply
+  only with `[Research] PawnEnemies=1` until a live horde confirms them;
+  normal play keeps the old rule (checked: without the key the probe
+  classified the pools exactly as before).
 - **Derived:** the most likely cause of the 2026-11-06 gap is that rule:
   a swarm of promoted horde pawns has no AI controllers, so none was
   selected. Not proven: the run's attackers are not named in its log.

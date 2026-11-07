@@ -3667,7 +3667,7 @@ bool SharedEnemy(UObject* ai, UObject* player) {
     auto controller = Prop(ai, "Controller");
     // Horde members promoted to full pawns (HordeSwarmerPawn_C) are driven by a BendCrowdController actor and
     // have no AI controller; freakers are hostile to both players.
-    if (!IsLive(controller)) return freakerPawn && IsA(ai, freakerPawn);
+    if (!IsLive(controller)) return g_cfg.pawnEnemies && freakerPawn && IsA(ai, freakerPawn);
     if ((freaker && IsA(controller, freaker)) || (animal && IsA(controller, animal))) return true;
     Call enemy(controller, "IsEnemy");
     return enemy.set("BendPawn", player).invoke() && enemy.get<bool>("ReturnValue");
@@ -3678,6 +3678,9 @@ bool SharedEnemy(UObject* ai, UObject* player) {
 // one. A visible freaker pawn without a controller is a horde member in play.
 bool ParkedPawn(UObject* ai) {
     static UObject* freakerPawn = FindClass("BendFreakerPawn");
+    // Unproven against a live horde, so normal play keeps the old rule (no controller means pooled) unless the
+    // [Research] PawnEnemies experiment is on.
+    if (!g_cfg.pawnEnemies) return !IsLive(Prop(ai, "Controller"));
     bool hidden = false;
     if (GetBoolProp(ai, "bHidden", hidden) && hidden) return true;
     auto controller = Prop(ai, "Controller");

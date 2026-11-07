@@ -77,8 +77,9 @@ with the host's missions.
    the guest's stand-in, and the guest took that damage from enemies it could
    not see. The scan skipped every pawn without an AI controller as pooled,
    which also drops horde members promoted to full pawns (they are driven by
-   a `BendCrowdController` actor); pools are now recognised by their hidden
-   and pool flags instead, but no natural swarm has been tested yet
+   a `BendCrowdController` actor); with `[Research] PawnEnemies=1` pools are
+   recognised by their hidden and pool flags instead, but no natural swarm
+   has been tested yet
    ([research log](REPLICATION-RESEARCH.md#enemy-scan-pools-hordes-and-the-2026-11-06-gap-2026-11-07-one-pc-one-and-two-games)). Then
    replace full-skeleton streaming for most enemies with native puppets: the
    guest spawns the same class with its AI stopped and drives its position,
