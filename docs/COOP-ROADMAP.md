@@ -150,8 +150,14 @@ with the host's missions.
     ([research log](REPLICATION-RESEARCH.md#pawn-mirror-what-the-stand-ins-anim-notifies-do-and-muting-them-2026-11-07-one-pc-one-game)).
     Counter prompts follow the attack's target: gated on it, they passed for
     attacks on the local player and were muted otherwise, so an attack event
-    carries the target. How a guest's counter reaches the host's enemy is
-    still open.
+    carries the target. A guest's counter lands on its local stand-in, so it
+    needs a "guest countered attack N" message back to the host, like the
+    forwarded guest hits. Candidate hooks from reflection, not yet traced:
+    `BendPlayerPawn.OnCounterAttackSuccessful` (a Blueprint event, so it is
+    visible in ProcessEvent) and `BendPawn.CanCounterAttack_Ended(pAttacker)`
+    to name the attacker on the guest. On the host, how to make the real
+    enemy take the counter (`AttackersCounterWindow*_AnimNotify`,
+    `ResetFinishedCounterAttack`) is unknown.
     *Start:* looping one-shots, hit reactions and death. *Done when:* a lab run
     shows the pawn clone in the source's action (idle, move, attack, grapple,
     hit, death) for most samples and the stand-in never damages the player,
