@@ -3850,22 +3850,23 @@ separate-PC behavior.
   Requested sequences are checked every frame and added to the root set as
   soon as they appear; the root-set check now allows 10% of actors.
 - **Setup:** paired lab pack runs as before (`spawn-pack`, the tutorial
-  dismissed with one `E` hold), four runs, each changing one thing.
+  dismissed with one `E` hold), one run per change.
 - **Result:** FAIL. The missing sequences never load, so holding cannot
   help.
 - **Observed:**
   - The root-set check passed (2945 of 2945 classes, 142 of 4401 actors)
     and was used.
-  - Run 1, streaming-manager loads (`RequestAsyncLoadBPCallback`): 26 of 74
-    one-shots missing; the same sequences were requested again every
-    10–20 s.
-  - Run 2, the same with a per-frame check: none of 10 requested sequences
-    appeared within 30 s.
-  - Run 3, `KismetSystemLibrary.LoadAsset` (latent, `Linkage -1`): all 21
-    loads started, none of the sequences appeared within 30 s, and none
-    existed under another outer either (lookup by short name). 25 of 70
-    missing.
-  - Run 4, the stand-in's AI controller kept with its brain stopped: 24 of
+  - `-1847`, streaming-manager loads (`RequestAsyncLoadBPCallback`), held
+    only when an event found them: 29 of 82 one-shots missing; the same
+    sequences were requested again every 10–20 s.
+  - `-1858`, the same with a per-frame check: 26 of 74 missing, and none of
+    10 requested sequences appeared within 30 s. (`-1853` broke: a second
+    `E` hold made the host use the bike and ended its debug session.)
+  - `-1905` and `-1913`, `KismetSystemLibrary.LoadAsset` (latent,
+    `Linkage -1`): all 21 loads started, none of the sequences appeared
+    within 30 s, and none existed under another outer either (lookup by
+    short name). 25 of 70 missing.
+  - `-1921`, the stand-in's AI controller kept with its brain stopped: 24 of
     68 still missing.
   - The missing ones are always the same group: `swm_atk_*_110/165/230`,
     `swm_atk_run_520` and `swm_f_grapple_jump_125/250`. Others (such as
@@ -3880,4 +3881,4 @@ separate-PC behavior.
 - **Unknown:** how the host loads them (which asset references them); a
   synchronous load path.
 - **Cleanup:** lab clones destroyed after each run. Archives:
-  `<archive>/pawn-20261107-1847/` through `<archive>/pawn-20261107-1920/`.
+  `<archive>/pawn-20261107-1847/` through `<archive>/pawn-20261107-1921/`.
