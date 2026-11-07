@@ -183,43 +183,6 @@ bool IsLive(const UObject* obj) {
     return (*reinterpret_cast<int32_t*>(item + 8) & (ItemFlagPendingKill | ItemFlagUnreachable)) == 0;
 }
 
-namespace {
-volatile long* ItemFlags(const UObject* obj) {
-    auto items = *reinterpret_cast<uint8_t**>(g.objectArray + 0x10);
-    return reinterpret_cast<volatile long*>(items + static_cast<size_t>(obj->internalIndex) * 0x10 + 8);
-}
-} // namespace
-
-bool KeepLoaded(UObject* obj, std::string& diag) {
-    // The root-set bit is taken from UE 4.11's EInternalObjectFlags and checked once on this build: native
-    // classes are rooted and most actors are not (two-PC run 2026-11-07: 2945 of 2945 classes, 142 of 3907
-    // actors, the latter being the game's own rooted actors).
-    static int verified = 0; // 0 unknown, 1 confirmed, -1 refuted
-    if (!verified) {
-        auto classClass = FindClass("Class"), actorClass = FindClass("Actor");
-        int classes = 0, rootedClasses = 0, actors = 0, rootedActors = 0;
-        for (int32_t i = 0; i < ObjectCount(); ++i) {
-            auto o = ObjectAt(i);
-            if (!IsLive(o)) continue;
-            bool rooted = (*ItemFlags(o) & ItemFlagRootSet) != 0;
-            if (o->cls == classClass) {
-                ++classes;
-                rootedClasses += rooted;
-            } else if (actorClass && !IsDefaultOrArchetype(o) && IsA(o, actorClass)) {
-                ++actors;
-                rootedActors += rooted;
-            }
-        }
-        verified = classes > 100 && rootedClasses * 10 >= classes * 9 && actors > 100 && rootedActors * 10 <= actors ? 1 : -1;
-        diag = "root-set bit check: " + std::to_string(rootedClasses) + " of " + std::to_string(classes) +
-               " native classes and " + std::to_string(rootedActors) + " of " + std::to_string(actors) +
-               " actors have it; " + (verified > 0 ? "using it" : "not using it");
-    }
-    if (verified < 0 || !IsLive(obj)) return false;
-    _InterlockedOr(ItemFlags(obj), ItemFlagRootSet);
-    return true;
-}
-
 std::shared_ptr<UObject> RetainObject(UObject* obj) {
     constexpr LONG rootSet = 1L << 30;
     static std::unordered_map<UObject*, std::weak_ptr<UObject>> retained;
@@ -286,6 +249,19 @@ bool IsDefaultOrArchetype(const UObject* obj) {
     return obj->flags & (RF_ClassDefaultObject | RF_ArchetypeObject);
 }
 
+int32_t SplitNameNumber(const std::string& text, int32_t& number) {
+    number = 0;
+    auto split = SplitFNameNumber(text);
+    if (split.number) {
+        int32_t base = FindNameIndex(split.base.c_str());
+        if (base >= 0) {
+            number = split.number;
+            return base;
+        }
+    }
+    return FindNameIndex(text.c_str());
+}
+
 // Accepts a short object name or "Outer.Name" (e.g. "/Game/Animation/Deacon/run/run.Run").
 UObject* FindObject(const char* name, const UObject* cls) {
     if (!name || !*name) return nullptr;
@@ -299,11 +275,13 @@ UObject* FindObject(const char* name, const UObject* cls) {
         outer = full.substr(0, dot);
         full = full.substr(dot + 1);
     }
-    int32_t idx = FindNameIndex(full.c_str());
+    // FName keeps a trailing "_<digits>" as its number: "swm_atk_right_165" is "swm_atk_right" number 166.
+    int32_t number = 0;
+    int32_t idx = SplitNameNumber(full, number);
     if (idx < 0) { entry.Set(nullptr); return nullptr; }
     for (int32_t i = 0, n = ObjectCount(); i < n; ++i) {
         auto o = ObjectAt(i);
-        if (!o || o->name.index != idx || o->name.number != 0 || (cls && !IsA(o, cls))) continue;
+        if (!o || o->name.index != idx || o->name.number != number || (cls && !IsA(o, cls))) continue;
         if (!outer.empty() && (!o->outer || Name(o->outer) != outer)) continue;
         if (!IsLive(o)) continue;
         entry.Set(o);

@@ -4527,4 +4527,96 @@ void AnimMirrorTick() {
         now - g_mirror.started, mean, worst, speed, cloneSpeed, aware, cloneAware, sourceLod, cloneLod, active);
 }
 
+
+namespace {
+// UArrayProperty::Inner: the first member after UProperty, the same slot as UStructProperty::Struct (0x78).
+UObject* ArrayInner(UObject* property) {
+    constexpr int kInnerOffset = 0x78;
+    UObject* inner = nullptr;
+    if (!ReadableMemory(reinterpret_cast<uint8_t*>(property) + kInnerOffset, sizeof inner)) return nullptr;
+    std::memcpy(&inner, reinterpret_cast<uint8_t*>(property) + kInnerOffset, sizeof inner);
+    if (!IsLive(inner) || !IsLive(inner->cls)) return nullptr;
+    auto kind = Name(inner->cls);
+    return kind.size() > 8 && kind.ends_with("Property") ? inner : nullptr;
+}
+
+bool HoldsPointer(const uint8_t* data, size_t bytes, const UObject* target) {
+    if (!bytes || !ReadableMemory(data, bytes)) return false;
+    for (size_t at = 0; at + 8 <= bytes; at += 8) {
+        UObject* value = nullptr;
+        std::memcpy(&value, data + at, sizeof value);
+        if (value == target) return true;
+    }
+    return false;
+}
+} // namespace
+
+// asset-refs NAME: every live object called NAME with its full path and flags, and every object whose
+// reflected fields (including the elements of its arrays) hold a pointer to one of them.
+bool AssetReferences(const std::string& name, std::string& summary) {
+    std::vector<UObject*> targets;
+    int32_t number = 0;
+    int32_t index = SplitNameNumber(name, number);
+    for (int32_t i = 0; index >= 0 && i < ObjectCount(); ++i) {
+        auto o = ObjectAt(i);
+        if (o && o->name.index == index && o->name.number == number && IsLive(o)) targets.push_back(o);
+    }
+    if (targets.empty()) {
+        summary = "no live object named " + name;
+        return false;
+    }
+    for (auto t : targets) {
+        std::string chain;
+        for (auto o = t->outer; o && chain.size() < 300; o = o->outer) chain += (chain.empty() ? "" : " <- ") + Name(o->cls) + " " + Name(o);
+        Log("asset-refs: %s (flags 0x%x); outers: %s", FullName(t).c_str(), t->flags, chain.empty() ? "none" : chain.c_str());
+    }
+    // Per class: its reflected fields, object-sized ones and arrays.
+    struct Field { int offset, size; UObject* property; bool array; int stride; };
+    std::unordered_map<UObject*, std::vector<Field>> layouts;
+    int hits = 0, scanned = 0;
+    for (int32_t i = 0; i < ObjectCount() && hits < 60; ++i) {
+        auto o = ObjectAt(i);
+        if (!o || !IsLive(o) || !IsLive(o->cls) || std::find(targets.begin(), targets.end(), o) != targets.end()) continue;
+        auto [it, fresh] = layouts.try_emplace(o->cls);
+        if (fresh) {
+            for (auto c = o->cls; IsLive(c); c = Super(c)) {
+                int budget = 0;
+                for (auto f = Children(c); f && budget < 4096; f = Next(f), ++budget) {
+                    if (!IsLive(f) || IsFunction(f)) continue;
+                    int offset = PropertyOffset(f), size = ElementSize(f);
+                    if (offset < 0 || size <= 0) continue;
+                    auto kind = Name(f->cls);
+                    if (kind == "ArrayProperty") {
+                        auto inner = ArrayInner(f);
+                        if (inner) it->second.push_back({offset, size, f, true, ElementSize(inner)});
+                    } else if (kind == "ObjectProperty" || kind == "StructProperty") {
+                        it->second.push_back({offset, size, f, false, 0});
+                    }
+                }
+            }
+        }
+        ++scanned;
+        auto base = reinterpret_cast<const uint8_t*>(o);
+        for (const auto& f : it->second) {
+            bool found = false;
+            if (f.array) {
+                struct Raw { const uint8_t* data; int32_t count, capacity; } raw{};
+                std::memcpy(&raw, base + f.offset, sizeof raw);
+                size_t bytes = raw.data && raw.count > 0 && raw.count < 100000 && f.stride > 0 && f.stride <= 4096
+                                   ? static_cast<size_t>(raw.count) * static_cast<size_t>(f.stride) : 0;
+                for (auto t : targets) found = found || HoldsPointer(raw.data, bytes, t);
+            } else {
+                for (auto t : targets) found = found || HoldsPointer(base + f.offset, static_cast<size_t>(f.size), t);
+            }
+            if (!found) continue;
+            Log("asset-refs: held by %s field %s%s", FullName(o).c_str(), Name(f.property).c_str(), f.array ? " (array)" : "");
+            ++hits;
+            break;
+        }
+    }
+    summary = std::to_string(targets.size()) + " objects named " + name + ", " + std::to_string(hits) +
+              " referencing objects among " + std::to_string(scanned) + " scanned (first 60 shown)";
+    return true;
+}
+
 } // namespace coop::research

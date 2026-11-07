@@ -3873,12 +3873,46 @@ separate-PC behavior.
     the grapple loops and kills) played.
   - Corpse poses with the 1 Hz rule: 6.0–12.8 pose packets per second for
     the first seconds after a death, then 2.0.
-- **Derived:** those sequences cannot be loaded by object path on this
-  build through either loader; on the host they are presumably loaded
-  through the attack data its AI uses. The receiver either needs that data
-  loaded another way, or the owner sends those attacks differently (for
-  example, briefly sending poses while such a one-shot plays).
-- **Unknown:** how the host loads them (which asset references them); a
-  synchronous load path.
+- **Derived (corrected by the next entry):** this run concluded that the
+  sequences could not be loaded. They were loaded all along; the lookup
+  that checked for them could not match names ending in digits.
 - **Cleanup:** lab clones destroyed after each run. Archives:
   `<archive>/pawn-20261107-1847/` through `<archive>/pawn-20261107-1921/`.
+
+## Pawn stand-ins: the missing sequences were a name lookup bug (2026-11-07, one PC, one and two games)
+
+- **Question:** where the host's missing attack sequences live and what
+  references them (follow-up to the previous entry).
+- **Build:** worktree `anim-mirror-probe`, new debug command `asset-refs
+  --arg NAME`: every live object of that name with its full path, flags and
+  outers, and every object whose reflected fields or array elements point
+  to it.
+- **Setup:** one lab instance, `asset-refs` on three missing sequences
+  before any fight and after a pack fight; then the paired pack run.
+- **Result:** PASS. Cause found and fixed: 96 of 96 and 55 of 55 one-shots
+  played on the guest in two paired runs.
+- **Observed:**
+  - First `asset-refs`: "no live object named swm_atk_right_165", even on
+    the host after a fight.
+  - Unreal keeps a trailing `_<digits>` of a name as the FName number
+    (`swm_atk_right_165` is `swm_atk_right` number 166). `ue::Name()`
+    prints it back, but `ue::FindObject` looked up the whole text and
+    required number 0. Every missing sequence ended in digits; every
+    played one did not.
+  - With the split in `FindObject`: `swm_atk_right_165` and
+    `swm_atk_left_110` are held by the data asset
+    `/Game/Animation/SwarmerB/SwarmerAttacks` (`BendAttackAnimData`,
+    `AttackAnimsList`), `swm_f_grapple_jump_250` by the blend space
+    `swm_f_grapple_jump_distance` (`SampleData`). All three were loaded
+    before any fight.
+  - Paired pack runs `pawn-20261107-1950` and `-1956`: one-shots 96 sent,
+    96 played and 55 sent, 55 played; host enemy traffic 16.2–17.0 kB/s
+    with 8 stand-ins.
+- **Derived:** the sequences were never unloaded; the loader experiments in
+  the previous entry measured a lookup that could not succeed. The root-set
+  holding and the latent loader were removed again. Any other lookup of a
+  name ending in digits through `FindObject` was affected the same way.
+- **Unknown:** which earlier lookups besides one-shots hit the same bug.
+- **Cleanup:** lab clones destroyed. Archives: `<archive>/refs-20261107-1943/`,
+  `<archive>/refs-20261107-1947/`, `<archive>/pawn-20261107-1950/`,
+  `<archive>/pawn-20261107-1956/`.

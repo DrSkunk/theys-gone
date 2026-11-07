@@ -46,8 +46,9 @@ COMMANDS = (
     "anim-mirror-nodes",
     "anim-mirror-pawn",
     "anim-mirror-off",
+    "asset-refs",
 )
-ARG_COMMANDS = ("mission-act", "stream-focus", "move-by", "level-probe", "spawn-actor")
+ARG_COMMANDS = ("mission-act", "stream-focus", "move-by", "level-probe", "spawn-actor", "asset-refs")
 OPTIONAL_ARG_COMMANDS = ("anim-mirror-pawn",)
 ARG_LIMIT = 240
 

@@ -618,6 +618,21 @@ void TestGear() {
     std::puts("gear ok");
 }
 
+void TestFNameNumber() {
+    // Unreal splits a trailing "_<digits>" off a name as its number plus one; the stand-ins' missing attack
+    // sequences were exactly the names ending in digits (lab, 2026-11-07).
+    auto split = ue::SplitFNameNumber("swm_atk_right_165");
+    assert(split.base == "swm_atk_right" && split.number == 166);
+    split = ue::SplitFNameNumber("Name_0");
+    assert(split.base == "Name" && split.number == 1);
+    for (const char* whole : {"swm_b_grapple_01_loop_105frames_swm", "Name_01", "Name", "_5", "165", "Name_", ""}) {
+        split = ue::SplitFNameNumber(whole);
+        assert(split.base == whole && split.number == 0);
+    }
+    split = ue::SplitFNameNumber("bike03Boozers_C");
+    assert(split.number == 0);
+}
+
 void TestEnemyHit() {
     using namespace coop;
     // Host always streams; the guest streams while it owns a region or still keeps enemies from one.
@@ -1435,6 +1450,7 @@ int main() {
     TestAdoptedReloadLimit();
     TestStoryResyncDuringMission();
     TestObjectiveProgress();
+    TestFNameNumber();
     TestEnemyHit();
     using coop::DebugCommand;
     for (auto text : {"", "God", "god", "god-on extra", "spawn", "DestroyAll", "begin\n", "spawn-pack; end"})
@@ -1493,6 +1509,7 @@ int main() {
     assert(coop::ParseDebugCommand("anim-mirror-nodes") == DebugCommand::animMirrorNodes);
     assert(coop::ParseDebugCommand("anim-mirror-pawn") == DebugCommand::animMirrorPawn);
     assert(coop::ParseDebugCommand("anim-mirror-off") == DebugCommand::animMirrorOff);
+    assert(coop::ParseDebugCommand("asset-refs") == DebugCommand::assetRefs);
     assert(coop::ParseDebugCommand("mission-act") == DebugCommand::missionAct);
     assert(coop::ParseDebugCommand("mission-act x") == DebugCommand::unknown);
     coop::DebugRequestGate gate;

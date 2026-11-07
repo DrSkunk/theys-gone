@@ -11,7 +11,7 @@ enum class DebugCommand {
     traceOn, traceOff, rideTest, reloadSave, storyProbe, storyDiverge, hitEnemy, netProbe, netListen, netConnect, netPossess, netTakeover,
     netDiag, netAuto, netNudge, netInput, netWalk, missionWatchOn, missionWatchOff, missionState, missionAct,
     streamFocus, streamProbe, moveBy, minimapProbe, lookCompanion, levelProbe, materialProbe, vehicleProbe, spawnActor, timeProbe,
-    animMirrorOn, animMirrorBare, animMirrorNodes, animMirrorPawn, animMirrorOff
+    animMirrorOn, animMirrorBare, animMirrorNodes, animMirrorPawn, animMirrorOff, assetRefs
 };
 
 inline DebugCommand ParseDebugCommand(std::string_view text) {
@@ -70,6 +70,7 @@ inline DebugCommand ParseDebugCommand(std::string_view text) {
     if (text == "anim-mirror-nodes") return DebugCommand::animMirrorNodes;
     if (text == "anim-mirror-pawn") return DebugCommand::animMirrorPawn;
     if (text == "anim-mirror-off") return DebugCommand::animMirrorOff;
+    if (text == "asset-refs") return DebugCommand::assetRefs;
     return DebugCommand::unknown;
 }
 

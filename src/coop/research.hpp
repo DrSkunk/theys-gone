@@ -153,6 +153,8 @@ enum class AnimMirrorMode {
 // brain stopped; move-tick keeps the clone's movement component ticking.
 bool AnimMirrorStart(ue::UObject* localPawn, AnimMirrorMode mode, const std::string& options, std::string& summary);
 bool AnimMirrorStop(std::string& summary);
+// asset-refs: where a named asset lives and which live objects reference it.
+bool AssetReferences(const std::string& name, std::string& summary);
 bool AnimMirroring();
 void AnimMirrorTick(); // game thread, every frame
 // Game thread, from ProcessEvent: the player's damage events and the mirror meshes' anim notifies. Returns true

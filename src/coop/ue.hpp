@@ -25,6 +25,19 @@ inline FVector AlignBoneToSocket(FVector socket, FVector componentBone, float ya
             socket.z - componentBone.z};
 }
 
+// FName's split of a trailing "_<digits>" into a number (stored as value + 1), as UE does when it makes a
+// name: "Name_165" is "Name" number 166. A leading zero ("Name_01") or no digits keeps the whole text.
+struct SplitName { std::string base; int32_t number; };
+inline SplitName SplitFNameNumber(const std::string& text) {
+    size_t digits = 0;
+    while (digits < text.size() && text[text.size() - 1 - digits] >= '0' && text[text.size() - 1 - digits] <= '9') ++digits;
+    size_t underscore = text.size() - digits - 1;
+    if (!digits || digits > 9 || digits >= text.size() || text[underscore] != '_' || underscore == 0 ||
+        (digits > 1 && text[underscore + 1] == '0'))
+        return {text, 0};
+    return {text.substr(0, underscore), static_cast<int32_t>(std::stol(text.substr(underscore + 1))) + 1};
+}
+
 struct UObject {
     void** vtable;
     int32_t flags;
@@ -51,7 +64,6 @@ constexpr int32_t RF_ClassDefaultObject = 0x10;
 constexpr int32_t RF_ArchetypeObject = 0x20;
 constexpr int32_t ItemFlagUnreachable = 1 << 28;
 constexpr int32_t ItemFlagPendingKill = 1 << 29;
-constexpr int32_t ItemFlagRootSet = 1 << 30; // verified at run time by KeepLoaded
 
 using ProcessEventFn = void (*)(UObject*, UObject*, void*);
 
@@ -70,8 +82,6 @@ bool DetectPropertyOffsetField(std::string& diag);
 int32_t ObjectCount();
 UObject* ObjectAt(int32_t i);
 bool IsLive(const UObject* obj);
-// Adds an asset to the root set so garbage collection keeps it (diagnostics in diag on the first call).
-bool KeepLoaded(UObject* obj, std::string& diag);
 // Game-thread ownership for objects held only by native plugin state, invisible to UE's collector.
 std::shared_ptr<UObject> RetainObject(UObject* obj);
 // Resolves a TWeakObjectPtr (ObjectIndex, SerialNumber) to a live object or nullptr.
@@ -87,6 +97,8 @@ bool IsA(const UObject* obj, const UObject* cls);
 bool IsDefaultOrArchetype(const UObject* obj);
 
 UObject* FindClass(const char* name);
+// The FName index of a name, split like SplitFNameNumber when the base exists; number gets the FName number.
+int32_t SplitNameNumber(const std::string& text, int32_t& number);
 UObject* FindObject(const char* name, const UObject* cls = nullptr);
 UObject* FindDefaultObject(const char* className);
 UObject* FindChild(const UObject* structObj, const char* name);

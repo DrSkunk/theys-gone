@@ -97,10 +97,12 @@ with the host's missions.
    [pack run](REPLICATION-RESEARCH.md#pawn-stand-ins-dropping-poses-and-a-pack-of-eight-2026-11-07-one-pc-two-games).
    A two-PC Steam run (desktop host, Steam Deck guest) repeated it: 8
    stand-ins, 16–17 kB/s, hits and death forwarded; 51 of 129 one-shots
-   were not loaded on the Deck
+   were missed on the Deck
    ([research log](REPLICATION-RESEARCH.md#pawn-stand-ins-over-steam-first-two-pc-run-2026-11-07-two-pcs-steam)).
-   Next: confirm asset holding closes that gap, then lift the 16-enemy cap
-   for stand-ins.
+   That gap was an object lookup that could not match names ending in
+   digits; fixed, the paired lab played 96 of 96 and 55 of 55
+   ([research log](REPLICATION-RESEARCH.md#pawn-stand-ins-the-missing-sequences-were-a-name-lookup-bug-2026-11-07-one-pc-one-and-two-games)).
+   Next: lift the 16-enemy cap for stand-ins and repeat on two PCs.
    *Start:* `FinishEnemyScan` and `SharedEnemy` in `coop.cpp`,
    `src/coop/enemy.hpp` (`kEnemyMaxStreamed`, packets), `BendCrowdGroupHorde`
    and `HordeSwarmerPawn_C` in the reflection dump.
