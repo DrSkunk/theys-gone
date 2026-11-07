@@ -3506,3 +3506,43 @@ separate-PC behavior.
 - **Cleanup:** lab clone destroyed after each run; base game copy never
   written. Archives: `<archive>/anim-mirror-20261107-1009/` through
   `<archive>/anim-mirror-20261107-1028/`.
+
+## Counter test: scripted counters against the source and the stand-in (2026-11-07, one PC, one game)
+
+- **Question:** what does a successful counter do to the attacking enemy,
+  and where does a counter against the stand-in land? Both are needed to
+  design a "guest countered attack N" message.
+- **Build:** worktree `anim-mirror-probe`, game build 19221447. New
+  `anim-mirror-pawn` options: `auto-counter` calls the player controller's
+  `TryToCounterAttack` 0.15 s after a `CanCounterMyAttack_State` window
+  opens; `counter-key` sends the `F` key with `SendInput` instead;
+  `mute-source-counter` mutes the source's counter notifies, so only the
+  stand-in's window is open; `dump-input` logs the action mappings. Every
+  ProcessEvent named `*Counter*`, `*Melee*` or `*Attack*` on the player, its
+  controller and anim instance, the source and the stand-in is logged.
+- **Setup:** stand-still scenario, `god-off`, options
+  `move-request,state,play-oneshot,heal,mute-gameplay` plus the counter
+  options; stand-in-only runs also with `no-offset,counter-for-target`.
+- **Result:** FAIL. No counter succeeded, so the question is still open.
+- **Observed:**
+  - Input mappings: `Parry` (the counter) is bound only to
+    `Gamepad_FaceButton_Top`, both in `InputSettings` and in the live
+    `BendInputMapper`; it has no keyboard key. `Melee=F`,
+    `Player_Roll=SpaceBar`.
+  - `TryToCounterAttack`: 8 calls inside open windows (2 in the source's, 6
+    in the stand-in's). All returned with `IsAttemptingCounter=0`, and no
+    counter event followed.
+  - `counter-key`: 26 `F` presses inside the source's windows. No counter
+    event, and no `*Melee*` event on the player, its controller or anim
+    instance either. Whether `SendInput` reaches the game under Proton and
+    gamescope is not established.
+  - The source anim's `AnimNotify_MeleeAttack_Start/End/ExitState` events are
+    visible in ProcessEvent.
+- **Derived:** `TryToCounterAttack` alone is not the button path; its
+  preconditions are unknown. The counter is a gamepad action, so a scripted
+  test needs gamepad input or a verified way to inject the `Parry` action.
+- **Unknown:** what a counter does to the attacker; whether keyboard `F`
+  counters at all on PC; whether `SendInput` reaches the game in the lab.
+- **Cleanup:** lab clone destroyed after each run; base game copy never
+  written. Archives: `<archive>/anim-mirror-20261107-1043/` through
+  `<archive>/anim-mirror-20261107-1106/`.

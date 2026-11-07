@@ -3388,6 +3388,18 @@ struct AnimMirror {
     bool counterForTarget = false, pretendOtherTarget = false;
     bool oneShotForPlayer = false; // the latest replayed one-shot's target is the local player
     int countersPassed = 0, countersMuted = 0;
+    // Counter test. auto-counter: when a counter window opens (a counter notify begins), the player controller's
+    // TryToCounterAttack is called after kCounterDelay, as a timed button press would. mute-source-counter mutes
+    // the source's own counter notifies, so only the clone's window is open (as on a guest). Every event named
+    // *Counter* on the player, its controller and anim instance, the source and the clone is logged.
+    bool autoCounter = false, muteSourceCounter = false;
+    // counter-key (implies auto-counter): press the Melee key (F) with SendInput instead of TryToCounterAttack.
+    bool counterKey = false;
+    double keyUpAt = 0;
+    double counterAt = 0;
+    std::string counterWindow; // whose window the pending press answers
+    int counterTries = 0, counterSuccesses = 0;
+    std::map<std::string, int> counterEvents;
     int mutedNotifies = 0;
     bool keepAi = false; // pawn mode with ai: the clone keeps its AI and is not fed (control)
     // Pawn mode with move-request (implied by intent): copy the movement component's AI move request.
@@ -3882,6 +3894,34 @@ bool AnimMirrorEvent(UObject* obj, UObject* fn, void* parms) {
         std::string call = Name(obj->cls) + "." + Name(fn);
         if (calls.size() < 48 || calls.contains(call)) ++calls[call];
     }
+    if (g_mirror.autoCounter) {
+        std::string function = Name(fn);
+        if (function.find("Counter") != std::string::npos || function.find("Melee") != std::string::npos ||
+            function.find("Attack") != std::string::npos) {
+            UObject *controller = nullptr, *playerMesh = nullptr, *playerAnim = nullptr;
+            GetProp(g_mirror.player, "Controller", controller);
+            if (GetProp(g_mirror.player, "Mesh", playerMesh) && IsLive(playerMesh)) {
+                Call anim(playerMesh, "GetAnimInstance");
+                if (anim.invoke()) playerAnim = anim.get<UObject*>("ReturnValue");
+            }
+            const char* who = obj == g_mirror.player ? "player" : obj == controller ? "controller"
+                            : obj == playerAnim ? "player anim" : obj == g_mirror.pawn ? "source"
+                            : obj == g_mirror.source ? "source anim" : obj == g_mirror.actor ? "clone"
+                            : obj == g_mirror.clone ? "clone anim" : nullptr;
+            if (who) {
+                std::string key = std::string(who) + "." + function;
+                ++g_mirror.counterEvents[key];
+                if (function == "OnCounterAttackSuccessful") ++g_mirror.counterSuccesses;
+                float sourceHealth = -1, cloneHealth = -1;
+                GetProp(g_mirror.pawn, "Health", sourceHealth);
+                GetProp(g_mirror.actor, "Health", cloneHealth);
+                Log("anim mirror counter: %s (window %s); source %s health %.1f, clone %s health %.1f", key.c_str(),
+                    g_mirror.counterWindow.empty() ? "none" : g_mirror.counterWindow.c_str(),
+                    CurrentStateName(g_mirror.sourceStates).c_str(), sourceHealth,
+                    CurrentStateName(g_mirror.cloneStates).c_str(), cloneHealth);
+            }
+        }
+    }
     std::string label;
     const char* owner = NotifyOwner(obj, fn, parms, label);
     if (!owner) return false;
@@ -3906,8 +3946,16 @@ bool AnimMirrorEvent(UObject* obj, UObject* fn, void* parms) {
         mute = !g_mirror.oneShotForPlayer;
         ++(mute ? g_mirror.countersMuted : g_mirror.countersPassed);
     }
+    if (!clone && counter && g_mirror.muteSourceCounter) mute = true;
+    static int windowBegin = FindNameIndex("Received_NotifyBegin");
+    bool opens = label == "AnimNotify_CanCounterMyAttack_State_C" && fn->name.index == windowBegin;
+    if (opens && !mute && g_mirror.autoCounter && g_mirror.counterAt == 0) {
+        constexpr double kCounterDelay = 0.15;
+        g_mirror.counterAt = Seconds() + kCounterDelay;
+        g_mirror.counterWindow = owner;
+    }
     if (mute) {
-        ++g_mirror.mutedNotifies;
+        if (clone) ++g_mirror.mutedNotifies;
         return true;
     }
     g_mirror.notifyStack.push_back({obj, fn, std::string(owner) + " " + label});
@@ -3927,7 +3975,64 @@ void AnimMirrorEventDone(UObject* obj, UObject* fn) {
 
 bool AnimMirroring() { return g_mirror.active; }
 
+// dump-input: the combat action mappings (counter, melee, dodge, attack) of the input settings and of the live
+// PlayerInput, so a lab press can use the game's real binding.
+void LogCombatInputMappings(UObject* localPawn) {
+    UObject* controller = nullptr;
+    UObject* playerInput = nullptr;
+    if (GetProp(localPawn, "Controller", controller) && IsLive(controller)) GetProp(controller, "PlayerInput", playerInput);
+    std::pair<const char*, UObject*> sources[] = {{"InputSettings", FindDefaultObject("InputSettings")},
+                                                  {"PlayerInput", playerInput}};
+    for (auto [label, owner] : sources) {
+        ObjectiveArrayView view;
+        std::string error;
+        if (!IsLive(owner) || !ReadObjectiveArray(owner, "ActionMappings", view, error)) {
+            Log("anim mirror input: %s ActionMappings unreadable (%s)", label, IsLive(owner) ? error.c_str() : "no object");
+            continue;
+        }
+        std::string text;
+        for (int i = 0; i < view.count; ++i) {
+            FName action{}, key{};
+            std::memcpy(&action, view.data + i * view.stride, sizeof action);
+            std::memcpy(&key, view.data + i * view.stride + 8, sizeof key);
+            std::string name = NameString(action.index), lower = name;
+            for (auto& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            text += (text.empty() ? "" : ", ") + name + "=" + NameString(key.index);
+            if (text.size() > 300) {
+                Log("anim mirror input: %s: %s", label, text.c_str());
+                text.clear();
+            }
+        }
+        Log("anim mirror input: %s has %d action mappings; rest: %s", label, view.count,
+            text.empty() ? "none" : text.c_str());
+    }
+    // Keyboard bindings live in Bend's own mapper; ask the live one for the combat actions. The returned arrays
+    // are engine-allocated and leaked (diagnostics only).
+    auto mapperClass = FindClass("BendInputMapper");
+    UObject* mapper = nullptr;
+    for (int32_t i = 0; mapperClass && i < ObjectCount() && !mapper; ++i) {
+        auto obj = ObjectAt(i);
+        if (IsLive(obj) && !IsDefaultOrArchetype(obj) && IsA(obj, mapperClass)) mapper = obj;
+    }
+    if (!mapper) { Log("anim mirror input: no live BendInputMapper"); return; }
+    struct RawArray { uint8_t* data; int32_t count, capacity; };
+    constexpr int kActionMappingStride = 40; // InputActionKeyMapping: ActionName@0, Key@8+24, flags@32, Primary@36
+    for (const char* action : {"Parry", "Melee", "Dodge", "Counter"}) {
+        Call find(mapper, "FindInputActionKeyAndAxisMappings");
+        if (!find.set("ActionName", FName{FindNameIndex(action), 0}).invoke()) continue;
+        auto mappings = find.get<RawArray>("OutActionMappings");
+        std::string keys;
+        for (int i = 0; mappings.data && i < mappings.count && i < 16; ++i) {
+            FName key{};
+            std::memcpy(&key, mappings.data + i * kActionMappingStride + 8, sizeof key);
+            keys += (keys.empty() ? "" : ", ") + NameString(key.index);
+        }
+        Log("anim mirror input: BendInputMapper %s -> %s", action, keys.empty() ? "none" : keys.c_str());
+    }
+}
+
 bool AnimMirrorStart(UObject* localPawn, AnimMirrorMode mode, const std::string& options, std::string& summary) {
+    if (HasOption(options, "dump-input")) LogCombatInputMappings(localPawn);
     bool keepController = HasOption(options, "keep-controller");
     bool moveTick = HasOption(options, "move-tick");
     bool copyVars = HasOption(options, "copy-vars");
@@ -3957,6 +4062,9 @@ bool AnimMirrorStart(UObject* localPawn, AnimMirrorMode mode, const std::string&
     m.muteNotifies = HasOption(options, "mute-notifies");
     m.muteGameplay = HasOption(options, "mute-gameplay");
     m.counterForTarget = HasOption(options, "counter-for-target");
+    m.counterKey = HasOption(options, "counter-key");
+    m.autoCounter = HasOption(options, "auto-counter") || m.counterKey;
+    m.muteSourceCounter = HasOption(options, "mute-source-counter");
     m.pretendOtherTarget = HasOption(options, "pretend-other-target");
     if (HasOption(options, "no-offset")) m.offset = 0;
     GetProp(localPawn, "Health", m.playerHealth);
@@ -4137,6 +4245,9 @@ bool AnimMirrorStop(std::string& summary) {
             g_mirror.countersMuted);
         Log("anim mirror: source notifies: %s", list(g_mirror.sourceNotifies).c_str());
         Log("anim mirror: clone notifies: %s", list(g_mirror.cloneNotifies).c_str());
+        if (g_mirror.autoCounter)
+            Log("anim mirror: %d counter presses, %d successes; counter events: %s", g_mirror.counterTries,
+                g_mirror.counterSuccesses, list(g_mirror.counterEvents).c_str());
         for (const auto& [notify, calls] : g_mirror.notifyCalls)
             Log("anim mirror: %s calls: %s", notify.c_str(), list(calls).c_str());
     }
@@ -4179,6 +4290,41 @@ void AnimMirrorTick() {
         if (!g_mirror.intent.empty()) CopyFields(g_mirror.intent);
         if (g_mirror.forwardState && IsLive(g_mirror.sourceStates) && IsLive(g_mirror.cloneStates)) ForwardState();
         if (g_mirror.playOneShot) FollowOneShots();
+        if (g_mirror.counterAt > 0 && Seconds() >= g_mirror.counterAt) {
+            g_mirror.counterAt = 0;
+            UObject* controller = nullptr;
+            bool attempting = false, called = false;
+            if (g_mirror.counterKey) {
+                INPUT press{};
+                press.type = INPUT_KEYBOARD;
+                press.ki.wVk = 'F';
+                press.ki.wScan = static_cast<WORD>(MapVirtualKeyW('F', MAPVK_VK_TO_VSC));
+                called = SendInput(1, &press, sizeof press) == 1;
+                g_mirror.keyUpAt = Seconds() + 0.1;
+            } else {
+                called = GetProp(g_mirror.player, "Controller", controller) && IsLive(controller) &&
+                         Call(controller, "TryToCounterAttack").invoke();
+            }
+            if (called) GetBoolProp(controller, "IsAttemptingCounter", attempting);
+            ++g_mirror.counterTries;
+            Log("anim mirror counter: %s in the %s window: %s, IsAttemptingCounter=%d",
+                g_mirror.counterKey ? "F key down" : "TryToCounterAttack", g_mirror.counterWindow.c_str(),
+                called ? "called" : "failed", attempting);
+        }
+        if (g_mirror.keyUpAt > 0 && Seconds() >= g_mirror.keyUpAt) {
+            g_mirror.keyUpAt = 0;
+            INPUT release{};
+            release.type = INPUT_KEYBOARD;
+            release.ki.wVk = 'F';
+            release.ki.wScan = static_cast<WORD>(MapVirtualKeyW('F', MAPVK_VK_TO_VSC));
+            release.ki.dwFlags = KEYEVENTF_KEYUP;
+            SendInput(1, &release, sizeof release);
+            UObject* controller = nullptr;
+            bool attempting = false;
+            if (GetProp(g_mirror.player, "Controller", controller) && IsLive(controller))
+                GetBoolProp(controller, "IsAttemptingCounter", attempting);
+            Log("anim mirror counter: F key up; IsAttemptingCounter=%d", attempting);
+        }
         ++g_mirror.copies;
     } else {
         PlaceMirror();
