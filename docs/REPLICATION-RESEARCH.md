@@ -3546,3 +3546,100 @@ separate-PC behavior.
 - **Cleanup:** lab clone destroyed after each run; base game copy never
   written. Archives: `<archive>/anim-mirror-20261107-1043/` through
   `<archive>/anim-mirror-20261107-1106/`.
+
+## Counter test: keyboard and mouse input against the source and the stand-in (2026-11-07, one PC, one game)
+
+- **Question:** is there a keyboard or mouse counter, and does lab input
+  reach the game? This follows the failed scripted counters above.
+- **Build:** worktree `anim-mirror-probe`, game build 19221447. New
+  `anim-mirror-pawn` options: `watch-counter` logs the counter and melee
+  events and counts every notify on the player's anim without pressing
+  anything; `counter-click` clicks the left mouse button with `SendInput`
+  0.15 s after a counter window opens. The lab run script can hold a key
+  (or click) through xdotool every 0.6 s during the stand phase.
+- **Setup:** stand-still scenario, `god-off`, options
+  `move-request,state,play-oneshot,heal,mute-gameplay` plus the options
+  below; the stand-in-only run also used
+  `mute-source-counter,no-offset,counter-for-target`.
+- **Result:** FAIL for the counter: no `OnCounterAttackSuccessful` and no
+  `AnimNotify_StartedCounter` in any run. PASS for lab input: xdotool and
+  `SendInput` both reach the game.
+- **Observed:**
+  - xdotool `F`, 104 holds over 2 runs: no swing or other player anim notify
+    besides damage, grapple and movement. A screenshot pair shows the HUD's
+    `F` quick slot changing after one hold, so `F` reached the game; on
+    keyboard it appears to select the melee weapon rather than swing.
+    `space` (52 holds) showed no roll notify.
+  - Full `InputSettings` dump: `WeaponFire=LeftMouseButton`; `Parry` stays
+    gamepad-only and no action names `Counter` or `Dodge`.
+  - xdotool left click, 54 clicks: 11 `AnimNotify_MeleeSwingHit_*` swings
+    on the player's anim.
+  - `counter-click` against the source, 2 runs, 22 clicks: each click
+    swung (`OnCanDoCoolMeleeAttackEnded`) and the source lost 15 health per
+    hit, down to its death (`AnimNotify_MeleedDeathBlow`) in both runs.
+    `AnimNotify_FinishCounter` fired on the player's anim at the press 4
+    times, never with a `StartedCounter` before it.
+  - `counter-click` in the stand-in's window only (no offset), 2 clicks:
+    the swing hit the source (156.2 to 141.2) while the stand-in stayed at
+    200. The run ended in a grapple kill.
+- **Derived:** keyboard and mouse play has no counter binding here; the left
+  click is an ordinary melee swing, which also interrupts the attack. The
+  counter needs the gamepad `Parry` button. The earlier `SendInput F`
+  failure was the wrong key, not lost input.
+- **Unknown:** what a gamepad counter does to the attacker; whether a
+  click against an offset stand-in damages it (no clicks landed on it);
+  what `FinishCounter` without a start means.
+- **Cleanup:** lab clone destroyed after each run; base game copy never
+  written. Archives: `<archive>/anim-mirror-20261107-1504/`,
+  `-1510/`, `-1514/`, `-1520/`, `-1524/` and
+  `<archive>/input-check-20261107-1517/`.
+
+## Pawn mirror: hit reactions, death and looping one-shots (2026-11-07, one PC, one game)
+
+- **Question:** how does an enemy take hits and die, what can kill the
+  stand-in on a guest, and do looping one-shots need replaying?
+- **Build:** worktree `anim-mirror-probe`, game build 19221447. New
+  `anim-mirror-pawn` options: `watch-death` logs damage and death events on
+  the source and the stand-in; `kill-clone` kills the stand-in 12 s in
+  (`GameplayStatics.ApplyDamage` of its health + 10, then
+  `BendPawn.ForceKill(null, false)` if it is still alive); `loop-oneshot`
+  replays a one-shot whose montage ended while the source still plays it.
+- **Setup:** stand-still scenario, `god-off`, options
+  `move-request,state,play-oneshot,heal,mute-gameplay`; the death trace also
+  used `counter-click` so the player beat the source to death.
+- **Result:** PASS for the death path: `ForceKill` kills the stand-in
+  natively. Looping and hit reactions: partial (below).
+- **Observed:**
+  - A player hit on the source arrives as `ModifyDamage`,
+    `ReceivePointDamage` and `ReceiveAnyDamage` (15.0 by the player
+    controller, causer `Bend_WpnMelee_BootKnife_v2_C_0`), then the source
+    enters `Damage` (15); all 20 forwarded `Damage` states in 2 runs were
+    accepted on the stand-in. The swarmer's hit animations are
+    blend spaces (`Swarmer_Damage_Head_Light`), so they are not replayed as
+    montages.
+  - When the source died (`OnDied_Event`, `HandleOnDied`), the stand-in got
+    `ReceiveAnyDamage 210.0` with no instigator or causer 0.22 s later and
+    died too (health −10, `OnDied_Event`, `Dead_Entered`, ragdoll). The
+    same happened in both earlier runs where the source died.
+  - `kill-clone`: `ApplyDamage(210)` returned 0.0 and took the stand-in
+    only from 200 to 179 (`bCanBeDamaged=1`); `ForceKill` then took it to
+    −10, and `AnimNotify_Dead_Entered` followed.
+  - `loop-oneshot`, 2 runs: no replay was needed. The grapple loop
+    `swm_b_grapple_01_loop_105frames_swm` was seen as a new one-shot each
+    time it restarted, and one-shot samples matched 36 of 36 and 7 of 7; a
+    baseline run matched 37 of 38. The earlier fall-back to idle did not
+    recur.
+  - Grapple kills of the player ended 3 of 4 runs early (3.6–23 s).
+- **Derived:** an "enemy died" event on the guest can call `ForceKill` on
+  the stand-in, which runs the game's own death (−10 health, matching the
+  native kill). Damage applied with `ApplyDamage` is scaled by the game, so
+  it cannot carry an exact health value. Hit reactions follow from the
+  forwarded `Damage` state. What killed the stand-in when its source died is
+  not traced; it is probably tied to the cloned source and would not happen
+  on a real guest.
+- **Unknown:** whether the stand-in's hit-reaction blend space matches the
+  source's hit direction; the visual death on a guest (in the manual list);
+  whether a longer grapple loop still falls back to idle; other enemy types.
+- **Cleanup:** lab clone destroyed after each run; base game copy never
+  written. Archives: `<archive>/anim-mirror-20261107-1533/`, `-1538/` and
+  `-1545/`.

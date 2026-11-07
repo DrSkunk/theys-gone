@@ -3395,6 +3395,18 @@ struct AnimMirror {
     bool autoCounter = false, muteSourceCounter = false;
     // counter-key (implies auto-counter): press the Melee key (F) with SendInput instead of TryToCounterAttack.
     bool counterKey = false;
+    // counter-click (implies auto-counter): click the left mouse button (WeaponFire, the keyboard melee swing).
+    bool counterClick = false;
+    // watch-death: log damage and death events on the source and the clone (first 3 of each).
+    bool watchDeath = false;
+    // loop-oneshot: replay a one-shot whose montage ended while the source still plays that sequence.
+    bool loopOneShots = false;
+    int loopReplays = 0;
+    // kill-clone: 12 s in, kill the clone with damage of its health + 10, as the game killed it when its source died.
+    double killCloneAt = 0;
+    std::map<std::string, int> deathEvents;
+    // watch-counter: log the counter and melee events without pressing anything (for input sent from outside).
+    bool watchCounter = false;
     double keyUpAt = 0;
     double counterAt = 0;
     std::string counterWindow; // whose window the pending press answers
@@ -3746,9 +3758,18 @@ void FollowOneShots() {
         return;
     }
     auto asset = DominantAsset(g_mirror.source);
-    if (!asset || asset == g_mirror.lastOneShot || !g_mirror.slot.index) return;
-    g_mirror.lastOneShot = asset;
-    ++g_mirror.oneShots;
+    if (!asset || !g_mirror.slot.index) return;
+    if (asset == g_mirror.lastOneShot) {
+        // A looping sequence (a grapple loop) keeps playing on the source after the clone's one-pass montage
+        // ends; replay it, as a looping montage section would keep going.
+        if (!g_mirror.loopOneShots || !IsLive(g_mirror.lastMontage)) return;
+        Call playing(g_mirror.clone, "Montage_IsPlaying");
+        if (!playing.set("Montage", g_mirror.lastMontage).invoke() || playing.get<bool>("ReturnValue")) return;
+        if (++g_mirror.loopReplays <= 6) Log("anim mirror one-shot: %s still playing on the source, replayed", Name(asset).c_str());
+    } else {
+        g_mirror.lastOneShot = asset;
+        ++g_mirror.oneShots;
+    }
     // Blend spaces cannot play in a slot; only sequences are replayed.
     if (Name(asset->cls) != "AnimSequence") {
         Log("anim mirror one-shot: %s is a %s, not replayed", Name(asset).c_str(), Name(asset->cls).c_str());
@@ -3894,10 +3915,41 @@ bool AnimMirrorEvent(UObject* obj, UObject* fn, void* parms) {
         std::string call = Name(obj->cls) + "." + Name(fn);
         if (calls.size() < 48 || calls.contains(call)) ++calls[call];
     }
-    if (g_mirror.autoCounter) {
+    // watch-death: how each pawn takes damage and dies, to find what a guest-side death event should call.
+    if (g_mirror.watchDeath && (obj == g_mirror.pawn || obj == g_mirror.actor)) {
         std::string function = Name(fn);
-        if (function.find("Counter") != std::string::npos || function.find("Melee") != std::string::npos ||
-            function.find("Attack") != std::string::npos) {
+        for (const char* word : {"Death", "Dead", "Die", "Kill", "Damage", "Ragdoll", "Hit"}) {
+            if (function.find(word) == std::string::npos) continue;
+            float sourceHealth = -1, cloneHealth = -1;
+            GetProp(g_mirror.pawn, "Health", sourceHealth);
+            GetProp(g_mirror.actor, "Health", cloneHealth);
+            std::string detail;
+            if (function == "ReceiveAnyDamage") {
+                float damage = 0;
+                UObject *instigatedBy = nullptr, *causer = nullptr;
+                ReadEventParam(fn, parms, "Damage", damage);
+                ReadEventParam(fn, parms, "InstigatedBy", instigatedBy);
+                ReadEventParam(fn, parms, "DamageCauser", causer);
+                char text[200];
+                std::snprintf(text, sizeof text, " %.1f by %s (causer %s)", damage,
+                              IsLive(instigatedBy) ? Name(instigatedBy).c_str() : "none",
+                              IsLive(causer) ? Name(causer).c_str() : "none");
+                detail = text;
+            }
+            if (++g_mirror.deathEvents[std::string(obj == g_mirror.pawn ? "source." : "clone.") + function] <= 3)
+                Log("anim mirror death: %s.%s%s; source health %.1f, clone health %.1f",
+                    obj == g_mirror.pawn ? "source" : "clone", function.c_str(), detail.c_str(), sourceHealth,
+                    cloneHealth);
+            break;
+        }
+    }
+    if (g_mirror.autoCounter || g_mirror.watchCounter) {
+        std::string function = Name(fn);
+        bool named = function.find("Counter") != std::string::npos || function.find("Melee") != std::string::npos ||
+                     function.find("Attack") != std::string::npos;
+        // Any notify on the player's anim shows the player acting (a swing, a dodge), whatever it is called.
+        bool notify = !named && g_mirror.watchCounter && function.rfind("AnimNotify_", 0) == 0;
+        if (named || notify) {
             UObject *controller = nullptr, *playerMesh = nullptr, *playerAnim = nullptr;
             GetProp(g_mirror.player, "Controller", controller);
             if (GetProp(g_mirror.player, "Mesh", playerMesh) && IsLive(playerMesh)) {
@@ -3908,7 +3960,11 @@ bool AnimMirrorEvent(UObject* obj, UObject* fn, void* parms) {
                             : obj == playerAnim ? "player anim" : obj == g_mirror.pawn ? "source"
                             : obj == g_mirror.source ? "source anim" : obj == g_mirror.actor ? "clone"
                             : obj == g_mirror.clone ? "clone anim" : nullptr;
-            if (who) {
+            if (notify && obj != playerAnim) who = nullptr;
+            if (who && notify) {
+                if (++g_mirror.counterEvents[std::string(who) + "." + function] == 1)
+                    Log("anim mirror counter: first %s.%s", who, function.c_str());
+            } else if (who) {
                 std::string key = std::string(who) + "." + function;
                 ++g_mirror.counterEvents[key];
                 if (function == "OnCounterAttackSuccessful") ++g_mirror.counterSuccesses;
@@ -4063,8 +4119,13 @@ bool AnimMirrorStart(UObject* localPawn, AnimMirrorMode mode, const std::string&
     m.muteGameplay = HasOption(options, "mute-gameplay");
     m.counterForTarget = HasOption(options, "counter-for-target");
     m.counterKey = HasOption(options, "counter-key");
-    m.autoCounter = HasOption(options, "auto-counter") || m.counterKey;
+    m.counterClick = HasOption(options, "counter-click");
+    m.watchDeath = HasOption(options, "watch-death") || HasOption(options, "kill-clone");
+    m.loopOneShots = HasOption(options, "loop-oneshot");
+    if (HasOption(options, "kill-clone")) m.killCloneAt = Seconds() + 12.0;
+    m.autoCounter = HasOption(options, "auto-counter") || m.counterKey || m.counterClick;
     m.muteSourceCounter = HasOption(options, "mute-source-counter");
+    m.watchCounter = HasOption(options, "watch-counter");
     m.pretendOtherTarget = HasOption(options, "pretend-other-target");
     if (HasOption(options, "no-offset")) m.offset = 0;
     GetProp(localPawn, "Health", m.playerHealth);
@@ -4245,7 +4306,8 @@ bool AnimMirrorStop(std::string& summary) {
             g_mirror.countersMuted);
         Log("anim mirror: source notifies: %s", list(g_mirror.sourceNotifies).c_str());
         Log("anim mirror: clone notifies: %s", list(g_mirror.cloneNotifies).c_str());
-        if (g_mirror.autoCounter)
+        if (g_mirror.watchDeath) Log("anim mirror: death events: %s", list(g_mirror.deathEvents).c_str());
+        if (g_mirror.autoCounter || g_mirror.watchCounter)
             Log("anim mirror: %d counter presses, %d successes; counter events: %s", g_mirror.counterTries,
                 g_mirror.counterSuccesses, list(g_mirror.counterEvents).c_str());
         for (const auto& [notify, calls] : g_mirror.notifyCalls)
@@ -4263,6 +4325,21 @@ bool AnimMirrorStop(std::string& summary) {
     }
     g_mirror = {};
     return true;
+}
+
+// The scripted counter press: the F key (counter-key) or the left mouse button (counter-click).
+bool SendCounterInput(bool down) {
+    INPUT input{};
+    if (g_mirror.counterClick) {
+        input.type = INPUT_MOUSE;
+        input.mi.dwFlags = down ? MOUSEEVENTF_LEFTDOWN : MOUSEEVENTF_LEFTUP;
+    } else {
+        input.type = INPUT_KEYBOARD;
+        input.ki.wVk = 'F';
+        input.ki.wScan = static_cast<WORD>(MapVirtualKeyW('F', MAPVK_VK_TO_VSC));
+        if (!down) input.ki.dwFlags = KEYEVENTF_KEYUP;
+    }
+    return SendInput(1, &input, sizeof input) == 1;
 }
 
 void AnimMirrorTick() {
@@ -4290,16 +4367,35 @@ void AnimMirrorTick() {
         if (!g_mirror.intent.empty()) CopyFields(g_mirror.intent);
         if (g_mirror.forwardState && IsLive(g_mirror.sourceStates) && IsLive(g_mirror.cloneStates)) ForwardState();
         if (g_mirror.playOneShot) FollowOneShots();
+        if (g_mirror.killCloneAt > 0 && Seconds() >= g_mirror.killCloneAt) {
+            g_mirror.killCloneAt = 0;
+            float health = 0, sourceHealth = 0;
+            GetProp(g_mirror.actor, "Health", health);
+            GetProp(g_mirror.pawn, "Health", sourceHealth);
+            Call apply(FindDefaultObject("GameplayStatics"), "ApplyDamage");
+            apply.set("DamagedActor", g_mirror.actor).set("BaseDamage", health + 10.f)
+                .set("EventInstigator", static_cast<UObject*>(nullptr)).set("DamageCauser", static_cast<UObject*>(nullptr));
+            bool ok = apply.invoke(), damageable = false;
+            GetBoolProp(g_mirror.actor, "bCanBeDamaged", damageable);
+            float after = health;
+            GetProp(g_mirror.actor, "Health", after);
+            Log("anim mirror death: kill-clone ApplyDamage(%.1f) %s -> %.1f, clone health %.1f, bCanBeDamaged=%d; "
+                "source health %.1f", health + 10.f, ok ? "called" : "failed", ok ? apply.get<float>("ReturnValue") : 0.f,
+                after, damageable, sourceHealth);
+            // ApplyDamage is refused on the clone; BendPawn.ForceKill is the native kill.
+            if (after > 0) {
+                Call kill(g_mirror.actor, "ForceKill");
+                ok = kill.set("Killer", static_cast<UObject*>(nullptr)).setBool("forceRagdoll", false).invoke();
+                GetProp(g_mirror.actor, "Health", after);
+                Log("anim mirror death: kill-clone ForceKill %s, clone health %.1f", ok ? "called" : "failed", after);
+            }
+        }
         if (g_mirror.counterAt > 0 && Seconds() >= g_mirror.counterAt) {
             g_mirror.counterAt = 0;
             UObject* controller = nullptr;
             bool attempting = false, called = false;
-            if (g_mirror.counterKey) {
-                INPUT press{};
-                press.type = INPUT_KEYBOARD;
-                press.ki.wVk = 'F';
-                press.ki.wScan = static_cast<WORD>(MapVirtualKeyW('F', MAPVK_VK_TO_VSC));
-                called = SendInput(1, &press, sizeof press) == 1;
+            if (g_mirror.counterKey || g_mirror.counterClick) {
+                called = SendCounterInput(true);
                 g_mirror.keyUpAt = Seconds() + 0.1;
             } else {
                 called = GetProp(g_mirror.player, "Controller", controller) && IsLive(controller) &&
@@ -4308,22 +4404,19 @@ void AnimMirrorTick() {
             if (called) GetBoolProp(controller, "IsAttemptingCounter", attempting);
             ++g_mirror.counterTries;
             Log("anim mirror counter: %s in the %s window: %s, IsAttemptingCounter=%d",
-                g_mirror.counterKey ? "F key down" : "TryToCounterAttack", g_mirror.counterWindow.c_str(),
+                g_mirror.counterClick ? "left button down" : g_mirror.counterKey ? "F key down" : "TryToCounterAttack",
+                g_mirror.counterWindow.c_str(),
                 called ? "called" : "failed", attempting);
         }
         if (g_mirror.keyUpAt > 0 && Seconds() >= g_mirror.keyUpAt) {
             g_mirror.keyUpAt = 0;
-            INPUT release{};
-            release.type = INPUT_KEYBOARD;
-            release.ki.wVk = 'F';
-            release.ki.wScan = static_cast<WORD>(MapVirtualKeyW('F', MAPVK_VK_TO_VSC));
-            release.ki.dwFlags = KEYEVENTF_KEYUP;
-            SendInput(1, &release, sizeof release);
+            SendCounterInput(false);
             UObject* controller = nullptr;
             bool attempting = false;
             if (GetProp(g_mirror.player, "Controller", controller) && IsLive(controller))
                 GetBoolProp(controller, "IsAttemptingCounter", attempting);
-            Log("anim mirror counter: F key up; IsAttemptingCounter=%d", attempting);
+            Log("anim mirror counter: %s up; IsAttemptingCounter=%d", g_mirror.counterClick ? "left button" : "F key",
+                attempting);
         }
         ++g_mirror.copies;
     } else {

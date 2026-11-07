@@ -157,8 +157,18 @@ with the host's missions.
     visible in ProcessEvent) and `BendPawn.CanCounterAttack_Ended(pAttacker)`
     to name the attacker on the guest. On the host, how to make the real
     enemy take the counter (`AttackersCounterWindow*_AnimNotify`,
-    `ResetFinishedCounterAttack`) is unknown.
-    *Start:* looping one-shots, hit reactions and death. *Done when:* a lab run
+    `ResetFinishedCounterAttack`) is unknown. Scripted counters failed: the
+    counter is the gamepad-only `Parry` action, `TryToCounterAttack` alone
+    does nothing, and a left click is a plain melee hit (15 health per hit
+    on a swarmer). A controller check is in the manual list below
+    ([research log](REPLICATION-RESEARCH.md#counter-test-keyboard-and-mouse-input-against-the-source-and-the-stand-in-2026-11-07-one-pc-one-game)).
+    Hits forward as the `Damage` state (accepted every time), and
+    `BendPawn.ForceKill` kills the stand-in with the game's own death, so
+    an "enemy died" event can call it on a guest. Grapple loops matched
+    without replaying
+    ([research log](REPLICATION-RESEARCH.md#pawn-mirror-hit-reactions-death-and-looping-one-shots-2026-11-07-one-pc-one-game)).
+    *Start:* a second enemy type (a human or a Ripper) and the hit-reaction
+    direction. *Done when:* a lab run
     shows the pawn clone in the source's action (idle, move, attack, grapple,
     hit, death) for most samples and the stand-in never damages the player,
     before any wire format is designed.
@@ -172,6 +182,50 @@ with the host's missions.
     different branch. Test the unverified Broken Road modes and saves or assets
     shared between owners and non-owners. Replicas requiring assets missing on
     a peer are skipped.
+
+### Manual checks
+
+The lab sends keyboard input to one PC and scores runs by reading logs, so
+these checks need a person, a controller or a second PC. Use an isolated lab
+copy or two-PC setup, never a real install or save. Record each result in the
+research log and remove it here once it is covered.
+
+Combat and the pawn mirror (item 10):
+
+- **Counter a swarmer with a controller.** Press Parry (Y / Triangle) in the
+  counter window while `anim-mirror-pawn` logs, with and without
+  `mute-source-counter`. Note what happens to the attacker (stagger,
+  knockdown, damage, kill) and whether `OnCounterAttackSuccessful` fires.
+  The lab showed keyboard and mouse have no counter: the left click is a
+  plain melee swing.
+- **Counter prompt on the guest.** On a guest screen, does the stand-in's
+  `CounterIcon` draw a prompt, and only for attacks aimed at the guest?
+- **Stand-in look.** Watch a stand-in attack, grapple and move beside its
+  source: foot sliding, snapping between states, wrong facing or offset.
+- **Enemy death on the guest.** Does a killed enemy fall and lie as a corpse
+  on the guest, or freeze or vanish?
+- **Ranged attacks on the guest.** Shots from human enemies at the guest:
+  do they hit and do they hurt?
+
+Menus and settings:
+
+- **Gamepad navigation** of the CO-OP lobby and PLAYER SETTINGS pages, and the
+  View+X shortcut.
+- **Title-menu PLAYER SETTINGS**, the guest-side page, F9, and the "sandbox
+  stays active" notice on leaving.
+- **Menu timing on separate PCs** with a controller, a wheel open during
+  join or disconnect, photo mode and cinematic pauses (item 11).
+
+Sessions, saves and travel (two PCs):
+
+- **Steam transport** with host-save transfer and the newer gameplay paths;
+  Internet/NAT play; a native Windows host or guest.
+- **Guest sleep while connected**, which did not complete in the lab.
+- **Fast travel**: the guest landed 446–466 m behind; check regrouping and
+  the clock on two PCs.
+- **Joining mid-mission** and a longer stretch of campaign progress.
+- **Broken Road modes** and DLC assets shared between owners and non-owners
+  (item 12).
 
 ### Later: separated play
 
