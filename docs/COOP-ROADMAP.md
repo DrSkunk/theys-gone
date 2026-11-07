@@ -75,8 +75,11 @@ with the host's missions.
    acceptable: a seamless session must show whole swarms and hordes. In the
    2026-11-06 two-PC run the host streamed no enemies while a swarm attacked
    the guest's stand-in, and the guest took that damage from enemies it could
-   not see. Find why the scan selected nothing (suspect: crowd-driven horde
-   swarmers without their own controller, skipped as pooled pawns). Then
+   not see. The scan skipped every pawn without an AI controller as pooled,
+   which also drops horde members promoted to full pawns (they are driven by
+   a `BendCrowdController` actor); pools are now recognised by their hidden
+   and pool flags instead, but no natural swarm has been tested yet
+   ([research log](REPLICATION-RESEARCH.md#enemy-scan-pools-hordes-and-the-2026-11-06-gap-2026-11-07-one-pc-one-and-two-games)). Then
    replace full-skeleton streaming for most enemies with native puppets: the
    guest spawns the same class with its AI stopped and drives its position,
    speed and facing from a compact state record (about 16–20 bytes), so the

@@ -47,6 +47,7 @@ COMMANDS = (
     "anim-mirror-pawn",
     "anim-mirror-off",
     "asset-refs",
+    "crowd-probe",
 )
 ARG_COMMANDS = ("mission-act", "stream-focus", "move-by", "level-probe", "spawn-actor", "asset-refs")
 OPTIONAL_ARG_COMMANDS = ("anim-mirror-pawn",)

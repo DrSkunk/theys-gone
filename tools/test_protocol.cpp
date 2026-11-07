@@ -1516,6 +1516,7 @@ int main() {
     assert(coop::ParseDebugCommand("anim-mirror-pawn") == DebugCommand::animMirrorPawn);
     assert(coop::ParseDebugCommand("anim-mirror-off") == DebugCommand::animMirrorOff);
     assert(coop::ParseDebugCommand("asset-refs") == DebugCommand::assetRefs);
+    assert(coop::ParseDebugCommand("crowd-probe") == DebugCommand::crowdProbe);
     assert(coop::ParseDebugCommand("mission-act") == DebugCommand::missionAct);
     assert(coop::ParseDebugCommand("mission-act x") == DebugCommand::unknown);
     coop::DebugRequestGate gate;

@@ -45,6 +45,7 @@
 #include <cstring>
 #include <deque>
 #include <string>
+#include <map>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -320,6 +321,7 @@ void ReceiveDamage(const StatePacket& packet);
 void ReceiveEnemyHit(const char* data, int len, double now);
 void ReceivePartnerStrike(const char* data, int len);
 bool IsPartnerProxy(UObject* pawn);
+bool CrowdProbe();
 bool ClassIsA(UObject* cls, UObject* base);
 void QueueEnemyHit(bool melee, UObject* weapon);
 bool HasEnemyReplicas();
@@ -2454,6 +2456,7 @@ void UpdateDebugTools(double now) {
     }
     else if (command == DebugCommand::streamProbe) success = ProbePartnerStreaming();
     else if (command == DebugCommand::timeProbe) success = ProbeMenuTime();
+    else if (command == DebugCommand::crowdProbe) success = CrowdProbe();
     else if (command == DebugCommand::assetRefs) {
         wchar_t arg[128]{};
         GetPrivateProfileStringW(L"Debug", L"Arg", L"", arg, 128, path.c_str());
@@ -3660,11 +3663,28 @@ void UpdateGear(UObject* localPawn, double now) {
 bool SharedEnemy(UObject* ai, UObject* player) {
     static UObject* freaker = FindClass("BendFreakerController");
     static UObject* animal = FindClass("BendAnimalController");
+    static UObject* freakerPawn = FindClass("BendFreakerPawn");
     auto controller = Prop(ai, "Controller");
-    if (!IsLive(controller)) return false;
+    // Horde members promoted to full pawns (HordeSwarmerPawn_C) are driven by a BendCrowdController actor and
+    // have no AI controller; freakers are hostile to both players.
+    if (!IsLive(controller)) return freakerPawn && IsA(ai, freakerPawn);
     if ((freaker && IsA(controller, freaker)) || (animal && IsA(controller, animal))) return true;
     Call enemy(controller, "IsEnemy");
     return enemy.set("BendPawn", player).invoke() && enemy.get<bool>("ReturnValue");
+}
+
+// A pawn waiting in one of the game's pools rather than in the world. The lab (2026-11-07) found pools parked
+// in a row about 170 m below the player: AI pawns with their controller, and hidden HordeSwarmerPawn_C without
+// one. A visible freaker pawn without a controller is a horde member in play.
+bool ParkedPawn(UObject* ai) {
+    static UObject* freakerPawn = FindClass("BendFreakerPawn");
+    bool hidden = false;
+    if (GetBoolProp(ai, "bHidden", hidden) && hidden) return true;
+    auto controller = Prop(ai, "Controller");
+    if (!IsLive(controller)) return !(freakerPawn && IsA(ai, freakerPawn));
+    bool pooled = false, inUse = false;
+    return GetBoolProp(controller, "bPooledSpawn", pooled) && pooled && GetBoolProp(controller, "bPooledSpawnInUse", inUse) &&
+        !inUse;
 }
 
 // Story companions (Boozer, Rikki, Sarah...) exist only in the host's running mission, so the host streams
@@ -4006,10 +4026,9 @@ void FinishEnemyScan(UObject* pawn) {
         bool kept = g_kept.count(o) != 0;
         if (keptOnly && !kept) continue;
         if (!IsLive(o) || !IsLive(Prop(Prop(o, "Mesh"), "SkeletalMesh"))) continue;
-        // Pooled pawns parked near the world origin are alive but have no controller.
         Call alive(o, "IsAlive");
         bool living = alive.invoke() && alive.get<bool>("ReturnValue");
-        if (living && !IsLive(Prop(o, "Controller"))) continue;
+        if (living && ParkedPawn(o)) continue;
         bool companion = living && IsHost() && CompanionAi(o);
         if (g_cfg.debugTools && living && !companion) {
             static std::unordered_set<UObject*> seenClasses;
@@ -4065,6 +4084,90 @@ void FinishEnemyScan(UObject* pawn) {
     if (next.size() != g_enemySources.size())
         Log("enemies: streaming %d local AI pawns", static_cast<int>(next.size()));
     g_enemySources = std::move(next);
+}
+
+// Debug (crowd-probe): what a natural swarm or horde is made of, and why the enemy scan takes or rejects each
+// AI pawn. Bend draws crowd members as crowd actors and shared-animation meshes, and promotes some of them to
+// full pawns driven by a BendCrowdController (an Actor, not an AI controller).
+bool CrowdProbe() {
+    if (!IsLive(g_pawn)) return DebugError("crowd-probe needs a gameplay pawn");
+    Call self(g_pawn, "K2_GetActorLocation");
+    if (!self.invoke()) return DebugError("crowd-probe: no player location");
+    FVector me = self.get<FVector>("ReturnValue");
+    auto actorClass = FindClass("Actor");
+    auto aiClass = FindClass("BendAIPawn");
+    struct Tally { int count = 0, nearby = 0; float nearest = 1e9f; };
+    std::map<std::string, Tally> crowd;
+    std::map<std::string, int> reasons;
+    std::vector<std::string> samples;
+    auto distanceTo = [&](UObject* actor) {
+        Call where(actor, "K2_GetActorLocation");
+        if (!where.invoke()) return 1e9f;
+        auto p = where.get<FVector>("ReturnValue");
+        float dx = p.x - me.x, dy = p.y - me.y, dz = p.z - me.z;
+        return std::sqrt(dx * dx + dy * dy + dz * dz) / 100.f;
+    };
+    for (int32_t i = 0; i < ObjectCount(); ++i) {
+        auto o = ObjectAt(i);
+        if (!o || !IsLive(o) || !IsLive(o->cls) || IsDefaultOrArchetype(o)) continue;
+        auto cls = Name(o->cls);
+        bool isActor = actorClass && IsA(o, actorClass);
+        if (cls.find("Crowd") != std::string::npos) {
+            auto& t = crowd[cls];
+            ++t.count;
+            UObject* owner = isActor ? o : (IsLive(o->outer) && actorClass && IsA(o->outer, actorClass) ? o->outer : nullptr);
+            if (owner) {
+                float d = distanceTo(owner);
+                t.nearest = std::min(t.nearest, d);
+                if (d < 80) ++t.nearby;
+            }
+        }
+        // Where hordes and their full pawns are, as move-by offsets (east, north metres).
+        bool hordePawn = cls == "HordeSwarmerPawn_C";
+        if ((cls == "BendCrowdController" || hordePawn) && samples.size() < 40) {
+            Call where(o, "K2_GetActorLocation");
+            if (where.invoke()) {
+                auto p = where.get<FVector>("ReturnValue");
+                bool hidden = false;
+                GetBoolProp(o, "bHidden", hidden);
+                float health = -1;
+                if (hordePawn) GetProp(o, "Health", health);
+                char line[220];
+                std::snprintf(line, sizeof line, "%s %s offset %.0f %.0f (z %.0f), %.0f m, hidden %d, health %.0f",
+                              cls.c_str(), Name(o).c_str(), (p.x - me.x) / 100, (p.y - me.y) / 100, (p.z - me.z) / 100,
+                              distanceTo(o), hidden, health);
+                samples.push_back(line);
+            }
+        }
+        if (!aiClass || !IsA(o, aiClass) || IsPartnerProxy(o)) continue;
+        // The scan's rules, in FinishEnemyScan's order.
+        auto controller = Prop(o, "Controller");
+        Call alive(o, "IsAlive");
+        bool living = alive.invoke() && alive.get<bool>("ReturnValue");
+        float d = distanceTo(o);
+        const char* reason = !IsLive(Prop(Prop(o, "Mesh"), "SkeletalMesh")) ? "no mesh"
+                           : living && ParkedPawn(o)                   ? "parked in a pool"
+                           : living && !CompanionAi(o) && !SharedEnemy(o, g_pawn) ? "not a shared enemy"
+                           : d > kEnemyRadius / 100.f                    ? "beyond 80 m"
+                                                                        : "selected";
+        ++reasons[cls + ": " + reason];
+        if ((d < 300 || cls == "SwarmerPawn_C") && !hordePawn && samples.size() < 40) {
+            Call where(o, "K2_GetActorLocation");
+            FVector p = where.invoke() ? where.get<FVector>("ReturnValue") : me;
+            char line[260];
+            std::snprintf(line, sizeof line, "%s at %.0f m offset %.0f %.0f, %s, controller %s, %s", Name(o).c_str(), d,
+                          (p.x - me.x) / 100, (p.y - me.y) / 100, living ? "alive" : "dead",
+                          IsLive(controller) ? Name(controller->cls).c_str() : "none", reason);
+            samples.push_back(line);
+        }
+    }
+    for (const auto& [cls, t] : crowd)
+        Log("crowd-probe: %s x%d, %d within 80 m, nearest %.0f m", cls.c_str(), t.count, t.nearby, t.nearest);
+    for (const auto& [what, n] : reasons) Log("crowd-probe: AI pawn %s x%d", what.c_str(), n);
+    for (const auto& s : samples) Log("crowd-probe: near %s", s.c_str());
+    Log("crowd-probe: %d crowd classes, %d AI pawn groups; the scan streams %d", static_cast<int>(crowd.size()),
+        static_cast<int>(reasons.size()), static_cast<int>(g_enemySources.size()));
+    return true;
 }
 
 void StepEnemyScan(UObject* pawn) {

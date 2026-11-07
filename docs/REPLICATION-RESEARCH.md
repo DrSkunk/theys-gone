@@ -3965,3 +3965,50 @@ separate-PC behavior.
   the Steam send budget at 64 stand-ins; two-PC timing at 16.
 - **Cleanup:** lab clones destroyed. Archive:
   `<archive>/pawn-20261107-2021/`.
+
+## Enemy scan: pools, hordes and the 2026-11-06 gap (2026-11-07, one PC, one and two games)
+
+- **Question:** why the host streamed no enemies in the 2026-11-06 two-PC
+  run while a swarm attacked (roadmap item 2).
+- **Build:** worktree `anim-mirror-probe` after `3743b4f`. New debug command
+  `crowd-probe`: crowd actors and components by class with their distance;
+  every `BendAIPawn` with its controller and the scan rule that takes or
+  rejects it; positions of `BendCrowdController`s and horde pawns as
+  `move-by` offsets.
+- **Setup:** one lab instance at the base save's location (the same place
+  as the 2026-11-06 run: about -30000 -206000): at the start, 182 m from
+  the horde pool, near the pooled swarmers, three minutes at night
+  (`time-shift` twice), and after `spawn-single`.
+- **Result:** the gap was not reproduced (no active natural enemy appeared);
+  the scan's pool rule was found wrong for horde pawns and replaced.
+- **Observed:**
+  - A horde pool: 8 `HordeSwarmerPawn_C` (hidden, health 200, **no
+    controller**), 8 `BendCrowdController` actors and 988
+    `BendCrowdSharedAnimSkeletalMeshComponent` crowd members, all at one
+    point about 2 km away.
+  - An AI pool about 170 m below the player, pawns in a row 1 m apart, each
+    with its controller: 15 `SwarmerPawn_C`, 20 `MarauderPawn_C`, 15
+    `RatPackPawn_C`, 6 `SurvivorPawn_C`, deer, wolves, crows and newts.
+  - Neither pool moved during three minutes at night or after moving 2 km
+    toward the horde pool.
+  - The 2026-11-06 host log has one `partner stand-in took 40.0`: that
+    stand-in is the partner proxy (a `SwarmerPawn_C` on the player's faction),
+    so the log does not name the attacker.
+  - The old rule skipped every living pawn without a controller as pooled,
+    which also matches every horde member promoted to a full pawn (driven by
+    a `BendCrowdController` actor, not an AI controller).
+  - With the new rule, all 106 pooled pawns were classified "parked in a
+    pool" and the debug swarmer was selected; a paired pack regression run
+    (`pawn-20261107-2113`) played 166 of 166 one-shots.
+- **Change:** `ParkedPawn` replaces the controller test: hidden pawns,
+  controllers with `bPooledSpawn` and not `bPooledSpawnInUse`, and
+  controller-less pawns that are not freakers are parked. `SharedEnemy`
+  accepts a controller-less `BendFreakerPawn` (a horde member).
+- **Derived:** the most likely cause of the 2026-11-06 gap is that rule:
+  a swarm of promoted horde pawns has no AI controllers, so none was
+  selected. Not proven: the run's attackers are not named in its log.
+- **Unknown:** what activates a pool here; whether active horde pawns are
+  visible pawns or only crowd meshes near the player; a test with a natural
+  swarm or horde.
+- **Cleanup:** lab clones destroyed. Archives: `<archive>/crowd-20261107-2053/`
+  through `<archive>/crowd-20261107-2111/`, `<archive>/pawn-20261107-2113/`.
