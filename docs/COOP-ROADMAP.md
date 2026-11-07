@@ -18,12 +18,12 @@ QA levels are defined in
 
 | Area | QA level | Evidence and limits |
 |---|---|---|
-| Sessions and players | two-PC | Two-PC UDP tests covered avatars and animation, held items, motorcycles, passenger riding, appearance, friendly fire, time and weather. Steam reached shared gameplay on two PCs, but host-save transfer and newer gameplay paths over Steam remain unverified. Internet/NAT behavior and native Windows also remain unverified. |
+| Sessions and players | two-PC | Two-PC UDP tests covered avatars and animation, held items, motorcycles, passenger riding, appearance, friendly fire, time and weather. On 2026-11-06 a no-INI two-PC Steam run covered JOIN A FRIEND, host-save transfer (7.5 MB in about 36 s, with Steam send-limit failures), avatars, PLAYER SETTINGS with a gamepad, teleport and passenger riding; the riding has known defects (item 4). Internet/NAT behavior and native Windows also remain unverified. |
 | Host saves and story | two-PC (save transfer; catch-up of a debug-driven job start and completion) | Two PCs transferred and loaded a host save with the guest sandbox active. Forced divergence, an objective autosave, and one job's start/completion exercised catch-up. Full campaign progression and joining mid-mission need more testing. A running host story mission defers catch-up until a later host save. |
-| Enemies and free roam | two-PC (debug-spawned) | Two-PC tests covered host-owned enemies, guest damage and split/regroup ownership using debug-spawned enemies. `FreeRoam=1` is opt-in and decided by the host. The v9 guest-side host proxy has **not** been proven to make naturally spawned guest-owned enemies attack and damage the host after regrouping. |
+| Enemies and free roam | two-PC (debug-spawned) | **Broken for natural enemies:** in the 2026-11-06 two-PC Steam run the host streamed no enemies at all while a swarm attacked; the guest had despawned its own AI and took damage from enemies it could not see (item 2). Earlier two-PC tests covered host-owned enemies, guest damage and split/regroup ownership using debug-spawned enemies. `FreeRoam=1` is opt-in and decided by the host. The v9 guest-side host proxy has **not** been proven to make naturally spawned guest-owned enemies attack and damage the host after regrouping. |
 | Mission policy | paired-lab | In a one-PC paired `OBR` test, a riding guest was let off and could not re-board while the story reserved the seat. In `AON1`, 9 of 13 Rippers targeted the stand-in before the stealth rule and 0 after. More missions and natural combat remain open. |
 | Companions and missions | paired-lab | One-PC tests showed Boozer and his bike as display replicas, host mission weather, the partner map marker and partner hiding in the `WNG` flashback. Guest mission-start fade recovery is implemented; other companions, vehicles and cinematics need coverage. |
-| Menu timing | paired-lab | One-PC tests covered weapon-wheel timing and shared menu pause. A combat tutorial paused only the host while the guest kept running. Separate-PC, focus/combat and other scripted pauses remain open. |
+| Menu timing | paired-lab | One-PC tests covered weapon-wheel timing and shared menu pause. A combat tutorial paused only the host while the guest kept running, and again on two PCs ("Fight or flight", 2026-11-06; item 3). Separate-PC, focus/combat and other scripted pauses remain open. |
 | Loading and travel | paired-lab | One-PC tests covered a native host autosave load and host death from debug-spawned enemies: the guest stayed connected and the marker returned. Fast travel left the guest 446–466 m behind; guest fast travel regrouped them, but its clock was corrected to the host's. F7 once put the guest in a ceiling. |
 | Sleep | paired-lab | In one paired lab run, host sleep advanced the separated guest's clock to morning. Two guest sleep attempts did not complete while connected; the same guest slept after disconnect. The cause and two-PC behavior remain unverified. |
 
@@ -37,14 +37,14 @@ Important limits for players:
   Completed-objective sync is on by default but experimental (tested on one
   job) and does not replace host-save catch-up. The host decides `HostSave`,
   `MissionObjectiveSync` and `FreeRoam`; the guest follows automatically.
-- Enemy and companion pawns share a cap of 16 streamed candidates per sender,
-  normally within 80 m; a retained fight can extend beyond that radius. Hordes
-  cannot be represented completely. Melee damage is estimated and ranged
+- Natural enemies did not reach the guest at all in the latest two-PC run,
+  and the guest can be hurt by enemies it does not see (item 2). The stream
+  is also capped at 16 enemy and companion pawns within about 80 m, so hordes
+  cannot be represented yet. Melee damage is estimated and ranged
   attacks on the guest are unverified.
 - Player settings moved from the removed F8 overlay to the native CO-OP →
-  **PLAYER SETTINGS** page. In a one-PC lab run the pause-menu page, color
-  sync, friendly-fire toggle and TELEPORT TO PARTNER worked; the title-menu
-  page and gamepad navigation are untested.
+  **PLAYER SETTINGS** page. Lab runs covered the page in both menus, and a
+  two-PC run covered it with a Steam Deck gamepad.
 - Teleporting beside a partner near furniture can place a player inside
   geometry. Guest sleep and tutorial pauses can also behave differently from
   their host-side equivalents.
@@ -71,7 +71,61 @@ with the host's missions.
    day (research log). Remaining: at the title screen the block shows only in the CO-OP lobby log
    and status, because the HUD notice is unavailable there; show it in the
    title menu itself.
-2. **Score lab runs automatically.** Add a lab scenario runner that drives
+2. **Show every host enemy on the guest.** The 16-enemy cap is not
+   acceptable: a seamless session must show whole swarms and hordes. In the
+   2026-11-06 two-PC run the host streamed no enemies while a swarm attacked
+   the guest's stand-in, and the guest took that damage from enemies it could
+   not see. Find why the scan selected nothing (suspect: crowd-driven horde
+   swarmers without their own controller, skipped as pooled pawns). Then
+   replace full-skeleton streaming for most enemies with native puppets: the
+   guest spawns the same class with its AI stopped and drives its position,
+   speed and facing from a compact state record (about 16–20 bytes), so the
+   game animates it; full poses only for the few enemies near a player in an
+   attack, stagger or death. Never forward a stand-in hit from an enemy the
+   guest does not show.
+   *Status:* puppets exist behind `[Research] PawnEnemies=1` (protocol v13,
+   `src/coop/standin.cpp`): about 112 bytes per enemy at 15 Hz plus
+   class, one-shot and death events. In the paired lab a host swarmer's
+   attacks, grapples, the guest's hits and the host's kill all showed
+   through the stand-in. With 8 swarmers, enemy traffic fell from 103 to
+   about 17 kB/s once the guest acknowledged its stand-ins. A dead stand-in
+   hands over to the pose replica of the owner's corpse, which avoids the
+   guest's kill reward. The one-PC probe work behind it is in the research
+   log from
+   [native-style enemy animation](REPLICATION-RESEARCH.md#pawn-mirror-native-style-enemy-animation-from-movement-and-state-2026-11-06-one-pc-one-game)
+   to the
+   [pack run](REPLICATION-RESEARCH.md#pawn-stand-ins-dropping-poses-and-a-pack-of-eight-2026-11-07-one-pc-two-games).
+   *Start:* `FinishEnemyScan` and `SharedEnemy` in `coop.cpp`,
+   `src/coop/enemy.hpp` (`kEnemyMaxStreamed`, packets), `BendCrowdGroupHorde`
+   and `HordeSwarmerPawn_C` in the reflection dump.
+   *Done when:* in a lab run near natural swarmers and in one two-PC run, every
+   host enemy within range appears on the guest, a 100+ horde stays under the
+   Steam send budget without new frame spikes, and no guest damage comes from
+   an enemy it does not show.
+3. **Pause both games for tutorial popups.** A game popup that pauses one
+   player (such as the "Fight or flight" tutorial) shows on both PCs at once,
+   and play resumes only once both players have dismissed it.
+   *Start:* the tutorial widget and the function that opens it (reflection
+   dump), the menu-pause flag (`kMenuPause`) and `UpdateMenuPause` in
+   `coop.cpp`.
+   *Done when:* a two-PC run shows a tutorial on both PCs, both worlds stay
+   paused until the second player dismisses it, and either player's dismissal
+   order works.
+4. **Ride on the native passenger seat.** Riding along hides the guest's own
+   character and poses a stand-in, so on two PCs the passenger could still
+   attack, held a misplaced weapon, saw no **Get off** prompt, had no mount
+   animation, and the **Ride with** label was cropped. Spawn a real bike
+   actor on the guest that follows the host's stream with physics off and
+   seat the guest with the game's own `TryEnterVehicle` / `TryExitVehicle`
+   and passenger camera (`BendVehiclePassengerCamFollow`). If that fails,
+   block attacks and holster the weapon while seated, show the prompt and fix
+   the label size.
+   *Start:* the passenger code and `ride_prompt.cpp` in `src/coop/`, seat
+   functions in the reflection dump.
+   *Done when:* a lab run and a two-PC run show the guest seated with native
+   animation, no attack input, a visible **Get off** prompt and an uncropped
+   label.
+5. **Score lab runs automatically.** Add a lab scenario runner that drives
    both instances, asserts the mode first (both peers connected, `HostSave`
    sandbox active), checks shared state and prints `RESULT: PASS`, `FAIL` or
    `SKIP`; a skip or a check that never ran is not a pass. Let allowlisted debug
@@ -84,16 +138,20 @@ with the host's missions.
    *Done when:* scenarios for a normal join and a forced save-guard failure run
    unattended, the scorer has its own tests in `make test`, and both results are
    logged. Areas proven this way may then be marked `automated`.
-3. **Make joining reliable on both transports.** Verify host-save transfer and
+6. **Make joining reliable on both transports.** Verify host-save transfer and
    invite acceptance over Steam. Test joining mid-mission, joining right after
    a host save (the cached snapshot can lag) and rejoining after a disconnect.
    Repeat the save transfer over a lossy, partitioned link between lab instances
-   (`tc netem`, or coop-anything's chaos relay).
+   (`tc netem`, or coop-anything's chaos relay). Over Steam the guest pulls 24
+   chunks of 1 KB per tick, more than Steam's send rate accepts: a 7.5 MB
+   transfer logged about 1,300 `send failed (result 25)` lines and took 36 s.
+   Pace the pulls to the transport, or raise Steam's send rate through a
+   vtable slot derived from the binary.
    *Start:* `src/coop/steam.cpp`, `session.hpp`, `save_transfer.cpp` and
    `savesync.hpp`.
    *Done when:* each case has a PASS/FAIL entry in the research log, scored by
    the lab runner where the lab can cover it and with Steam cases run on two PCs; failures become their own roadmap items.
-4. **Follow the host through the campaign.** Play host story missions with a
+7. **Follow the host through the campaign.** Play host story missions with a
    connected guest and confirm catch-up after each host save, including
    mission-start fades, deaths and checkpoint reloads. Use legitimately
    reached `RNA1`/`LRH1` saves to check region changes, guest resync and
@@ -103,87 +161,34 @@ with the host's missions.
    *Done when:* a run of consecutive host story missions with a connected guest
    is logged, with the guest on the host's progress after each host save,
    including one region change.
-5. **Prove the rule tests can fail.** Add mutation twins for the save, story
+8. **Prove the rule tests can fail.** Add mutation twins for the save, story
    and mission-policy rules: a test-only switch disables each rule and the
    matching test must then fail.
    *Start:* `src/coop/save_policy.hpp`, `story.hpp`, `mission_policy.hpp`,
    `tools/test_protocol.cpp`; method in coop-anything's automated QA page.
    *Done when:* a `make` target runs every twin and fails if any twin passes.
-6. **Broaden mission policy coverage.** Test the `RBC` Lisa seat, an already
+9. **Broaden mission policy coverage.** Test the `RBC` Lisa seat, an already
    fighting enemy in stealth, additional cutscenes, and the partner's return
    after flashbacks. `OBR`, `AON1` and `WNG` do not cover every mission.
-7. **Make the guest's combat count in missions.** Test real aimed guest shots
+10. **Make the guest's combat count in missions.** Test real aimed guest shots
    and melee on mission enemies, ranged enemy attacks on the guest, stand-in
    collision and possible duplicate damage. Archive both logs.
-8. **Broaden companion and vehicle replicas.** Test more mission companions,
+11. **Broaden companion and vehicle replicas.** Test more mission companions,
    their meshes and materials, mission trucks, and moving vehicles. Decide
    whether any interactions should work on these currently display-only
    replicas.
-9. **Keep the players together.** Decide whether fast travel should offer a
+12. **Keep the players together.** Decide whether fast travel should offer a
    regroup; prevent teleport placement inside nearby geometry. Reproduce the
-   connected guest's failed sleep and choose a shared sleep policy. Decide how
-   tutorial pauses should behave while the other player is active.
-10. **Plan for story hordes.** Measure a real horde mission, frame time,
-    bandwidth and the selected pawns with both players; the debug spawner stops
-    at 16. Choose a representation or ownership policy for
-    [hordes of 25–500](https://daysgone.fandom.com/wiki/Hordes).
-    Bone streaming costs about 1.7 KB per enemy per frame at 15 Hz (derived
-    from the 159-bone cap, not measured). Sending animation inputs instead, as
-    Source and native UE4 replication do, could cost far less. Copying anim
-    variables into a pawnless clone failed. A guest-side swarmer pawn without
-    AI, given only native inputs (position, velocity, movement mode and the
-    AI's movement request: acceleration, requested velocity, desired speed
-    and rotation, about 60 bytes before quantization), walked, turned and
-    stopped with no anim-instance variables copied (one-PC lab,
-    [research log](REPLICATION-RESEARCH.md#pawn-mirror-native-style-enemy-animation-from-movement-and-state-2026-11-06-one-pc-one-game)).
-    Attacks and grapples play when each new animation is replayed on the
-    clone as a `FullBody` slot montage (51 of 60 one-shot samples matched;
-    [research log](REPLICATION-RESEARCH.md#pawn-mirror-attacks-and-grapples-as-replayed-slot-montages-2026-11-06-one-pc-one-game)).
-    With god mode off, the stand-in's own claws hit the player when they
-    overlapped it (12 hits in 2 runs). With their collision turned off it
-    dealt no damage (0 in 3 runs). The replayed montages still fire gameplay
-    notifies such as `AttemptGrapple` and `CounterIcon` on the stand-in
-    ([research log](REPLICATION-RESEARCH.md#pawn-mirror-stand-in-damage-with-god-mode-off-2026-11-07-one-pc-one-game)).
-    Muting the stand-in's gameplay notifies (`MeleeArmed`, counter windows and
-    icon, `AttemptGrapple`) kept it harmless even with claw collision on, and
-    the replay still matched
-    ([research log](REPLICATION-RESEARCH.md#pawn-mirror-what-the-stand-ins-anim-notifies-do-and-muting-them-2026-11-07-one-pc-one-game)).
-    Counter prompts follow the attack's target: gated on it, they passed for
-    attacks on the local player and were muted otherwise, so an attack event
-    carries the target. A guest's counter lands on its local stand-in, so it
-    needs a "guest countered attack N" message back to the host, like the
-    forwarded guest hits. Candidate hooks from reflection, not yet traced:
-    `BendPlayerPawn.OnCounterAttackSuccessful` (a Blueprint event, so it is
-    visible in ProcessEvent) and `BendPawn.CanCounterAttack_Ended(pAttacker)`
-    to name the attacker on the guest. On the host, how to make the real
-    enemy take the counter (`AttackersCounterWindow*_AnimNotify`,
-    `ResetFinishedCounterAttack`) is unknown. Scripted counters failed: the
-    counter is the gamepad-only `Parry` action, `TryToCounterAttack` alone
-    does nothing, and a left click is a plain melee hit (15 health per hit
-    on a swarmer). A controller check is in the manual list below
-    ([research log](REPLICATION-RESEARCH.md#counter-test-keyboard-and-mouse-input-against-the-source-and-the-stand-in-2026-11-07-one-pc-one-game)).
-    Hits forward as the `Damage` state (accepted every time), and
-    `BendPawn.ForceKill` kills the stand-in with the game's own death, so
-    an "enemy died" event can call it on a guest. Grapple loops matched
-    without replaying
-    ([research log](REPLICATION-RESEARCH.md#pawn-mirror-hit-reactions-death-and-looping-one-shots-2026-11-07-one-pc-one-game)).
-    Behind `[Research] PawnEnemies=1` (protocol v13), the first paired run
-    showed a host swarmer as a stand-in on the guest: grapples in the same
-    spot, 41 of 59 one-shots played, guest hits and host death forwarded.
-    The guest's `ForceKill` also gave the guest the kill reward, and some
-    attack sequences never loaded on the guest
-    ([research log](REPLICATION-RESEARCH.md#pawn-stand-ins-over-the-wire-first-paired-run-2026-11-07-one-pc-two-games)).
-    *Start:* a guest-side death without the reward, holding one-shot
-    assets loaded, then dropping poses for enemies with a stand-in and
-    measuring several enemies. *Done when:* a lab run
-    shows the pawn clone in the source's action (idle, move, attack, grapple,
-    hit, death) for most samples and the stand-in never damages the player,
-    before any wire format is designed.
-11. **Broaden menu timing QA.** Cover controller/mouse menus over Steam and
+   connected guest's failed sleep and choose a shared sleep policy.
+13. **Take story hordes through missions.** After item 2, play a horde
+    mission with both players and measure frame time, bandwidth and ownership
+    for [hordes of 25–500](https://daysgone.fandom.com/wiki/Hordes); the debug
+    spawner stops at 16.
+14. **Broaden menu timing QA.** Cover controller/mouse menus over Steam and
     repeat menu timing on separate PCs, including joins/disconnects with a
     wheel open, focus/combat overlap, photo mode and scripted/cinematic pause
     transitions. Monitor for new frame-time spikes.
-12. **Track game updates, branches and DLC.** The mod supports Steam build
+15. **Track game updates, branches and DLC.** The mod supports Steam build
     19221447 only; fixed RVAs must be re-derived after an update. Document
     recovery when Steam offers no rollback to that build; `Classic` is a
     different branch. Test the unverified Broken Road modes and saves or assets
@@ -197,7 +202,7 @@ these checks need a person, a controller or a second PC. Use an isolated lab
 copy or two-PC setup, never a real install or save. Record each result in the
 research log and remove it here once it is covered.
 
-Combat and the pawn mirror (item 10):
+Combat and enemy stand-ins (items 2 and 10):
 
 - **Counter a swarmer with a controller.** Press Parry (Y / Triangle) in the
   counter window while `anim-mirror-pawn` logs, with and without
@@ -221,7 +226,7 @@ Menus and settings:
 - **Title-menu PLAYER SETTINGS**, the guest-side page, F9, and the "sandbox
   stays active" notice on leaving.
 - **Menu timing on separate PCs** with a controller, a wheel open during
-  join or disconnect, photo mode and cinematic pauses (item 11).
+  join or disconnect, photo mode and cinematic pauses (item 14).
 
 Sessions, saves and travel (two PCs):
 
@@ -232,7 +237,7 @@ Sessions, saves and travel (two PCs):
   the clock on two PCs.
 - **Joining mid-mission** and a longer stretch of campaign progress.
 - **Broken Road modes** and DLC assets shared between owners and non-owners
-  (item 12).
+  (item 15).
 
 ### Later: separated play
 

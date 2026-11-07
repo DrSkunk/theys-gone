@@ -76,7 +76,8 @@ for menus.
 ## Limitations
 
 - The lab tests LAN UDP only. It cannot cover Steam transport work (lobbies,
-  invites, Steam networking); use two PCs for that.
+  invites, Steam networking); use two PCs for that, with
+  [`tools/twopc/`](../twopc/README.md).
 - Lab runs are one-PC paired tests, not two-PC tests. Record each run in the
   [research log](../../docs/REPLICATION-RESEARCH.md) and status changes in
   the [co-op roadmap](../../docs/COOP-ROADMAP.md).

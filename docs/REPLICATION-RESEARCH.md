@@ -25,7 +25,7 @@ Sections are not in chronological order. Index by date:
 | 2026-10-30 | Protocol-v9 proxy second attempt; Host mission on the guest; Host mission weather; Region transition; Companion materials; Companion vehicles |
 | 2026-10-31 | Weapon-wheel and pause timing; Shared menu pause; Co-op review scenarios |
 | 2026-11-01 | Native host load and fast travel; Death, sleep and travel follow-up |
-| 2026-11-06 | Join block, no-INI v12 join and native PLAYER SETTINGS; Title-menu settings, F9 boarding and the leave notice |
+| 2026-11-06 | Join block, no-INI v12 join and native PLAYER SETTINGS; Title-menu settings, F9 boarding and the leave notice; Two-PC Steam session without an INI |
 
 ## Weapon-wheel and pause timing investigation (2026-10-31)
 
@@ -3180,6 +3180,68 @@ separate-PC behavior.
   unchanged. Archives: `<archive>/v12-ui2-20261106T193522/` and
   `<archive>/v12-ui2b-20261106T194744/`.
 
+## Two-PC Steam session without an INI (2026-11-06, two PCs, Steam)
+
+- **Build:** run 1 ASI `2b99580e…`, run 2 `ff0d662a…` (the teleport and
+  wording fixes below), protocol v12, game build 19221447 on both.
+- **Setup:** host on the host PC (desktop Steam account), guest on the Steam
+  Deck (its own account), real installs. Before the run, each PC's ASI, INI
+  and whole Proton `Saved` tree were backed up with hashes; both INIs were
+  moved aside so the run used built-in defaults (`Transport=menu`). The Deck
+  had no branding pak. Run 1 was played by the user (Deck with its
+  gamepad); run 2 was driven remotely with a temporary uinput keyboard and
+  `gamescopectl` / `spectacle` screenshots.
+- **Result:** joining, save transfer, settings, teleport (after the fix) and
+  riding PASS; enemies and tutorial pause FAIL; riding has defects.
+- **Observed:**
+  - Host CO-OP → HOST ONLINE GAME opened a FRIENDS ONLY lobby; the Deck's JOIN
+    A FRIEND listed the host and joined it (`Joined <host>'s lobby`).
+  - The guest enabled its sandbox and received snapshot `10a18929` (10 files,
+    7,547,924 bytes) in 36 s. The host logged 1,313 `steam: send failed
+    (result 25)` lines; the guest pulls 24 × 1 KB chunks per tick, more than
+    Steam's send rate. Run 2: 1,380 such lines.
+  - The guest's CO-OP lobby said `Host save ready: press Continue` while its
+    row was START GAME (JOIN HOST). The guest could load the host's save and
+    enter the world while the host was still at its title menu.
+  - In gameplay: both logged `status: partner … visible=1`, about 115–120 pose
+    packets/s each way, and story `fa97ef49` on both. The Deck's mod tick ran
+    at 37–41 updates/s (mean about 5 ms, peaks 180–195 ms) against 60/s on
+    the host.
+  - With the gamepad: PLAYER SETTINGS cycled JACKET to FOREST and SAND. TELEPORT
+    TO PARTNER closed only the CO-OP page; the teleport ran when the user
+    then closed the pause menu.
+  - Riding: the native prompt read **Ride with <host>** with descenders cut
+    off; boarding logged `boarded using socket SOCKET_PassengerSeat`. While
+    seated the passenger could still attack, the held weapon looked
+    misplaced, the logged **Get off** label never showed, and there was no
+    mount animation.
+  - The "Fight or flight" tutorial paused the host's game only.
+  - A swarm attacked on the host. The host never logged `streaming N local AI
+    pawns` in the whole session, so no enemy reached the guest, which had
+    despawned its own AI (`the host owns enemies`). Host:
+    `partner stand-in took 40.0; forwarded to the owner`; guest: `partner
+    enemy hit you for 40.0`.
+  - Run 2: `save transfer: host save installed; START GAME or Continue loads
+    it`; TELEPORT TO PARTNER logged `pause CO-OP closed` and `teleported to
+    partner <host>` 19 ms apart, and the Deck screenshot showed gameplay
+    with no menu open.
+- **Derived:** the no-INI Steam path from the native menus works on two PCs.
+  Enemy sync is broken for natural enemies, which makes fights unplayable for
+  the guest. `SwarmerPawn_C` derives from `BendAIPawn` through
+  `BendFreakerPawn` and its controller from `BendFreakerController`, so the
+  class filter should accept swarmers; the cause is unknown (suspect: horde
+  swarmers driven by `BendCrowdGroupHorde` without their own controller,
+  skipped as pooled). The reflection dump shows a native seat API
+  (`TryEnterVehicle`, `ReserveSeat`, `AddRider`) and a passenger camera
+  class (`BendVehiclePassengerCamFollow`).
+- **Unknown:** why the enemy scan selected nothing; the cause of the Deck tick
+  peaks; whether a virtual gamepad reaches the game on the Deck (the uinput
+  keyboard did).
+- **Cleanup:** both games quit through the menu. ASI, INI and `Saved` were
+  restored on both PCs and their hashes matched (85 files on the host PC, 57
+  on the Deck). Logs and the post-test `Saved` trees are kept in each PC's
+  `~/TheysGone-backup-20261106-twopc/`.
+
 ## Anim mirror: can anim-instance variables replace bone streaming? (2026-11-06, one PC, one game)
 
 - **Question:** Source-style games send animation inputs, not bones. Can a
@@ -3693,3 +3755,43 @@ separate-PC behavior.
   stand-in ever damaged the guest (both were in god mode); two-PC timing.
 - **Cleanup:** both lab clones destroyed; base game copy never written.
   Archive: `<archive>/pawn-20261107-1741/`.
+
+## Pawn stand-ins: dropping poses and a pack of eight (2026-11-07, one PC, two games)
+
+- **Question:** can the host stop sending bone poses for enemies the guest
+  shows as stand-ins, and does a death avoid the guest's kill reward?
+- **Build:** worktree `anim-mirror-probe` commit `099697d`, protocol v13.
+  The guest sends a `DMEV` stand-in acknowledgement per live stand-in about
+  once a second; the host skips the bone poses of a living enemy
+  acknowledged within 2.5 s. On a death event, or an update without the
+  alive flag, the guest removes the stand-in and the poseable replica takes
+  over from the host's corpse poses. One-shot sequences are added to the
+  root set once played (bit 30, checked at run time against rooted classes
+  and unrooted actors).
+- **Setup:** paired lab as in the previous entry, but `spawn-pack` (8
+  swarmers); a second run with `PawnEnemies=0` on both as the baseline.
+- **Result:** PASS for pose dropping, eight stand-ins and the death
+  hand-over. One-shots and holding were not exercised (below).
+- **Observed:**
+  - The guest spawned 8 `SwarmerPawn_C` stand-ins within 20 ms, and the
+    host logged `poses paused` for all 8 within 12 ms of each other.
+  - Host enemy traffic with stand-ins: 0 pose packets and 16.2–17.1 kB/s
+    over six 5 s windows (8 × 15 `DMMO` per second plus infos and events).
+    Baseline without stand-ins: 239–242 pose packets per second and
+    103.1–103.8 kB/s. Poses resumed (17.6, then 30 per second) for the
+    corpse after the kill.
+  - All 3 guest `hit-enemy` hits reached the host in both runs.
+  - After `kill-owned-enemy` the guest logged `stand-in 3 died; showing the
+    owner's corpse`, and its screenshot showed no kill-reward notice.
+  - The pack spawn opened the "Fight or flight" tutorial on the host, which
+    paused only the host's game (roadmap item 3). The frozen swarmers made
+    1 one-shot in the whole run, so the root-set check never ran.
+  - Guest screenshot: eight stand-ins standing around both players.
+- **Derived:** puppets cut enemy traffic by about 6× for eight swarmers,
+  with the corpse still exact from poses. A guest-side death without
+  `ForceKill` avoids the game's kill reward.
+- **Unknown:** one-shot holding (no attacks); the root-set bit check; more
+  than eight enemies; two-PC timing.
+- **Cleanup:** both lab clones destroyed after each run; base game copy
+  never written. Archives: `<archive>/pawn-20261107-1755/` and
+  `<archive>/pawn-20261107-1800/`.

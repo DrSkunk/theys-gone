@@ -802,7 +802,12 @@ void PauseActivate(int row) {
     if (row < 0 || row >= static_cast<int>(g_pause.rows.size())) return;
     const auto& selected = g_pause.rows[static_cast<size_t>(row)];
     Log("native ui: pause CO-OP selected '%s'", selected.label.c_str());
-    if (Navigate(g_pause.page, selected)) PauseClose();
+    if (!Navigate(g_pause.page, selected)) return;
+    PauseClose();
+    // Teleport runs once gameplay resumes, so close the whole pause menu as photo mode does.
+    if (selected.action == Action::Teleport &&
+        !Call(g_pause.widget, "RequestClose").setBool("ClosedByPhotoMode", false).invoke())
+        Log("native ui: could not close the pause menu for teleport");
 }
 
 void PauseResolveNames() {

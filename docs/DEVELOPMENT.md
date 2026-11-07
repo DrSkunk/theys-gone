@@ -72,7 +72,7 @@ stopping at the cheapest level that proves the change:
 | Unit test | Pure rules: packets, policies, ownership, story and save decisions | Put the rule in a header such as `story.hpp` or `save_policy.hpp` and test it in `tools/test_protocol.cpp`; `make test` |
 | Simulated partner | Packet flow and session handling against one real game | [`fake_peer.py`](#simulated-partner) |
 | Paired lab | Gameplay with two real games on one Linux PC (LAN UDP only) | [Headless test lab](#headless-test-lab) |
-| Two PCs | Steam transport, real network timing and anything the roadmap marks as two-PC | Two machines with isolated game copies |
+| Two PCs | Steam transport, real network timing and anything the roadmap marks as two-PC | [`tools/twopc/`](#two-pc-test-tooling) on dedicated test PCs: backup, install, launch, keys, screenshots, logs, restore |
 
 Higher levels are needed when a change touches the engine or the network;
 a passing unit test does not prove gameplay. The lab needs Linux on btrfs or
@@ -82,7 +82,8 @@ options are a single game, `fake_peer.py` or two PCs.
 Prefer a scripted lab scenario with a PASS/FAIL result over a manual
 playtest; a run nobody can repeat is weak evidence. Two-PC live runs are
 still required for Steam and real-network claims. OS-level input (`xdotool`,
-`game_remote.py`) is for lab instances and dedicated test PCs only.
+`game_remote.py`, `tools/twopc/vkey.py`) is for lab instances and dedicated
+test PCs only.
 
 ### QA levels and evidence
 
@@ -137,6 +138,18 @@ datagram's own version constant, and update `tools/test_protocol.cpp` and
 PC for paired tests: disposable reflink clones of an isolated copy, each in
 its own headless gamescope, the guest in a bubblewrap sandbox with a second
 Steam account. See [`tools/lab/README.md`](../tools/lab/README.md).
+
+## Two-PC test tooling
+
+[`tools/twopc/twopc.sh`](../tools/twopc/twopc.sh) drives a two-PC session on
+Linux test PCs (a desktop and a Steam Deck in game mode, for example) from a
+dev machine over ssh. It backs up each PC's ASI, INI and Proton `Saved`
+tree and installs a build with no INI; it launches the game through Steam,
+taps keys through a temporary uinput keyboard and takes screenshots. At the
+end it restores the backup and verifies every hash. It needs no server on
+the test PCs, unlike [`game_remote.py`](#remote-game-session-controller),
+and works where `ydotool` is missing. See
+[`tools/twopc/README.md`](../tools/twopc/README.md).
 
 ## Simulated partner
 
