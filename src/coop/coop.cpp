@@ -2054,6 +2054,15 @@ bool DebugEnd() {
     return true;
 }
 
+// Debug sessions block saving and change damage, which a mission's own checkpoint saves and save blocks could
+// capture or overwrite, so they normally stay out of missions and cinematics. [Research] DebugInMissions lets a lab
+// clone, whose saves are thrown away, test mission content; cinematics stay excluded.
+bool DebugWorldAllowed(UObject* manager) {
+    if (!g_cfg.debugInMissions) return WorldSyncAllowed(manager);
+    Call cinematic(manager, "GetIsCinematicActive");
+    return IsLive(manager) && cinematic.invoke() && !cinematic.get<bool>("ReturnValue");
+}
+
 bool DebugBegin(double now) {
     if (g_debug.pawn) return DebugError("A debug session is already active; end it first");
     Call riding(g_pawn, "IsInVehicle"), mode(C.statics, "GetGameMode");
@@ -2061,8 +2070,11 @@ bool DebugBegin(double now) {
         !riding.invoke() || riding.get<bool>("ReturnValue") || !mode.set("WorldContextObject", g_pawn).invoke())
         return DebugError("Debug sessions require a living, settled gameplay pawn on foot, not a passenger");
     auto manager = FindWorldManager();
-    if (!WorldSyncAllowed(manager))
+    if (!DebugWorldAllowed(manager))
         return DebugError("Debug sessions are blocked during missions, cinematics, or unavailable world state");
+    if (g_cfg.debugInMissions && !g_mission.code.empty())
+        Log("debug: WARNING session during mission '%s' ([Research] DebugInMissions); its saves may capture test state",
+            g_mission.code.c_str());
     auto gameMode = mode.get<UObject*>("ReturnValue");
     Call blocked(gameMode, "IsSavingBlockedByBlueprint");
     if (!blocked.invoke()) return DebugError("Cannot capture the original saving state");
@@ -2236,7 +2248,7 @@ bool DebugWorld(bool weather) {
     if (!IsHost()) return DebugError("World tests run on the host; the client follows the host");
     UObject* manager = FindWorldManager();
     WorldSnapshot current{};
-    if (!WorldSyncAllowed(manager) || !ReadWorldSnapshot(manager, current))
+    if (!DebugWorldAllowed(manager) || !ReadWorldSnapshot(manager, current))
         return DebugError("World state is unavailable during missions or cinematics");
     if (!weather) {
         float target = std::fmod(current.timeOfDay + 6.0f, 24.0f);
@@ -2322,7 +2334,7 @@ void UpdateDebugTools(double now) {
     if (g_debug.pawn) {
         Call riding(g_debug.pawn, "IsInVehicle");
         if (g_debug.pawn != g_pawn || !IsLive(g_debug.pawn) || !Alive(g_debug.pawn) ||
-            !WorldSyncAllowed(FindWorldManager()) || !riding.invoke() || riding.get<bool>("ReturnValue") ||
+            !DebugWorldAllowed(FindWorldManager()) || !riding.invoke() || riding.get<bool>("ReturnValue") ||
             now >= g_debug.expires) {
             if (!DebugEnd()) return;
         }
@@ -6960,6 +6972,7 @@ Config LoadConfig(const std::wstring& ini) {
     c.hostSave = GetPrivateProfileIntW(L"Coop", L"HostSave", 1, ini.c_str()) != 0;
     c.debugTools = GetPrivateProfileIntW(L"Coop", L"DebugTools", 0, ini.c_str()) != 0;
     c.pawnEnemies = GetPrivateProfileIntW(L"Research", L"PawnEnemies", 0, ini.c_str()) != 0;
+    c.debugInMissions = GetPrivateProfileIntW(L"Research", L"DebugInMissions", 0, ini.c_str()) != 0;
     c.debugFailSaveGuard =
         c.debugTools && GetPrivateProfileIntW(L"Coop", L"DebugFailSaveGuard", 0, ini.c_str()) != 0;
     c.partnerMarker = GetPrivateProfileIntW(L"Coop", L"PartnerMarker", 1, ini.c_str()) != 0;

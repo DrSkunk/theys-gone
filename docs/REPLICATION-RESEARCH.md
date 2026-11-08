@@ -4247,6 +4247,13 @@ separate-PC behavior.
   nothing; `scream SwarmerPawn 20` spawned 2 swarmers, which the scan
   selected. The earlier "nothing appeared" results were not paused-game
   artifacts for the HordeSwarmerPawn modes.
+- **Follow-up, later save inside its mission** (`wake-20261108-1350`,
+  `wake-20261108-1354`): with the new `[Research] DebugInMissions=1`, which
+  lets a debug session run during a mission (cinematics stay blocked), the
+  session started once the mission's opening cutscene (`ALL2`, reported as a
+  cinematic until then) ended. In gameplay, at night at a burning Lost Lake
+  camp, no crowd group was loaded at all; the scan selected the mission's
+  own rats (4) and a survivor. The Lost Lake group seen at load time was gone.
 - **Derived:** the base save's horde is not active, and members forced into
   its group do not last; the most likely reason is that the story has not
   reached hordes yet (not proven). A horde test needs a later-game save made
@@ -4255,4 +4262,4 @@ separate-PC behavior.
   near the player; what the generators' pause depends on.
 - **Cleanup:** lab clones destroyed. The Deck save copy is kept outside the
   repo for the next attempt. Archives: `<archive>/wake-20261108-1315/` to
-  `<archive>/wake-20261108-1336/`, `<archive>/crowd-20261108-1339/`.
+  `<archive>/wake-20261108-1354/`, `<archive>/crowd-20261108-1339/`.

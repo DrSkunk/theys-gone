@@ -347,6 +347,13 @@ class and death events (`DMEV`). The owner still sends bone poses as well, for
 a receiver that cannot load the class. The `perf: stand-ins` log line counts
 motions, events, one-shots played and stand-ins spawned.
 
+Debug sessions block saving and change damage, so they normally refuse to start,
+and end, during missions and cinematics: a mission's checkpoint saves and save
+blocks could capture test state or be overwritten when `end` restores saving.
+`[Research] DebugInMissions=1` allows them during missions (cinematics stay
+excluded) and logs a warning at `begin`. Use it only on lab clones, whose
+saves are thrown away.
+
 Commands go through a file mailbox. The helper atomically writes
 `TheysGone-debug.ini` (`[Debug] Command=…, Request=<new number>`) next to
 the ASI. The plugin polls it every 0.5 s on the game thread and writes
