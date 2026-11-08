@@ -301,6 +301,18 @@ struct EnemyReplica;
 bool PawnEnemiesActive();
 constexpr double kStandInAckInterval = 1.0, kStandInAckTimeout = 2.5;
 constexpr double kCorpseSettle = 3.0, kCorpsePoseInterval = 1.0;
+struct StandInStats {
+    uint64_t motions = 0, events = 0, oneShots = 0, played = 0, missing = 0, spawned = 0, failed = 0;
+    // Peaks of single calls, and of all stand-in updates in one tick.
+    double lookupPeakMs = 0, spawnPeakMs = 0, feedPeakMs = 0, destroyPeakMs = 0, framePeakMs = 0;
+} g_standInStats;
+
+double Now();
+struct PeakTimer {
+    double& peak;
+    double start = Now();
+    ~PeakTimer() { peak = std::max(peak, (Now() - start) * 1000); }
+};
 void SendStandIn(EnemySource& e, const FVector& origin, uint32_t timeMs, double now);
 void ReceiveEnemyMotion(const char* data, int len, double now);
 void ReceiveEnemyEvent(const char* data, int len, double now);
@@ -4552,16 +4564,20 @@ void UpdateEnemyReplicas(UObject* pawn, double now) {
     }
     UpdateVehicleReplicas(pawn, now);
     FVector origin = WorldOrigin(pawn);
-    double senderMs = g_motion.SenderMs();
+    double senderMs = g_motion.SenderMs(), standInMs = 0;
     for (auto it = g_enemyReplicas.begin(); it != g_enemyReplicas.end();) {
         auto& r = it->second;
         if (now - std::max({r.poses.LastArrival(), r.lastInfo, r.motions.LastArrival()}) > kEnemyTimeout) {
             if (IsLive(r.actor) || IsLive(r.standIn.pawn)) Log("enemies: replica %u expired", it->first);
+            PeakTimer timer{g_standInStats.destroyPeakMs};
             DestroyReplica(r);
             it = g_enemyReplicas.erase(it);
             continue;
         }
-        if (UpdateStandIn(pawn, it->first, r, origin, senderMs, now)) {
+        double standInStart = Now();
+        bool standIn = UpdateStandIn(pawn, it->first, r, origin, senderMs, now);
+        standInMs += (Now() - standInStart) * 1000;
+        if (standIn) {
             // The stand-in replaces the poseable mesh.
             if (IsLive(r.actor)) {
                 Call(r.actor, "K2_DestroyActor").invoke();
@@ -4615,6 +4631,7 @@ void UpdateEnemyReplicas(UObject* pawn, double now) {
         }
         ++it;
     }
+    g_standInStats.framePeakMs = std::max(g_standInStats.framePeakMs, standInMs);
 }
 
 // Shared combat: hits on replicas become real damage on the owner's pawns, in both directions.
@@ -4777,9 +4794,6 @@ constexpr float kProxyMaxStrike = 400.f; // larger drops are engine resets, not 
 // that cannot load the pawn class.
 bool PawnEnemiesActive() { return g_cfg.pawnEnemies && (g_peer.flags & kPawnEnemies); }
 
-struct StandInStats {
-    uint64_t motions = 0, events = 0, oneShots = 0, played = 0, missing = 0, spawned = 0, failed = 0;
-} g_standInStats;
 uint32_t g_standInSequence = 0;
 EnemyHitDedupe g_standInDedupe;
 
@@ -4893,12 +4907,14 @@ void ReceiveEnemyEvent(const char* data, int len, double now) {
 // Guest side: spawns and feeds the stand-in. False while there is none, so the poseable replica is used.
 bool UpdateStandIn(UObject* pawn, uint32_t entity, EnemyReplica& r, const FVector& origin, double senderMs, double now) {
     if (!PawnEnemiesActive() || r.friendly || r.pawnClass.empty() || r.paths.empty() || r.standInDone) {
+        PeakTimer timer{g_standInStats.destroyPeakMs};
         if (IsLive(r.standIn.pawn)) standin::Destroy(r.standIn);
         return false;
     }
     EnemyMotionPacket m;
     if (!r.motions.Sample(senderMs, m)) return false;
     if (!(m.flags & kMotionAlive)) { // a lost died event
+        PeakTimer timer{g_standInStats.destroyPeakMs};
         standin::Destroy(r.standIn);
         r.standInDone = true;
         return false;
@@ -4908,8 +4924,12 @@ bool UpdateStandIn(UObject* pawn, uint32_t entity, EnemyReplica& r, const FVecto
         if (now - r.lastStandInAttempt < 1.0) return false;
         r.lastStandInAttempt = now;
         static UObject* meshClass = FindClass("SkeletalMesh");
-        auto cls = FindObject(r.pawnClass.c_str());
-        auto body = FindObject(r.paths[0].c_str(), meshClass);
+        UObject *cls = nullptr, *body = nullptr;
+        {
+            PeakTimer timer{g_standInStats.lookupPeakMs};
+            cls = FindObject(r.pawnClass.c_str());
+            body = FindObject(r.paths[0].c_str(), meshClass);
+        }
         if (!cls || !body) {
             RequestAssetLoad(cls ? r.paths[0] : r.pawnClass);
             if (!r.standInLogged) Log("enemies: stand-in %u waits for %s", entity, cls ? r.paths[0].c_str() : r.pawnClass.c_str());
@@ -4917,7 +4937,12 @@ bool UpdateStandIn(UObject* pawn, uint32_t entity, EnemyReplica& r, const FVecto
             return false;
         }
         std::string error;
-        if (!standin::Spawn(pawn, cls, body, at, m.yaw, r.standIn, error)) {
+        bool spawned = false;
+        {
+            PeakTimer timer{g_standInStats.spawnPeakMs};
+            spawned = standin::Spawn(pawn, cls, body, at, m.yaw, r.standIn, error);
+        }
+        if (!spawned) {
             ++g_standInStats.failed;
             if (!r.standInLogged) Log("enemies: stand-in %u (%s) failed: %s", entity, Name(cls).c_str(), error.c_str());
             r.standInLogged = true;
@@ -4926,7 +4951,10 @@ bool UpdateStandIn(UObject* pawn, uint32_t entity, EnemyReplica& r, const FVecto
         ++g_standInStats.spawned;
         Log("enemies: stand-in %u is a %s", entity, Name(cls).c_str());
     }
-    standin::Feed(r.standIn, m, at, now);
+    {
+        PeakTimer timer{g_standInStats.feedPeakMs};
+        standin::Feed(r.standIn, m, at, now);
+    }
     if (now - r.lastStandInAck >= kStandInAckInterval) {
         r.lastStandInAck = now;
         SendEnemyEvent(entity, kEnemyEventStandIn, "", false);
@@ -6527,6 +6555,19 @@ void VerifyAdoptedSaveLoad(double now, double wall) {
     Log("save transfer: verified loaded host progress %08x", loaded.hash);
 }
 
+// The slowest tick section in each 5 s perf window, to place frame-time peaks.
+struct SlowSection {
+    const char* name = "";
+    double ms = 0;
+} g_slowSection;
+
+template <class F> void TimedSection(const char* name, F&& f) {
+    double start = Now();
+    f();
+    double ms = (Now() - start) * 1000;
+    if (ms > g_slowSection.ms) g_slowSection = {name, ms};
+}
+
 void Tick(bool hudFrame) {
     double wall = Now();
     if (!hudFrame && (wall - g_lastHudTick < 0.5 || wall - g_lastTick < kTickInterval)) return;
@@ -6600,9 +6641,9 @@ void Tick(bool hudFrame) {
     if (g_net != &g_udp) g_udp.Poll(now);
     g_net->Poll(now);
     if (g_net != &g_steam) g_steam.Poll(now);
-    ReceiveRemote(now);
+    TimedSection("ReceiveRemote", [&] { ReceiveRemote(now); });
     UpdateMenuPause(now);
-    UpdateSession(now);
+    TimedSection("UpdateSession", [&] { UpdateSession(now); });
     if (g_cfg.menuDiscovery) {
         static bool held = false;
         bool down = OwnWindowFocused() && (GetAsyncKeyState(VK_F6) & 0x8000);
@@ -6627,8 +6668,8 @@ void Tick(bool hudFrame) {
     }
     LoadAdoptedSave(now);
     VerifyAdoptedSaveLoad(now, wall);
-    UpdateStory(now);
-    UpdateActiveMission(now);
+    TimedSection("UpdateStory", [&] { UpdateStory(now); });
+    TimedSection("UpdateActiveMission", [&] { UpdateActiveMission(now); });
     static double teleportAt = -1;
     if (g_teleportAfterLoad) {
         g_teleportAfterLoad = false;
@@ -6644,32 +6685,32 @@ void Tick(bool hudFrame) {
     } else if (teleportAt >= 0 && now > teleportAt + 60) {
         teleportAt = -1;
     }
-    UpdateWorldSync(g_pawn, now);
-    UpdateDebugTools(now);
+    TimedSection("UpdateWorldSync", [&] { UpdateWorldSync(g_pawn, now); });
+    TimedSection("UpdateDebugTools", [&] { UpdateDebugTools(now); });
     if (g_cfg.debugTools) {
         research::MissionWatchTick(now);
         research::AnimMirrorTick();
     }
     UpdateDamageScope(now);
     if (g_pawn && now - g_lastScan < kTickInterval && now >= g_localSettledAt) FindLocalBike(g_pawn);
-    UpdateBike(g_pawn, now);
-    UpdatePartnerMarker(now);
+    TimedSection("UpdateBike", [&] { UpdateBike(g_pawn, now); });
+    TimedSection("UpdatePartnerMarker", [&] { UpdatePartnerMarker(now); });
     UpdatePassenger(now);
     PollMelee();
     if (now >= g_nextSend) {
         g_nextSend += kSendInterval;
         if (g_nextSend <= now) g_nextSend = now + kSendInterval;
-        SendLocalState(g_pawn, now);
+        TimedSection("SendLocalState", [&] { SendLocalState(g_pawn, now); });
     }
-    UpdateAvatar(g_pawn, now);
-    UpdateGear(g_pawn, now);
+    TimedSection("UpdateAvatar", [&] { UpdateAvatar(g_pawn, now); });
+    TimedSection("UpdateGear", [&] { UpdateGear(g_pawn, now); });
     UpdateHandoff(now);
-    SendEnemies(g_pawn, now);
-    UpdateEnemyReplicas(g_pawn, now);
-    ResendEnemyHits(now);
-    SuppressLocalAI(now);
-    UpdatePartnerProxy(now);
-    UpdatePartnerStreaming(now);
+    TimedSection("SendEnemies", [&] { SendEnemies(g_pawn, now); });
+    TimedSection("UpdateEnemyReplicas", [&] { UpdateEnemyReplicas(g_pawn, now); });
+    TimedSection("ResendEnemyHits", [&] { ResendEnemyHits(now); });
+    TimedSection("SuppressLocalAI", [&] { SuppressLocalAI(now); });
+    TimedSection("UpdatePartnerProxy", [&] { UpdatePartnerProxy(now); });
+    TimedSection("UpdatePartnerStreaming", [&] { UpdatePartnerStreaming(now); });
     StepMoveBy(now);
     if (g_shortcuts.PassengerPressed(OwnWindowFocused())) TogglePassenger(now);
     UpdateRidePrompt(now);
@@ -6706,7 +6747,7 @@ void Tick(bool hudFrame) {
     if (now - profileStart >= 5) {
         double seconds = now - profileStart;
         Log("perf: updates=%.1f/s tick mean=%.2fms peak=%.2fms send=%.1f/s recv=%.1f/s riding lookup=%.2fms (%llu calls) "
-            "buffer=%.0fms extrapolated=%llu held=%llu resets=%llu clock resyncs=%llu wall-fallbacks=%llu",
+            "buffer=%.0fms extrapolated=%llu held=%llu resets=%llu clock resyncs=%llu wall-fallbacks=%llu slowest=%s %.1fms",
             frames / seconds, total / frames, peak, (g_seq - previousSent) / seconds,
             (g_receivedStates - previousReceived) / seconds,
             g_ridingLookups ? g_ridingLookupTime * 1000 / g_ridingLookups : 0,
@@ -6714,7 +6755,8 @@ void Tick(bool hudFrame) {
             static_cast<unsigned long long>(g_motion.Stats().extrapolated),
             static_cast<unsigned long long>(g_motion.Stats().held),
             static_cast<unsigned long long>(g_motion.Stats().resets), g_frameClock.Resyncs(),
-            g_frameClock.Fallbacks());
+            g_frameClock.Fallbacks(), g_slowSection.name, g_slowSection.ms);
+        g_slowSection = {};
         Log("perf: pose sent=%.1f pkt/s %.1f kB/s recv=%.1f pkt/s rejected=%llu read mean=%.3fms avatar=%s bike=%s",
             g_poseStats.sent / seconds, g_poseStats.bytes / seconds / 1024, g_poseStats.received / seconds,
             static_cast<unsigned long long>(g_poseStats.rejected),
@@ -6729,11 +6771,14 @@ void Tick(bool hudFrame) {
         if (PawnEnemiesActive()) {
             int live = 0;
             for (const auto& [entity, replica] : g_enemyReplicas) live += IsLive(replica.standIn.pawn) ? 1 : 0;
-            Log("perf: stand-ins live=%d motions=%.1f/s events=%llu one-shots sent=%llu played=%llu missing=%llu spawned=%llu failed=%llu",
+            Log("perf: stand-ins live=%d motions=%.1f/s events=%llu one-shots sent=%llu played=%llu missing=%llu spawned=%llu failed=%llu "
+                "peaks lookup=%.1fms spawn=%.1fms feed=%.1fms destroy=%.1fms frame=%.1fms",
                 live, g_standInStats.motions / seconds, static_cast<unsigned long long>(g_standInStats.events),
                 static_cast<unsigned long long>(g_standInStats.oneShots), static_cast<unsigned long long>(g_standInStats.played),
                 static_cast<unsigned long long>(g_standInStats.missing),
-                static_cast<unsigned long long>(g_standInStats.spawned), static_cast<unsigned long long>(g_standInStats.failed));
+                static_cast<unsigned long long>(g_standInStats.spawned), static_cast<unsigned long long>(g_standInStats.failed),
+                g_standInStats.lookupPeakMs, g_standInStats.spawnPeakMs, g_standInStats.feedPeakMs,
+                g_standInStats.destroyPeakMs, g_standInStats.framePeakMs);
             g_standInStats = {};
         }
         g_enemyStats = {};

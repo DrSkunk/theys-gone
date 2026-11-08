@@ -109,8 +109,12 @@ with the host's missions.
    With stand-ins the scan now keeps up to 64 enemies (poses only for the
    nearest 16); 16 stand-ins cost 28 kB/s in the lab
    ([research log](REPLICATION-RESEARCH.md#pawn-stand-ins-lifting-the-16-enemy-cap-2026-11-07-one-pc-two-games)).
-   Next: a natural swarm or horde (the debug spawner stops at 16), the scan
-   gap above, and a two-PC repeat.
+   With natural enemies from `spawn-horde` the paired lab streamed up to 35
+   at once (about 1.5 kB/s each); a frame hitch when many stand-ins spawn at
+   once is fixed
+   ([research log](REPLICATION-RESEARCH.md#pawn-stand-ins-past-16-enemies-2026-11-08-one-pc-two-games)).
+   Next: a real horde (none could be spawned or woken yet), the scan gap
+   above, and a two-PC repeat.
    *Start:* `FinishEnemyScan` and `SharedEnemy` in `coop.cpp`,
    `src/coop/enemy.hpp` (`kEnemyMaxStreamed`, packets), `BendCrowdGroupHorde`
    and `HordeSwarmerPawn_C` in the reflection dump.

@@ -4052,3 +4052,52 @@ separate-PC behavior.
   horde members are pawns without controllers.
 - **Cleanup:** lab clones destroyed. Archives: `<archive>/crowd-20261107-2138/`
   through `<archive>/crowd-20261107-2149/`.
+
+## Pawn stand-ins past 16 enemies (2026-11-08, one PC, two games)
+
+- **Question:** do stand-ins hold up past the debug spawner's 16, with
+  natural enemies from the game's own pools?
+- **Build:** worktree `anim-mirror-probe` after `3a92d36`, protocol v13. The
+  tick's perf line now names its slowest section (`slowest=`), and the
+  stand-in line gives the peak lookup, spawn, feed, destroy and per-tick
+  stand-in time.
+- **Setup:** paired lab, `[Research] PawnEnemies=1` on both, god mode. Host:
+  two `spawn-pack`, then `escalate`, `arcade SwarmerPawn 10`, `escalate`,
+  `arcade SwarmerPawn 10`, `escalate`, 6 s apart; `crowd-probe` every 8 s
+  after; then the usual hits and kill on the guest. Five runs, the last two
+  with the finer timing and the fix.
+- **Result:** PASS for streaming past 16 (up to 35 enemies at once); a
+  guest frame hitch was found and fixed.
+- **Observed:**
+  - Peak streamed on the host: 35, 31 and 31 enemies in the first three
+    runs; up to 39 live
+    stand-ins on the guest (replicas still fading out while new ones
+    spawned). 0 stand-in spawn failures, 0 missing one-shots.
+  - Host enemy traffic: 27.7 kB/s for 16 stand-ins, 31–32 kB/s for 21–24,
+    36.9–45.8 kB/s for 27–35 (with corpse poses and joining enemies).
+  - The natural enemies left after 15–40 s. `crowd-probe` showed them back
+    in the pools (swarmers parked 10 → 15, wolves 0 → 3) as the streamed
+    count fell back to the 16 debug swarmers, so the game repooled them; the
+    scan did not drop them.
+  - Guest tick peaks of 805 ms and 566 ms in the windows where 15 stand-ins
+    spawned at once. Timing put it in `Feed`: its first call 0.5 s after the
+    spawn scans the whole object array for the pawn's claw weapons (45–60
+    ms), once per stand-in, so 15 stand-ins spawned together paid 15 scans in
+    one tick. The `SpawnAIFromClass` call itself took 3–8 ms, the class and
+    mesh lookups 8–18 ms.
+  - After the fix (stand-ins due in the same tick share one scan), 13
+    stand-ins spawned in one window peaked at 53.6 ms in stand-in code
+    (`pawn-20261108-1116`).
+  - The remaining guest peaks (115–170 ms in every window, with or without
+    enemies) are `UpdateStory`; the host's are `UpdateStory` (30–45 ms) and,
+    while debug commands run, `UpdateDebugTools` (110–190 ms).
+- **Derived:** stand-ins scale past 16 at about 1.3–1.7 kB/s each. A burst
+  of stand-ins arriving at once still costs one object scan per tick (about
+  50 ms) plus per-spawn lookups; this is a one-PC figure with two games on
+  one GPU.
+- **Unknown:** a real horde (dozens at once); far-corpse poses past rank 16
+  (no enemy died beyond the nearest 16); two-PC timing; what in
+  `UpdateStory` takes 115–170 ms on the guest.
+- **Cleanup:** lab clones destroyed. Archives: `<archive>/pawn-20261108-1045/`,
+  `<archive>/pawn-20261108-1052/`, `<archive>/pawn-20261108-1101/`,
+  `<archive>/pawn-20261108-1109/`, `<archive>/pawn-20261108-1116/`.

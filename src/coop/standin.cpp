@@ -252,18 +252,28 @@ void Feed(StandIn& s, const EnemyMotionPacket& m, const FVector& at, double now)
         s.state = m.state;
     }
     // Its claws are separate weapon actors spawned with the pawn; their overlap would deal real damage.
+    // One object scan costs about 50 ms (lab, 2026-11-08), so stand-ins due in the same tick share it.
     if (!s.weaponsOff && now - s.spawnedAt >= 0.5) {
         s.weaponsOff = true;
         static UObject* weaponClass = FindClass("BendWeapon");
-        for (int32_t i = 0; weaponClass && i < ObjectCount(); ++i) {
-            auto weapon = ObjectAt(i);
-            if (!IsLive(weapon) || !IsA(weapon, weaponClass) || IsDefaultOrArchetype(weapon)) continue;
-            UObject *owner = nullptr, *instigator = nullptr;
-            GetProp(weapon, "Owner", owner);
-            GetProp(weapon, "Instigator", instigator);
-            if (owner == s.pawn || instigator == s.pawn)
-                Call(weapon, "SetActorEnableCollision").setBool("bNewActorEnableCollision", false).invoke();
+        static double scannedAt = -1;
+        static std::unordered_multimap<UObject*, UObject*> weaponsOf;
+        if (scannedAt != now) {
+            scannedAt = now;
+            weaponsOf.clear();
+            for (int32_t i = 0; weaponClass && i < ObjectCount(); ++i) {
+                auto weapon = ObjectAt(i);
+                if (!IsLive(weapon) || !IsA(weapon, weaponClass) || IsDefaultOrArchetype(weapon)) continue;
+                UObject *owner = nullptr, *instigator = nullptr;
+                GetProp(weapon, "Owner", owner);
+                GetProp(weapon, "Instigator", instigator);
+                if (owner) weaponsOf.emplace(owner, weapon);
+                if (instigator && instigator != owner) weaponsOf.emplace(instigator, weapon);
+            }
         }
+        auto [first, last] = weaponsOf.equal_range(s.pawn);
+        for (auto it = first; it != last; ++it)
+            if (IsLive(it->second)) Call(it->second, "SetActorEnableCollision").setBool("bNewActorEnableCollision", false).invoke();
     }
 }
 
