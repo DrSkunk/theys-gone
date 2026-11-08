@@ -4129,3 +4129,44 @@ separate-PC behavior.
 - **Unknown:** two-PC frame times with the fix.
 - **Cleanup:** lab clones destroyed. Archives: `<archive>/pawn-20261108-1135/`,
   `<archive>/pawn-20261108-1141/`.
+
+## Pawn stand-ins over Steam past 16 enemies (2026-11-08, two PCs, Steam)
+
+- **Question:** do 16+ stand-ins, the spawn-burst fix and the story-sample fix
+  hold on two PCs over Steam, with a Steam Deck as the guest?
+- **Build:** worktree `anim-mirror-probe` at `4809915`, protocol v13, on the
+  host PC and a Steam Deck through `tools/twopc` (`prep`/`restore`, backup
+  label `20261108-steam`), INI `DebugTools=1` and `[Research]
+  PawnEnemies=1` on both.
+- **Setup:** Steam lobby, the guest joined and loaded the host's save
+  (transfer 36 s, progress verified). Both god mode. Host: two `spawn-pack`,
+  then `escalate`, `arcade SwarmerPawn 10`, `escalate`, `arcade SwarmerPawn
+  10`, `escalate`, 6 s apart, three `crowd-probe`; guest: three `hit-enemy`;
+  host: `kill-owned-enemy`; both quit through the menu.
+- **Result:** PASS.
+- **Observed:**
+  - The host streamed 21 enemies (18 swarmers and 3 wolves; the natural ones
+    stayed for the whole two minutes this time). The Deck spawned 21
+    stand-ins, 0 failures, and showed the swarm around both players.
+  - Host enemy traffic: 26.7–31.4 kB/s for 16–21 stand-ins, 39.1 kB/s in the
+    window with the kill (18 pose packets for the corpse), then 2 pose
+    packets per second.
+  - All three guest hits reached the host's pawn (25 damage each, 160 →
+    103.8); the kill showed the host's corpse on the Deck. One-shots: 4
+    sent, 4 played.
+  - Deck tick peaks 19–26 ms outside spawn bursts, with no `UpdateStory`
+    peaks (the lab had 120–170 ms before the story fix). Host peaks 8–22 ms,
+    except 120–184 ms in `UpdateDebugTools` while spawn commands ran.
+  - Spawn bursts on the Deck: 70–77 ms in stand-in code when 8 or 3 stand-ins
+    arrived together, the first `Feed`'s weapon scan (shared since
+    `f5663b5`); lookup peaks 12–21 ms, spawn 6–32 ms.
+  - The host's "Fight or flight" tutorial was open after the fight; the Deck
+    was not paused (roadmap item 3).
+  - `restore` on both: 85 and 57 save files, ASI and INI matching the backup.
+- **Derived:** stand-ins work on a Steam Deck over Steam past the old cap,
+  at about 1.5 kB/s per enemy. Each arriving group of stand-ins still costs
+  one object scan on the receiver (about 70 ms on the Deck), which a direct
+  weapon lookup would remove.
+- **Unknown:** a real horde; 30+ enemies on two PCs; far-corpse poses.
+- **Cleanup:** both PCs restored and verified; post-test logs and saves are
+  in each PC's `~/TheysGone-backup-20261108-steam/after/`.
