@@ -67,6 +67,13 @@ different row selected turns `enter` into another action.
   `~/TheysGone-backup-LABEL/after/`. It then puts the ASI, INI, log and
   `Saved` back and compares every hash with the backup, failing on any
   difference. Keep the backup folder until the run is written up.
+- **Shader pre-caching:** with Steam's "Enable Shader Pre-Caching" on, a
+  launch can stop for minutes at a "Processing Vulkan shaders" dialog: each
+  session records new pipelines, which Steam replays before the next start.
+  Turn it off in Steam → Settings → Downloads on dedicated test PCs (global
+  for every game); Steam then writes `"DisableShaderCache" "1"` under
+  `ShaderCacheManager` in `~/.local/share/Steam/config/config.vdf`, and
+  `status` reports it.
 - **`launch`** starts the game through the running Steam client
   (`steam://rungameid/1259420`) and waits up to 60 s for its process.
 - **`quit-wait`** waits for the game to exit after you quit it through its

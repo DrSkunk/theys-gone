@@ -120,6 +120,12 @@ status)
     [ -f "$GAME/TheysGone.ini" ] && echo "ini: present" || echo "ini: none"
     [ -f "$GAME/TheysGone.log" ] && head -n 1 "$GAME/TheysGone.log"
     echo "capture: $(capture_backend)"
+    # Steam's "Enable Shader Pre-Caching" off writes this key; on, a launch can stop at "Processing Vulkan shaders".
+    if grep -q '"DisableShaderCache"[[:space:]]*"1"' "$STEAM_ROOT/config/config.vdf" 2>/dev/null; then
+        echo "shader pre-caching: off"
+    else
+        echo "shader pre-caching: on (launch may wait on 'Processing Vulkan shaders')"
+    fi
     ;;
 *)
     die "unknown command '$cmd'"
