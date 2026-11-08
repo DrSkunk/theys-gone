@@ -116,9 +116,10 @@ with the host's missions.
    A two-PC Steam run with a Steam Deck guest showed 21 stand-ins at 31
    kB/s, hits and the kill forwarded
    ([research log](REPLICATION-RESEARCH.md#pawn-stand-ins-over-steam-past-16-enemies-2026-11-08-two-pcs-steam)).
-   Next: a real horde (none could be spawned or woken yet), the scan gap
-   above, and removing the object scan a group of new stand-ins costs (about
-   70 ms on the Deck).
+   A group of new stand-ins no longer costs an object scan
+   ([research log](REPLICATION-RESEARCH.md#pawn-stand-ins-finding-a-stand-ins-weapons-without-an-object-scan-2026-11-08-one-pc-two-games)).
+   Next: a real horde (none could be spawned or woken yet) and the scan gap
+   above.
    *Start:* `FinishEnemyScan` and `SharedEnemy` in `coop.cpp`,
    `src/coop/enemy.hpp` (`kEnemyMaxStreamed`, packets), `BendCrowdGroupHorde`
    and `HordeSwarmerPawn_C` in the reflection dump.

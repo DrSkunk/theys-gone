@@ -4170,3 +4170,34 @@ separate-PC behavior.
 - **Unknown:** a real horde; 30+ enemies on two PCs; far-corpse poses.
 - **Cleanup:** both PCs restored and verified; post-test logs and saves are
   in each PC's `~/TheysGone-backup-20261108-steam/after/`.
+
+## Pawn stand-ins: finding a stand-in's weapons without an object scan (2026-11-08, one PC, two games)
+
+- **Question:** can the stand-in's claw weapons be found from the pawn
+  itself, so a group of new stand-ins no longer costs a full object scan
+  (about 70 ms on the Steam Deck in the
+  [two-PC run](#pawn-stand-ins-over-steam-past-16-enemies-2026-11-08-two-pcs-steam))?
+- **Build:** worktree `anim-mirror-probe` after `6735e04`. The weapons come
+  from `BendPawn.EquippedWeapons` and `Actor.Children` (both arrays of
+  objects, read from the reflected properties); the object scan only runs
+  when both are empty. With `DebugTools=1` the first three stand-ins also
+  count their weapons with the scan, logged as `stand-in N weapons: A from
+  its lists, B by object scan`.
+- **Setup:** paired lab, the same spawn bursts as the
+  [lab run past 16](#pawn-stand-ins-past-16-enemies-2026-11-08-one-pc-two-games)
+  (`pawn-20261108-1226`).
+- **Result:** PASS.
+- **Observed:**
+  - All three checked stand-ins: 3 weapons from its lists, 3 by object scan.
+  - First-update (`Feed`) peaks after those checks: 0.2–1.9 ms, including a
+    burst of 14 stand-ins (before: 45–77 ms per burst). The first burst's
+    51.9 ms is the debug check's own scan.
+  - The burst of 14 still peaked at 44.8 ms for all stand-in work in one
+    tick: 14 spawns at up to 2.8 ms and class and mesh lookups at up to 8.3
+    ms.
+  - 197 one-shots played, 0 missing; 0 spawn failures.
+- **Derived:** the remaining cost of a burst is the spawn and lookups, about
+  3 ms per stand-in in the lab.
+- **Unknown:** the same on the Steam Deck; whether other enemy types (human
+  enemies with guns) keep their weapons in the same lists.
+- **Cleanup:** lab clones destroyed. Archive: `<archive>/pawn-20261108-1226/`.

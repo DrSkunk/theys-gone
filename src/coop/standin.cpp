@@ -29,6 +29,24 @@ UObject* PropertyStruct(UObject* property) {
     return IsLive(value) && IsLive(value->cls) && Name(value->cls) == "ScriptStruct" ? value : nullptr;
 }
 
+// The objects of a TArray<UObject*> property (UArrayProperty::Inner at the same offset, an ObjectProperty).
+std::vector<UObject*> ObjectArray(UObject* object, const char* name) {
+    constexpr int kArrayInnerOffset = 0x78;
+    std::vector<UObject*> result;
+    auto property = IsLive(object) ? FindChild(object->cls, name) : nullptr;
+    if (!IsLive(property) || Name(property->cls) != "ArrayProperty" ||
+        !ReadableMemory(reinterpret_cast<uint8_t*>(property) + kArrayInnerOffset, sizeof(UObject*))) return result;
+    UObject* inner = nullptr;
+    std::memcpy(&inner, reinterpret_cast<uint8_t*>(property) + kArrayInnerOffset, sizeof inner);
+    if (!IsLive(inner) || !IsLive(inner->cls) || Name(inner->cls) != "ObjectProperty") return result;
+    struct { UObject** data; int32_t count, max; } array{};
+    std::memcpy(&array, reinterpret_cast<uint8_t*>(object) + PropertyOffset(property), sizeof array);
+    if (array.count <= 0 || array.count > 256 || !array.data ||
+        !ReadableMemory(array.data, static_cast<size_t>(array.count) * sizeof(UObject*))) return result;
+    result.assign(array.data, array.data + array.count);
+    return result;
+}
+
 bool Derives(UObject* structure, UObject* base) {
     for (int depth = 0; IsLive(structure) && depth < 16; structure = Super(structure), ++depth)
         if (structure == base) return true;
@@ -229,7 +247,7 @@ bool Spawn(UObject* context, UObject* pawnClass, UObject* bodyMesh, const FVecto
     return true;
 }
 
-void Feed(StandIn& s, const EnemyMotionPacket& m, const FVector& at, double now) {
+void Feed(StandIn& s, const EnemyMotionPacket& m, const FVector& at, double now, bool verifyWeapons) {
     if (!IsLive(s.pawn) || !IsLive(s.move)) return;
     if (s.spawnedAt == 0) s.spawnedAt = now;
     g_byMesh[s.mesh] = &s; // the owning replica may have moved since spawning
@@ -251,29 +269,45 @@ void Feed(StandIn& s, const EnemyMotionPacket& m, const FVector& at, double now)
         Call(s.states, "RequestStateChange").set("State", m.state).setBool("ForceReenter", false).invoke();
         s.state = m.state;
     }
-    // Its claws are separate weapon actors spawned with the pawn; their overlap would deal real damage.
-    // One object scan costs about 50 ms (lab, 2026-11-08), so stand-ins due in the same tick share it.
+    // Its claws are separate weapon actors spawned with the pawn; their overlap would deal real damage. They are
+    // looked up in the pawn's EquippedWeapons and, as actors it owns, its Children; a full object scan (50-70 ms,
+    // lab and Steam Deck, 2026-11-08) is only the fallback when neither list has one.
     if (!s.weaponsOff && now - s.spawnedAt >= 0.5) {
         s.weaponsOff = true;
         static UObject* weaponClass = FindClass("BendWeapon");
-        static double scannedAt = -1;
-        static std::unordered_multimap<UObject*, UObject*> weaponsOf;
-        if (scannedAt != now) {
-            scannedAt = now;
-            weaponsOf.clear();
-            for (int32_t i = 0; weaponClass && i < ObjectCount(); ++i) {
-                auto weapon = ObjectAt(i);
-                if (!IsLive(weapon) || !IsA(weapon, weaponClass) || IsDefaultOrArchetype(weapon)) continue;
-                UObject *owner = nullptr, *instigator = nullptr;
-                GetProp(weapon, "Owner", owner);
-                GetProp(weapon, "Instigator", instigator);
-                if (owner) weaponsOf.emplace(owner, weapon);
-                if (instigator && instigator != owner) weaponsOf.emplace(instigator, weapon);
+        std::vector<UObject*> weapons;
+        for (const char* list : {"EquippedWeapons", "Children"})
+            for (auto weapon : ObjectArray(s.pawn, list))
+                if (IsLive(weapon) && weaponClass && IsA(weapon, weaponClass) &&
+                    std::find(weapons.begin(), weapons.end(), weapon) == weapons.end())
+                    weapons.push_back(weapon);
+        s.weaponsDirect = static_cast<int>(weapons.size());
+        if (weapons.empty() || verifyWeapons) {
+            // Stand-ins due in the same tick share one scan.
+            static double scannedAt = -1;
+            static std::unordered_multimap<UObject*, UObject*> weaponsOf;
+            if (scannedAt != now) {
+                scannedAt = now;
+                weaponsOf.clear();
+                for (int32_t i = 0; weaponClass && i < ObjectCount(); ++i) {
+                    auto weapon = ObjectAt(i);
+                    if (!IsLive(weapon) || !IsA(weapon, weaponClass) || IsDefaultOrArchetype(weapon)) continue;
+                    UObject *owner = nullptr, *instigator = nullptr;
+                    GetProp(weapon, "Owner", owner);
+                    GetProp(weapon, "Instigator", instigator);
+                    if (owner) weaponsOf.emplace(owner, weapon);
+                    if (instigator && instigator != owner) weaponsOf.emplace(instigator, weapon);
+                }
+            }
+            auto [first, last] = weaponsOf.equal_range(s.pawn);
+            s.weaponsScanned = 0;
+            for (auto it = first; it != last; ++it) {
+                ++s.weaponsScanned;
+                if (std::find(weapons.begin(), weapons.end(), it->second) == weapons.end()) weapons.push_back(it->second);
             }
         }
-        auto [first, last] = weaponsOf.equal_range(s.pawn);
-        for (auto it = first; it != last; ++it)
-            if (IsLive(it->second)) Call(it->second, "SetActorEnableCollision").setBool("bNewActorEnableCollision", false).invoke();
+        for (auto weapon : weapons)
+            if (IsLive(weapon)) Call(weapon, "SetActorEnableCollision").setBool("bNewActorEnableCollision", false).invoke();
     }
 }
 

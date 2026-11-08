@@ -40,13 +40,16 @@ struct StandIn {
     bool dead = false;
     double spawnedAt = 0;
     bool weaponsOff = false;
+    // Weapons found through the pawn's own lists, and (when asked to verify) by a full object scan; -1 unknown.
+    int weaponsDirect = -1, weaponsScanned = -1;
     int fields[9]{}; // movement component property offsets, resolved at spawn
 };
 
 // Spawns a pawn of `pawnClass` with `bodyMesh`, its AI controller removed and collision off.
 bool Spawn(ue::UObject* context, ue::UObject* pawnClass, ue::UObject* bodyMesh, const ue::FVector& at, float yaw,
            StandIn& out, std::string& error);
-void Feed(StandIn& s, const EnemyMotionPacket& motion, const ue::FVector& at, double now);
+// verifyWeapons also counts the pawn's weapons with a full object scan (about 50-70 ms), for a debug check.
+void Feed(StandIn& s, const EnemyMotionPacket& motion, const ue::FVector& at, double now, bool verifyWeapons = false);
 bool PlayOneShot(StandIn& s, ue::UObject* sequence, bool atLocalPlayer);
 void Kill(StandIn& s);
 void Destroy(StandIn& s);

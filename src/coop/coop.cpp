@@ -4953,7 +4953,15 @@ bool UpdateStandIn(UObject* pawn, uint32_t entity, EnemyReplica& r, const FVecto
     }
     {
         PeakTimer timer{g_standInStats.feedPeakMs};
-        standin::Feed(r.standIn, m, at, now);
+        // DebugTools checks the direct weapon lookup against a full scan for the first few stand-ins.
+        static int weaponChecks = 0;
+        bool verify = g_cfg.debugTools && weaponChecks < 3 && !r.standIn.weaponsOff;
+        standin::Feed(r.standIn, m, at, now, verify);
+        if (verify && r.standIn.weaponsOff) {
+            ++weaponChecks;
+            Log("enemies: stand-in %u weapons: %d from its lists, %d by object scan", entity, r.standIn.weaponsDirect,
+                r.standIn.weaponsScanned);
+        }
     }
     if (now - r.lastStandInAck >= kStandInAckInterval) {
         r.lastStandInAck = now;
