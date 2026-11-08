@@ -4201,3 +4201,58 @@ separate-PC behavior.
 - **Unknown:** the same on the Steam Deck; whether other enemy types (human
   enemies with guns) keep their weapons in the same lists.
 - **Cleanup:** lab clones destroyed. Archive: `<archive>/pawn-20261108-1226/`.
+
+## Waking a world horde (2026-11-08, one PC, one game)
+
+- **Question:** can a world horde be woken or filled next to the player, to
+  test the enemy scan's horde rule and stand-ins with a real horde?
+- **Build:** worktree `anim-mirror-probe` after `69a3f78`. New debug commands:
+  `wake-horde` reports the nearest crowd group (its members, generators and
+  controller) and the crowd manager; `--arg "generate N"` calls the group's
+  first `BendCrowdGenerator.GenerateCrowdMember` 20 m ahead of the player with
+  `bForceChasePlayer`; `"manager N"` calls `CrowdManagerActor.GenerateCrowdMember`
+  with the group; `"activate"` turns every generator on with a 300 m
+  activation radius and unpauses it; `"frenzy"` calls `ForceAllFrenzied` on
+  the group's controller. `close-tutorial` closes an open tutorial panel
+  through its `OnTutorialClosedPressed`.
+- **Setup:** one lab instance, `[Research] PawnEnemies=1`; the base save
+  (start of the story, "736 days gone") and, in a clone only, a later manual
+  save copied from the Steam Deck's `prep` backup. A crowd probe after each
+  step; six runs (`wake-20261108-1315` to `wake-20261108-1336`).
+- **Result:** FAIL so far: no horde member came near the player.
+- **Observed:**
+  - Base save: the nearest group is Little Bear Lake's
+    `HordeC252_HordeGroup` (144 m), with 0 members and 0 ever spawned, no
+    controller, and three generators (hibernate, eat, drink) that are off;
+    the crowd manager allows 500 active members.
+  - `generate 10`: the group counts 10 ever spawned and 0 members.
+    `manager 10`/`manager 20`: 10 or 20 members, alive for a few seconds,
+    then 0 members within about 13 s. `activate` turns the generators on, but
+    they stay paused. `frenzy`: the group has no controller.
+  - All 988 `BendCrowdSharedAnimSkeletalMeshComponent` crowd members and the 8
+    `HordeSwarmerPawn_C` stayed in their pool 2 km away in every run.
+  - The "Fight or flight" tutorial pauses the game and appears in this save
+    at varying times, including right after a spawn, so the first runs were
+    checked while paused. An E hold to dismiss it mounted the bike when it
+    was not open, which ended the debug session. `close-tutorial` closed it
+    when it was open (`wake-20261108-1332`) and found nothing otherwise.
+  - Later save: it loads into the mission "They Will Never Stop", where
+    debug sessions are blocked. Its nearest group was a Lost Lake horde
+    (`13-16_Pop.HordeCrowdGroup_main`, 489 m) whose generator was active and
+    paused; a few seconds later no crowd group was loaded.
+- **Rerun of the [spawn-horde modes](#spawning-natural-enemies-next-to-the-player-2026-11-07-one-pc-one-game)**
+  with `close-tutorial` after each spawn (`crowd-20261108-1339`, no tutorial
+  open in any check): `arcade HordeSwarmerPawn 20`, `scream HordeSwarmerPawn
+  20`, `horde HordeSwarmerPawn 20` and `horde SwarmerPawn 10` again spawned
+  nothing; `scream SwarmerPawn 20` spawned 2 swarmers, which the scan
+  selected. The earlier "nothing appeared" results were not paused-game
+  artifacts for the HordeSwarmerPawn modes.
+- **Derived:** the base save's horde is not active, and members forced into
+  its group do not last; the most likely reason is that the story has not
+  reached hordes yet (not proven). A horde test needs a later-game save made
+  outside a mission near a live horde.
+- **Unknown:** whether active horde members are pawns or only crowd meshes
+  near the player; what the generators' pause depends on.
+- **Cleanup:** lab clones destroyed. The Deck save copy is kept outside the
+  repo for the next attempt. Archives: `<archive>/wake-20261108-1315/` to
+  `<archive>/wake-20261108-1336/`, `<archive>/crowd-20261108-1339/`.

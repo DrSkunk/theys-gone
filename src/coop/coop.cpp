@@ -2469,14 +2469,22 @@ void UpdateDebugTools(double now) {
     else if (command == DebugCommand::streamProbe) success = ProbePartnerStreaming();
     else if (command == DebugCommand::timeProbe) success = ProbeMenuTime();
     else if (command == DebugCommand::crowdProbe) success = CrowdProbe();
-    else if (command == DebugCommand::spawnTypes || command == DebugCommand::spawnHorde) {
+    else if (command == DebugCommand::closeTutorial) {
+        std::string summary;
+        success = research::CloseTutorial(summary);
+        Log("research: close-tutorial: %s", summary.c_str());
+        if (!success) DebugError(summary.c_str());
+    }
+    else if (command == DebugCommand::spawnTypes || command == DebugCommand::spawnHorde ||
+             command == DebugCommand::wakeHorde) {
         std::string summary;
         if (command == DebugCommand::spawnTypes) success = research::SpawnTypes(summary);
-        else if (!IsLive(g_pawn)) summary = "spawn-horde needs a gameplay pawn", success = false;
+        else if (!IsLive(g_pawn)) summary = text + " needs a gameplay pawn", success = false;
         else {
             wchar_t arg[128]{};
             GetPrivateProfileStringW(L"Debug", L"Arg", L"", arg, 128, path.c_str());
-            success = research::SpawnHorde(g_pawn, Narrow(std::wstring(arg)), summary);
+            success = command == DebugCommand::spawnHorde ? research::SpawnHorde(g_pawn, Narrow(std::wstring(arg)), summary)
+                                                          : research::WakeHorde(g_pawn, Narrow(std::wstring(arg)), summary);
         }
         Log("research: %s: %s", text.c_str(), summary.c_str());
         if (!success) DebugError(summary.c_str());

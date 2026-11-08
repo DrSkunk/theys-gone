@@ -4798,4 +4798,175 @@ bool SpawnHorde(UObject* localPawn, const std::string& arg, std::string& summary
     return ok;
 }
 
+
+namespace {
+FVector ActorLocation(UObject* actor) {
+    Call where(actor, "K2_GetActorLocation");
+    return where.invoke() ? where.get<FVector>("ReturnValue") : FVector{};
+}
+
+float Distance(const FVector& a, const FVector& b) {
+    float dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z;
+    return std::sqrt(dx * dx + dy * dy + dz * dz);
+}
+
+int IntCall(UObject* o, const char* function) {
+    Call c(o, function);
+    return c.invoke() ? c.get<int32_t>("ReturnValue") : -1;
+}
+
+std::vector<UObject*> ObjectList(UObject* o, const char* name) {
+    std::vector<UObject*> result;
+    auto property = IsLive(o) ? FindChild(o->cls, name) : nullptr;
+    auto inner = property && Name(property->cls) == "ArrayProperty" ? ArrayInner(property) : nullptr;
+    if (!inner || Name(inner->cls) != "ObjectProperty") return result;
+    struct { UObject** data; int32_t count, capacity; } raw{};
+    std::memcpy(&raw, reinterpret_cast<uint8_t*>(o) + PropertyOffset(property), sizeof raw);
+    if (!raw.data || raw.count <= 0 || raw.count > 1024 ||
+        !ReadableMemory(raw.data, static_cast<size_t>(raw.count) * sizeof(UObject*))) return result;
+    result.assign(raw.data, raw.data + raw.count);
+    return result;
+}
+} // namespace
+
+// wake-horde [info | generate N | manager N | activate | frenzy]: the nearest non-global crowd group (horde
+// groups first) with its generators and controller; generate asks its first generator for N members 20 m ahead of
+// the player that chase the player; manager asks the crowd manager for N members of the group there; activate
+// turns every generator on with a 300 m activation radius; frenzy sets the group's controller frenzied.
+bool WakeHorde(UObject* localPawn, const std::string& arg, std::string& summary) {
+    std::string mode = "info";
+    int count = 10;
+    {
+        std::istringstream words(arg);
+        std::string m;
+        int c = 0;
+        if (words >> m) mode = m;
+        if (words >> c) count = std::max(1, std::min(60, c));
+    }
+    if (mode != "info" && mode != "generate" && mode != "manager" && mode != "activate" && mode != "frenzy") {
+        summary = "mode must be info, generate, manager, activate or frenzy";
+        return false;
+    }
+    auto me = ActorLocation(localPawn);
+    UObject* group = nullptr;
+    float best = 1e30f;
+    for (const char* name : {"BendCrowdGroupHorde", "BendCrowdGroup"}) {
+        auto groupClass = FindClass(name);
+        for (int32_t i = 0; groupClass && i < ObjectCount(); ++i) {
+            auto o = ObjectAt(i);
+            if (!o || !IsLive(o) || IsDefaultOrArchetype(o) || !IsA(o, groupClass) ||
+                Name(o->cls).find("Global") != std::string::npos) continue;
+            float d = Distance(ActorLocation(o), me);
+            if (d < best) best = d, group = o;
+        }
+        if (group) break;
+    }
+    if (!group) { summary = "no live crowd group"; return false; }
+    Call controllerOf(group, "GetController");
+    UObject* controller = controllerOf.invoke() ? controllerOf.get<UObject*>("ReturnValue") : nullptr;
+    auto generators = ObjectList(group, "Generators");
+    Log("wake-horde: group %s at %.0f m: members %d, alive %d, ever spawned %d, died %d; controller %s; %d generators",
+        FullName(group).c_str(), best / 100, IntCall(group, "GetNumMembers"), IntCall(group, "GetNumMembersAlive"),
+        IntCall(group, "GetNumMembersEverSpawned"), IntCall(group, "GetNumMembersDied"),
+        IsLive(controller) ? FullName(controller).c_str() : "none", static_cast<int>(generators.size()));
+    for (size_t k = 0; k < generators.size() && k < 12; ++k) {
+        auto g = generators[k];
+        if (!IsLive(g)) continue;
+        Call active(g, "IsActive"), paused(g, "IsPaused"), radius(g, "GetActivationRadius");
+        Log("wake-horde: generator %s (%s) at %.0f m: active %d, paused %d, activation radius %.0f m", Name(g).c_str(),
+            Name(g->cls).c_str(), Distance(ActorLocation(g), me) / 100, active.invoke() && active.get<bool>("ReturnValue"),
+            paused.invoke() && paused.get<bool>("ReturnValue"), radius.invoke() ? radius.get<float>("ReturnValue") / 100 : -1.f);
+    }
+    UObject* manager = nullptr;
+    if (auto managerClass = FindClass("CrowdManagerActor"))
+        for (int32_t i = 0; i < ObjectCount() && !manager; ++i) {
+            auto o = ObjectAt(i);
+            if (o && IsLive(o) && !IsDefaultOrArchetype(o) && IsA(o, managerClass)) manager = o;
+        }
+    if (manager) {
+        Call frenzied(manager, "AreAnyCrowdMembersFrenzied");
+        Log("wake-horde: crowd manager %s: max active members %d, any frenzied %d", FullName(manager).c_str(),
+            IntCall(manager, "GetMaxCrowdMembersActive"), frenzied.invoke() && frenzied.get<bool>("ReturnValue"));
+    }
+    if (mode == "manager") {
+        if (!manager) { summary = "no crowd manager"; return false; }
+        Call facing(localPawn, "K2_GetActorRotation");
+        float yaw = facing.invoke() ? facing.get<FRotator>("ReturnValue").yaw : 0.f;
+        float rad = yaw * 3.14159265f / 180.f;
+        // FTransform: rotation quaternion, translation, scale, each padded to 16 bytes.
+        struct alignas(16) Transform { float q[4]; float t[4]; float s[4]; };
+        int called = 0;
+        for (int k = 0; k < count; ++k) {
+            Transform tr{{0, 0, std::sin((rad + 3.14159265f) / 2), std::cos((rad + 3.14159265f) / 2)},
+                         {me.x + std::cos(rad) * 2000.f + (k % 5) * 150.f, me.y + std::sin(rad) * 2000.f + (k / 5) * 150.f, me.z, 0},
+                         {1, 1, 1, 0}};
+            called += Call(manager, "GenerateCrowdMember").set("Transform", tr).set("Group", group).invoke() ? 1 : 0;
+        }
+        Log("wake-horde: after manager generate: members %d, alive %d, ever spawned %d", IntCall(group, "GetNumMembers"),
+            IntCall(group, "GetNumMembersAlive"), IntCall(group, "GetNumMembersEverSpawned"));
+        summary = "CrowdManagerActor.GenerateCrowdMember called " + std::to_string(called) + " of " + std::to_string(count) + " times";
+        return called > 0;
+    }
+    if (mode == "info") {
+        summary = FullName(group) + " at " + std::to_string(static_cast<int>(best / 100)) + " m";
+        return true;
+    }
+    if (mode == "frenzy") {
+        if (!IsLive(controller)) { summary = "the group has no controller"; return false; }
+        bool ok = Call(controller, "ForceAllFrenzied").setBool("bEnable", true).invoke();
+        Call(controller, "SuppressAmbientWanderBehavior").setBool("bSuppress", false).invoke();
+        summary = std::string("ForceAllFrenzied ") + (ok ? "called" : "failed") + " on " + FullName(controller);
+        return ok;
+    }
+    if (mode == "activate") {
+        int done = 0;
+        for (auto g : generators) {
+            if (!IsLive(g)) continue;
+            Call(g, "SetActivationRadius").set("Radius", 30000.f).invoke();
+            done += Call(g, "SetActive").setBool("bActive", true).invoke() ? 1 : 0;
+            if (FindChild(g->cls, "StartUp")) Call(g, "StartUp").invoke();
+            Call(g, "SetPaused").setBool("bPaused", false).invoke();
+        }
+        summary = "activated " + std::to_string(done) + " of " + std::to_string(generators.size()) + " generators";
+        return done > 0;
+    }
+    UObject* generator = nullptr;
+    for (auto g : generators) if (IsLive(g)) { generator = g; break; }
+    if (!generator) { summary = "the group has no live generator"; return false; }
+    Call facing(localPawn, "K2_GetActorRotation");
+    float yaw = facing.invoke() ? facing.get<FRotator>("ReturnValue").yaw : 0.f;
+    float rad = yaw * 3.14159265f / 180.f;
+    int called = 0;
+    for (int k = 0; k < count; ++k) {
+        FVector at{me.x + std::cos(rad) * 2000.f + (k % 5) * 150.f, me.y + std::sin(rad) * 2000.f + (k / 5) * 150.f, me.z};
+        called += Call(generator, "GenerateCrowdMember").set("Location", at).set("Rotation", FRotator{0, yaw + 180.f, 0})
+                      .setBool("bSpawnImmediately", true).set("SystemID", static_cast<int32_t>(0))
+                      .setBool("bForceChasePlayer", true).invoke() ? 1 : 0;
+    }
+    Log("wake-horde: after generate: members %d, alive %d, ever spawned %d", IntCall(group, "GetNumMembers"),
+        IntCall(group, "GetNumMembersAlive"), IntCall(group, "GetNumMembersEverSpawned"));
+    summary = "GenerateCrowdMember called " + std::to_string(called) + " of " + std::to_string(count) + " times on " +
+              FullName(generator);
+    return called > 0;
+}
+
+// The tutorial panel (UI_TutorialPanel_C) closes through its Continue handler; the HUD's CloseTutorial interface
+// function is the other way in. A popup that is not open ignores both.
+bool CloseTutorial(std::string& summary) {
+    auto panelClass = FindClass("TutorialWidget");
+    int panels = 0, closed = 0;
+    for (int32_t i = 0; panelClass && i < ObjectCount(); ++i) {
+        auto o = ObjectAt(i);
+        if (!o || !IsLive(o) || IsDefaultOrArchetype(o) || !IsA(o, panelClass)) continue;
+        Call visible(o, "IsVisible");
+        bool shown = visible.invoke() && visible.get<bool>("ReturnValue");
+        ++panels;
+        if (!shown) continue;
+        if (FindChild(o->cls, "OnTutorialClosedPressed") && Call(o, "OnTutorialClosedPressed").invoke()) ++closed;
+        Log("close-tutorial: %s was open", FullName(o).c_str());
+    }
+    summary = std::to_string(closed) + " of " + std::to_string(panels) + " tutorial panels closed";
+    return panelClass != nullptr;
+}
+
 } // namespace coop::research

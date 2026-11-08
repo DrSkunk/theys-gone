@@ -118,8 +118,10 @@ with the host's missions.
    ([research log](REPLICATION-RESEARCH.md#pawn-stand-ins-over-steam-past-16-enemies-2026-11-08-two-pcs-steam)).
    A group of new stand-ins no longer costs an object scan
    ([research log](REPLICATION-RESEARCH.md#pawn-stand-ins-finding-a-stand-ins-weapons-without-an-object-scan-2026-11-08-one-pc-two-games)).
-   Next: a real horde (none could be spawned or woken yet) and the scan gap
-   above.
+   The base save's horde could not be woken; it is too early in the story
+   ([research log](REPLICATION-RESEARCH.md#waking-a-world-horde-2026-11-08-one-pc-one-game)).
+   Next: a real horde, from a later-game save made outside a mission near a
+   live horde, and the scan gap above.
    *Start:* `FinishEnemyScan` and `SharedEnemy` in `coop.cpp`,
    `src/coop/enemy.hpp` (`kEnemyMaxStreamed`, packets), `BendCrowdGroupHorde`
    and `HordeSwarmerPawn_C` in the reflection dump.

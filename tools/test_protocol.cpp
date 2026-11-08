@@ -1519,6 +1519,8 @@ int main() {
     assert(coop::ParseDebugCommand("crowd-probe") == DebugCommand::crowdProbe);
     assert(coop::ParseDebugCommand("spawn-types") == DebugCommand::spawnTypes);
     assert(coop::ParseDebugCommand("spawn-horde") == DebugCommand::spawnHorde);
+    assert(coop::ParseDebugCommand("wake-horde") == DebugCommand::wakeHorde);
+    assert(coop::ParseDebugCommand("close-tutorial") == DebugCommand::closeTutorial);
     assert(coop::ParseDebugCommand("mission-act") == DebugCommand::missionAct);
     assert(coop::ParseDebugCommand("mission-act x") == DebugCommand::unknown);
     coop::DebugRequestGate gate;

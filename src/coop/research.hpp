@@ -158,6 +158,11 @@ bool AssetReferences(const std::string& name, std::string& summary);
 // spawn-types / spawn-horde: the ambient spawner's live spawn types, and spawning from one next to the player.
 bool SpawnTypes(std::string& summary);
 bool SpawnHorde(ue::UObject* localPawn, const std::string& arg, std::string& summary);
+// wake-horde [info|generate N|activate|frenzy]: the nearest crowd group (a world horde) and ways to bring it
+// to the player.
+bool WakeHorde(ue::UObject* localPawn, const std::string& arg, std::string& summary);
+// close-tutorial: closes an open tutorial popup (it pauses the game), as its Continue button does.
+bool CloseTutorial(std::string& summary);
 bool AnimMirroring();
 void AnimMirrorTick(); // game thread, every frame
 // Game thread, from ProcessEvent: the player's damage events and the mirror meshes' anim notifies. Returns true

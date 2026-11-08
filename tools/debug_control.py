@@ -50,9 +50,11 @@ COMMANDS = (
     "crowd-probe",
     "spawn-types",
     "spawn-horde",
+    "wake-horde",
+    "close-tutorial",
 )
 ARG_COMMANDS = ("mission-act", "stream-focus", "move-by", "level-probe", "spawn-actor", "asset-refs", "spawn-horde")
-OPTIONAL_ARG_COMMANDS = ("anim-mirror-pawn",)
+OPTIONAL_ARG_COMMANDS = ("anim-mirror-pawn", "wake-horde")
 ARG_LIMIT = 240
 
 
