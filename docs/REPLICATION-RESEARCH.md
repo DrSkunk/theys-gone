@@ -4101,3 +4101,31 @@ separate-PC behavior.
 - **Cleanup:** lab clones destroyed. Archives: `<archive>/pawn-20261108-1045/`,
   `<archive>/pawn-20261108-1052/`, `<archive>/pawn-20261108-1101/`,
   `<archive>/pawn-20261108-1109/`, `<archive>/pawn-20261108-1116/`.
+
+## Frame peaks from the story sample (2026-11-08, one PC, two games)
+
+- **Question:** what makes the 115–170 ms guest tick peaks that appear in
+  every 5 s window, with or without enemies?
+- **Build:** worktree `anim-mirror-probe` after `f5663b5`, with a debug log of
+  the story read's parts (`perf: story read`, at most every 30 s when over
+  20 ms).
+- **Setup:** paired lab, `[Research] PawnEnemies=1`, one `spawn-pack`, the
+  usual hits and kill; before and after the fix.
+- **Result:** PASS; the peaks were an uncached object lookup, now cached.
+- **Observed:**
+  - Before (`pawn-20261108-1135`): `slowest=UpdateStory` in 24 of the
+    guest's windows (up to 146.5 ms) and 32 of the host's (up to 70.3 ms).
+    Each 3 s story read took 23–43 ms, nearly all in the active-objective
+    snapshot, whose `FindInstance("BendJobManager")` scanned the whole object
+    array on every call; the guest's objective-sync apply looked the manager
+    up the same way for each host objective packet.
+  - After (`pawn-20261108-1141`), with `FindInstance` keeping its instance
+    while it stays live: one slow story read per game (the first, 52 and 86
+    ms); `UpdateStory` was no window's slowest section after that. Tick peaks
+    fell from 121–136 ms to 15–31 ms on the guest and from 31–38 ms to 17–19
+    ms on the host. One-shots and the kill behaved as before.
+- **Derived:** this cost every player a 25–40 ms frame each 3 s whenever a
+  partner is connected, more on the guest; it was not enemy related.
+- **Unknown:** two-PC frame times with the fix.
+- **Cleanup:** lab clones destroyed. Archives: `<archive>/pawn-20261108-1135/`,
+  `<archive>/pawn-20261108-1141/`.

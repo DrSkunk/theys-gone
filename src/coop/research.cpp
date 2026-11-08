@@ -634,11 +634,18 @@ std::string ErrorText(const FStringRaw& error) {
     return text;
 }
 
+// A full object scan costs 25-40 ms in game (lab, 2026-11-08); the story sample and every applied objective
+// looked up the job manager this way, so the instance is kept while it stays live.
 UObject* FindInstance(const char* className) {
+    static std::unordered_map<std::string, UObject*> cache;
     auto cls = FindClass(className);
-    for (int32_t i = 0, n = ObjectCount(); cls && i < n; ++i) {
+    if (!cls) return nullptr;
+    auto& instance = cache[className];
+    if (IsLive(instance) && IsLive(instance->cls) && IsA(instance, cls)) return instance;
+    instance = nullptr;
+    for (int32_t i = 0, n = ObjectCount(); i < n; ++i) {
         auto obj = ObjectAt(i);
-        if (IsLive(obj) && IsLive(obj->cls) && !IsDefaultOrArchetype(obj) && IsA(obj, cls)) return obj;
+        if (IsLive(obj) && IsLive(obj->cls) && !IsDefaultOrArchetype(obj) && IsA(obj, cls)) return instance = obj;
     }
     return nullptr;
 }

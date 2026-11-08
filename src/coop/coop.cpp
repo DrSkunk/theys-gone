@@ -6079,8 +6079,10 @@ bool CinematicActive() {
 // unlocked story missions, and the episode. Persisted changes participate in host-save resync.
 StorySignature ReadStory() {
     struct Array { UObject** data; int32_t count, capacity; };
+    double start = Now(), jobsAt = 0, objectivesAt = 0;
     auto jobs = FindLive("BendJobManager");
     auto mission = FindLive("BendGameMission");
+    double foundAt = Now();
     if (!IsLive(jobs) || !IsLive(mission)) return {};
     Array refs{};
     if (!GetProp(jobs, "JobRefsInOrder", refs) || refs.count <= 0 || refs.count > 4096 || !refs.data) return {};
@@ -6099,6 +6101,7 @@ StorySignature ReadStory() {
         hasher.Add(Name(job), done.invoke() && done.get<bool>("ReturnValue"),
                    static_cast<uint8_t>(state | (isActive ? 0x80 : 0)), objective);
     }
+    jobsAt = Now();
     std::vector<research::ObjectiveProgress> objectives;
     static bool objectiveSnapshotFailed = false;
     if (!research::ReadActiveObjectiveProgress(objectives)) {
@@ -6107,6 +6110,7 @@ StorySignature ReadStory() {
         return {};
     }
     objectiveSnapshotFailed = false;
+    objectivesAt = Now();
     for (const auto& objective : objectives)
         hasher.AddObjectiveState(objective.jobName, objective.identifier, objective.index, objective.state);
     Call episode(mission, "GetCurrentEpisode"), datas(mission, "GetAllActiveOrUnlockedMissionDatas");
@@ -6123,6 +6127,14 @@ StorySignature ReadStory() {
         }
         std::sort(missions.begin(), missions.end());
         for (const auto& [name, done] : missions) hasher.Add(name, done);
+    }
+    double end = Now();
+    static double lastSlowLog = -1e9;
+    if (g_cfg.debugTools && (end - start) * 1000 >= 20 && end - lastSlowLog >= 30) {
+        lastSlowLog = end;
+        Log("perf: story read %.1fms: managers %.1fms, %d jobs %.1fms, %d objectives %.1fms, missions %.1fms",
+            (end - start) * 1000, (foundAt - start) * 1000, refs.count, (jobsAt - foundAt) * 1000,
+            static_cast<int>(objectives.size()), (objectivesAt - jobsAt) * 1000, (end - objectivesAt) * 1000);
     }
     return hasher.Finish(episode.get<uint8_t>("ReturnValue"));
 }
